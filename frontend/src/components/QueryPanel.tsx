@@ -40,20 +40,20 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
 
   return (
     <aside className="w-1/4 min-w-[280px] bg-white border-r border-slate-200 flex flex-col h-full">
-      <div className="p-4 border-b border-slate-100">
-        <h2 className="text-sm font-semibold text-slate-700 mb-3">研究查询</h2>
-        <form onSubmit={submit} className="space-y-3">
+      <div className="p-3 border-b border-slate-100">
+        <h2 className="text-sm font-semibold text-slate-700 mb-2">研究查询</h2>
+        <form onSubmit={submit} className="space-y-2">
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="输入研究问题（中英文均可）..."
-            rows={4}
+            rows={2}
             className="w-full text-sm border border-slate-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
           />
 
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <label className="flex flex-col gap-1">
-              <span className="text-slate-600">预算 (USD)</span>
+          <div className="flex items-center gap-2 text-xs">
+            <label className="flex items-center gap-1 text-slate-600">
+              预算
               <input
                 type="number"
                 min={0.1}
@@ -61,62 +61,63 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
                 step={0.1}
                 value={budget}
                 onChange={(e) => setBudget(parseFloat(e.target.value) || 2.0)}
-                className="border border-slate-300 rounded px-2 py-1"
+                className="w-14 border border-slate-300 rounded px-1.5 py-0.5 text-center"
               />
             </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-slate-600">最大迭代</span>
+            <label className="flex items-center gap-1 text-slate-600">
+              迭代
               <input
                 type="number"
                 min={1}
                 max={5}
                 value={maxIter}
                 onChange={(e) => setMaxIter(parseInt(e.target.value) || 3)}
-                className="border border-slate-300 rounded px-2 py-1"
+                className="w-12 border border-slate-300 rounded px-1.5 py-0.5 text-center"
               />
             </label>
-          </div>
-
-          <div className="flex gap-2">
             <button
               type="submit"
               disabled={loading || !query.trim()}
-              className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-2 rounded-md transition"
+              className="ml-auto flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
             >
               {loading ? '搜索中...' : '搜索'}
             </button>
             <button
               type="button"
               onClick={handleReset}
-              className="px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-50"
+              className="px-2.5 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50"
             >
               清空
             </button>
           </div>
         </form>
 
-        <div className="mt-3">
-          <p className="text-[10px] uppercase text-slate-500 mb-1.5">示例查询</p>
-          <div className="flex flex-wrap gap-1.5">
+        <div className="mt-2">
+          <p className="text-[10px] uppercase text-slate-500 mb-1">示例</p>
+          <div className="flex flex-wrap gap-1">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => useSuggestion(s)}
-                className="text-[11px] px-2 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-700"
+                className="text-[10px] px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-700"
+                title={s}
               >
-                {s.length > 28 ? s.slice(0, 28) + '…' : s}
+                {s.length > 22 ? s.slice(0, 22) + '…' : s}
               </button>
             ))}
           </div>
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="px-4 py-2 bg-slate-50 border-b border-slate-100 sticky top-0">
+      <div className="flex-1 overflow-y-auto min-h-0">
+        <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 sticky top-0 flex items-center justify-between">
           <h3 className="text-xs font-semibold text-slate-600">
             论文列表 {papers.length > 0 && `(${papers.length})`}
           </h3>
+          {papers.length > 0 && (
+            <span className="text-[10px] text-slate-400">按相关性排序 · 点击打开</span>
+          )}
         </div>
         {lastQuery && papers.length === 0 && (
           <p className="text-xs text-slate-400 p-4 text-center">未找到论文</p>
@@ -125,28 +126,28 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
           {papers.map((p, i) => (
             <li
               key={p.paper_id || i}
-              className="px-4 py-2.5 hover:bg-slate-50 cursor-pointer transition"
+              className="px-3 py-1.5 hover:bg-slate-50 cursor-pointer transition"
               onClick={() => p.url && window.open(p.url, '_blank')}
+              title={p.title}
             >
               <div className="flex items-start gap-2">
-                <span className="text-[10px] font-mono text-slate-400 mt-0.5 shrink-0 w-6 text-right">
+                <span className="text-[10px] font-mono text-slate-400 mt-0.5 shrink-0 w-5 text-right">
                   {i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-slate-800 line-clamp-2 leading-snug">
+                  <p className="text-[11px] font-medium text-slate-800 line-clamp-2 leading-tight">
                     {p.title}
                   </p>
-                  <div className="flex items-center gap-2 mt-1 text-[10px] text-slate-500">
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-500">
                     <span>{p.year || '—'}</span>
                     <span>·</span>
-                    <span>{p.citation_count.toLocaleString()} cite</span>
-                    <span>·</span>
-                    <span className="font-mono text-brand-600">
-                      ★ {p.final_score.toFixed(1)}
+                    <span>{p.citation_count.toLocaleString()}</span>
+                    <span className="font-mono text-brand-600 font-semibold">
+                      ★{p.final_score.toFixed(1)}
                     </span>
                     {p.is_expanded && (
                       <span className="ml-auto text-[9px] bg-amber-100 text-amber-700 px-1 rounded">
-                        引文扩展
+                        ext
                       </span>
                     )}
                   </div>
