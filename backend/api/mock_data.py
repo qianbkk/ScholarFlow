@@ -293,26 +293,54 @@ def _to_paper(item: dict) -> Paper:
 
 def get_mock_papers(query: str = "", limit: int = 20) -> list[Paper]:
     """
-    根据 query 关键词过滤 mock 论文。
-    关键词优先匹配 title，包含更多 query 词者优先。
+    根据 query 关键词做严格相关性评分，返回真正相关的论文。
+    评分规则：
+      - 标题包含完整查询短语: +10
+      - 标题包含任一查询词:   +3 / 词
+      - 摘要包含查询词:       +1 / 词
+      - 引用数加成:            log(citations) / 10
+    取评分 >= 4 的论文，按分数降序；不足 limit 时用次相关池补齐。
     """
     q = (query or "").lower().strip()
     if not q:
-        papers = [_to_paper(item) for item in _MOCK_PAPERS]
-        return papers[:limit]
+        return [_to_paper(item) for item in _MOCK_PAPERS[:limit]]
 
-    # 简单匹配
-    query_words = set(q.split())
+    query_words = [w for w in q.split() if len(w) > 1]
+    if not query_words:
+        return [_to_paper(item) for item in _MOCK_PAPERS[:limit]]
+
     scored = []
     for item in _MOCK_PAPERS:
         title_lower = item["title"].lower()
         abstract_lower = item.get("abstract", "").lower()
-        match_count = sum(1 for w in query_words if w in title_lower or w in abstract_lower)
-        if match_count > 0:
-            scored.append((match_count, item))
+        score = 0.0
+        # 完整短语命中
+        if q in title_lower:
+            score += 10.0
+        # 单词命中
+        for w in query_words:
+            if w in title_lower:
+                score += 3.0
+            elif w in abstract_lower:
+                score += 1.0
+        # 引用数加成（log scale）
+        cites = item.get("citation_count", 0)
+        if cites > 0:
+            import math
+            score += math.log1p(cites) / 10.0
+        scored.append((score, item))
+
+    # 按分数降序
     scored.sort(key=lambda x: x[0], reverse=True)
 
-    papers = [_to_paper(item) for _, item in scored]
+    # 取分数 >= 4 的强相关论文
+    strong = [(s, it) for s, it in scored if s >= 4.0]
+    # 不够时用弱相关补齐
+    if len(strong) < min(5, limit):
+        weak = [(s, it) for s, it in scored if s < 4.0]
+        strong.extend(weak[: max(0, min(limit, 5) - len(strong))])
+
+    papers = [_to_paper(item) for _, item in strong]
     return papers[:limit]
 
 
