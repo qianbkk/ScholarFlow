@@ -31,6 +31,13 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
     setQuery(s);
   };
 
+  const handleReset = () => {
+    setQuery("");
+    setBudget(2.0);
+    setMaxIter(3);
+    onReset();
+  };
+
   return (
     <aside className="w-1/4 min-w-[280px] bg-white border-r border-slate-200 flex flex-col h-full">
       <div className="p-4 border-b border-slate-100">
@@ -80,7 +87,7 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
             </button>
             <button
               type="button"
-              onClick={onReset}
+              onClick={handleReset}
               className="px-3 py-2 text-sm border border-slate-300 rounded-md hover:bg-slate-50"
             >
               清空
