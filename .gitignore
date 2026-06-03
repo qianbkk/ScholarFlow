@@ -39,3 +39,4 @@ htmlcov/
 
 # Personal notes & verification artifacts (not for public repo)
 docs/
+playwright_runs/
