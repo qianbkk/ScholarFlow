@@ -36,3 +36,6 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Personal notes & verification artifacts (not for public repo)
+docs/
