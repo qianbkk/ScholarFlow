@@ -143,21 +143,37 @@ def _mock_query_decompose(query: str) -> str:
 
 
 def _mock_relevance_score(paper_title: str, query: str) -> str:
-    """Mock 相关性评分：基于关键词重合度。"""
-    query_words = set(re.findall(r"\w+", query.lower()))
-    title_words = set(re.findall(r"\w+", paper_title.lower()))
+    """Mock 相关性评分：基于关键词重合度 + 中英混合。"""
+    q_lower = query.lower()
+    t_lower = paper_title.lower()
+    # 英文 word 匹配
+    query_words = set(re.findall(r"[a-z]+", q_lower))
+    title_words = set(re.findall(r"[a-z]+", t_lower))
     overlap = len(query_words & title_words)
-    if overlap >= 4:
-        score = 8.5
-    elif overlap >= 2:
-        score = 7.0
-    elif overlap >= 1:
+    # 中文片段匹配（query 和 title 都包含中文字符时）
+    cn_query = re.findall(r"[一-鿿]+", q_lower)
+    cn_title = re.findall(r"[一-鿿]+", t_lower)
+    cn_overlap = 0
+    for q_seg in cn_query:
+        for t_seg in cn_title:
+            # 单字覆盖
+            common = set(q_seg) & set(t_seg)
+            if len(common) >= 1 and len(q_seg) >= 2:
+                cn_overlap = max(cn_overlap, min(len(common), 2))
+
+    total_overlap = overlap + cn_overlap
+    if total_overlap >= 4:
+        score = 9.0
+    elif total_overlap >= 2:
+        score = 7.5
+    elif total_overlap >= 1:
         score = 6.0
     else:
-        score = 5.0
+        score = 2.0  # 无相关：低分，让权威性无法独占排序
+
     return json.dumps({
         "relevance": score,
-        "reason": f"Keyword overlap: {overlap} shared terms with query.",
+        "reason": f"Overlap={total_overlap} (en={overlap}, cn={cn_overlap}).",
     }, ensure_ascii=False)
 
 
