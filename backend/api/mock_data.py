@@ -313,21 +313,24 @@ def get_mock_papers(query: str = "", limit: int = 20) -> list[Paper]:
     for item in _MOCK_PAPERS:
         title_lower = item["title"].lower()
         abstract_lower = item.get("abstract", "").lower()
-        score = 0.0
+        word_score = 0.0
         # 完整短语命中
         if q in title_lower:
-            score += 10.0
+            word_score += 10.0
         # 单词命中
         for w in query_words:
             if w in title_lower:
-                score += 3.0
+                word_score += 3.0
             elif w in abstract_lower:
-                score += 1.0
-        # 引用数加成（log scale）
-        cites = item.get("citation_count", 0)
-        if cites > 0:
-            import math
-            score += math.log1p(cites) / 10.0
+                word_score += 1.0
+
+        # 引用数加成仅在有关键词命中时生效（避免无关高引论文霸榜）
+        score = word_score
+        if word_score > 0:
+            cites = item.get("citation_count", 0)
+            if cites > 0:
+                import math
+                score += math.log1p(cites) / 10.0
         scored.append((score, item))
 
     # 按分数降序
