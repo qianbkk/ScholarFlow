@@ -109,10 +109,25 @@ def _get_deepseek_client() -> Optional[AsyncOpenAI]:
 
 # ===== Mock 响应生成器 =====
 
-def _mock_query_decompose(query: str) -> str:
-    """Mock 查询分解：返回 4-5 个英文子查询。"""
-    base = query.strip()
-    # 简单中英翻译兜底
+def _mock_query_decompose(prompt: str) -> str:
+    """Mock 查询分解：返回 4-5 个英文子查询。
+
+    关键修复：从 prompt 提取实际查询（不是用整个 prompt 作为查询）。
+    """
+    # 从 prompt 提取真正的用户查询
+    actual_query = prompt
+    m = re.search(r"Original query:\s*(.+?)(?:\n|$)", prompt)
+    if m:
+        actual_query = m.group(1).strip()
+    else:
+        m2 = re.search(r"Query:\s*(.+?)(?:\n|$)", prompt)
+        if m2:
+            actual_query = m2.group(1).strip()
+        else:
+            # 短查询：截取到第一个换行
+            actual_query = prompt.split("\n")[0].strip()
+
+    base = actual_query.strip()
     base_en = base
     cn_to_en = {
         "大语言模型": "large language model",
@@ -122,20 +137,34 @@ def _mock_query_decompose(query: str) -> str:
         "科研": "scientific research",
         "综述": "survey",
         "应用": "applications",
+        "知识图谱": "knowledge graph",
+        "嵌入": "embedding",
+        "扩散": "diffusion",
+        "语音识别": "speech recognition",
+        "自监督": "self-supervised",
+        "对比": "contrastive",
+        "目标检测": "object detection",
+        "联邦": "federated",
+        "隐私": "privacy",
+        "推荐系统": "recommender system",
+        "协同过滤": "collaborative filtering",
+        "图卷积": "graph convolution",
+        "图注意力": "graph attention",
+        "图嵌入": "graph embedding",
+        "深度学习": "deep learning",
+        "神经网络": "neural network",
     }
     for cn, en in cn_to_en.items():
         base_en = base_en.replace(cn, en)
-    base_en = base_en.strip()
-    if not base_en:
-        base_en = base
+    base_en = base_en.strip() or base
 
     return json.dumps({
-        "analysis": f"原始查询「{query}」的研究意图分析：聚焦学术前沿，自动分解为多角度子查询。",
+        "analysis": f"原始查询「{base}」的研究意图分析：聚焦学术前沿，自动分解为多角度子查询。",
         "sub_queries": [
             f"{base_en} methods",
             f"{base_en} survey",
-            f"{base_en} benchmark",
             f"{base_en} recent advances",
+            f"{base_en} benchmark",
             f"{base_en} applications",
         ],
         "key_terms": base_en.split()[:3],
@@ -144,6 +173,8 @@ def _mock_query_decompose(query: str) -> str:
 
 def _mock_relevance_score(paper_title: str, query: str) -> str:
     """Mock 相关性评分：基于关键词重合度 + 中英混合。"""
+    import sys
+    print(f"[MOCK_REL] pid={os.getpid()} query={query[:30]!r} title={paper_title[:30]!r}", file=sys.stderr, flush=True)
     q_lower = query.lower()
     t_lower = paper_title.lower()
     # 英文 word 匹配
