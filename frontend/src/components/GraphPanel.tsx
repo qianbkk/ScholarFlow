@@ -12,9 +12,11 @@ export function GraphPanel({ graph }: Props) {
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
 
   useEffect(() => {
-    if (!graph || !svgRef.current) return;
+    if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
+
+    if (!graph) return;
 
     const width = svgRef.current.clientWidth || 400;
     const height = svgRef.current.clientHeight || 600;
