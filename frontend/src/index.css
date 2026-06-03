@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+}
+
+/* Markdown 报告样式 */
+.report-body h2 {
+  @apply text-xl font-semibold mt-5 mb-2 text-slate-800 border-b border-slate-200 pb-1;
+}
+.report-body h3 {
+  @apply text-lg font-semibold mt-4 mb-1.5 text-slate-700;
+}
+.report-body p {
+  @apply text-sm leading-relaxed text-slate-700 my-1.5;
+}
+.report-body ul {
+  @apply list-disc pl-6 my-1.5 text-sm text-slate-700;
+}
+.report-body ol {
+  @apply list-decimal pl-6 my-1.5 text-sm text-slate-700;
+}
+.report-body li {
+  @apply my-1;
+}
+.report-body a {
+  @apply text-brand-600 hover:underline;
+}
+.report-body strong {
+  @apply font-semibold text-slate-900;
+}
+.report-body code {
+  @apply bg-slate-100 px-1.5 py-0.5 rounded text-xs;
+}
+.report-body blockquote {
+  @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-600 italic;
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-slate-100;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-300 rounded;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-400;
+}

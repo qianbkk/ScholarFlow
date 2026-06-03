@@ -1,0 +1,40 @@
+[
+  {
+    "query": "transformer attention mechanism for natural language processing",
+    "expected_papers": [
+      "Attention Is All You Need",
+      "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding",
+      "GPT-3: Language Models are Few-Shot Learners"
+    ]
+  },
+  {
+    "query": "large language model code generation",
+    "expected_papers": [
+      "Evaluating Large Language Models Trained on Code",
+      "CodeGen: An Open Large Language Model for Code with Multi-Turn Program Synthesis",
+      "HumanEval: Hand-Written Evaluation Set for Code Synthesis"
+    ]
+  },
+  {
+    "query": "multi-agent reinforcement learning coordination",
+    "expected_papers": [
+      "Multi-Agent Actor-Critic for Mixed Cooperative-Competitive Environments",
+      "Emergent Tool Use from Multi-Agent Interaction",
+      "Multi-Agent Reinforcement Learning: A Survey of Methods and Applications"
+    ]
+  },
+  {
+    "query": "retrieval augmented generation knowledge",
+    "expected_papers": [
+      "Retrieval-Augmented Generation for Large Language Models: A Survey",
+      "From Local to Global: A Graph RAG Approach to Query-Focused Summarization"
+    ]
+  },
+  {
+    "query": "deep learning image classification benchmark",
+    "expected_papers": [
+      "ImageNet Classification with Deep Convolutional Neural Networks",
+      "Deep Residual Learning for Image Recognition"
+    ]
+  }
+]
