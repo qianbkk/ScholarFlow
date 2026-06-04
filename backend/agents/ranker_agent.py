@@ -179,9 +179,13 @@ async def rank_node(state: SearchState) -> SearchState:
         paper.authority_score = _authority_score(paper.citation_count, paper.venue)
         paper.consistency_score = cons
         # 加权：rel 50% + auth 30% + cons 20%
-        paper.final_score = round(
-            rel * 0.5 + paper.authority_score * 0.3 + cons * 0.2, 2
-        )
+        final = rel * 0.5 + paper.authority_score * 0.3 + cons * 0.2
+        # ===== 关键修复：零相关论文降权 =====
+        # 当 rel < 4.0（无关键词命中）时，权威性 + 一致性不应让无关论文竞争 Top 名次。
+        # 上限设为 rel + 0.5（保证排序时真实相关论文仍在前面）。
+        if rel < 4.0:
+            final = min(final, rel + 0.5)
+        paper.final_score = round(final, 2)
         total_cost += rel_usage.get("cost_usd", 0.0) + cons_usage.get("cost_usd", 0.0)
         total_tokens += (
             rel_usage.get("input_tokens", 0) + rel_usage.get("output_tokens", 0)
