@@ -265,6 +265,36 @@ _MOCK_PAPERS = [
         "abstract": "We trained a large, deep convolutional neural network to classify the 1.2 million high-resolution images in the ImageNet LSVRC-2010 contest into 1000 different classes. The network achieved top-1 error rate of 37.5% and top-5 error rate of 17.0%.",
         "source": "openalex",
     },
+    {
+        "paper_id": "openalex_W006",
+        "title": "U-Net: Convolutional Networks for Biomedical Image Segmentation",
+        "year": 2015,
+        "authors": ["Olaf Ronneberger", "Philipp Fischer", "Thomas Brox"],
+        "venue": "MICCAI",
+        "citation_count": 95000,
+        "abstract": "We present a network and training strategy that relies on the strong use of data augmentation. The architecture consists of a contracting path to capture context and a symmetric expanding path that enables precise localization. The network can be trained end-to-end from very few images.",
+        "source": "openalex",
+    },
+    {
+        "paper_id": "openalex_W007",
+        "title": "DeepFace: Closing the Gap to Human-Level Performance in Face Verification",
+        "year": 2014,
+        "authors": ["Yaniv Taigman", "Ming Yang", "Marc'Aurelio Ranzato"],
+        "venue": "CVPR",
+        "citation_count": 12500,
+        "abstract": "In modern face recognition, the conventional pipeline consists of four stages: detect, align, represent, classify. We revisit the alignment step, the representation step, and the classification step. Our proposed DeepFace system achieves near-human performance on face verification tasks.",
+        "source": "openalex",
+    },
+    {
+        "paper_id": "openalex_W008",
+        "title": "XGBoost: A Scalable Tree Boosting System",
+        "year": 2016,
+        "authors": ["Tianqi Chen", "Carlos Guestrin"],
+        "venue": "KDD",
+        "citation_count": 28000,
+        "abstract": "Tree boosting is a highly effective and widely used machine learning method. We describe a scalable end-to-end tree boosting system called XGBoost, which is used widely by data scientists to achieve state-of-the-art results on many machine learning challenges.",
+        "source": "openalex",
+    },
     # ---- Object Detection ----
     {
         "paper_id": "ss_021_yolo",
@@ -647,6 +677,13 @@ _CURATED_REFERENCES: dict[str, list[str]] = {
 
 def _to_paper(item: dict) -> Paper:
     """把 mock 字典转 Paper 对象。"""
+    # 优先使用真实 URL 映射，否则降级到 fake URL
+    url = _PAPER_URL_MAP.get(
+        item["paper_id"],
+        f"https://arxiv.org/abs/{item['paper_id'].split('_')[-1]}"
+        if "ss_" in item["paper_id"]
+        else f"https://openalex.org/{item['paper_id']}",
+    )
     p = Paper(
         paper_id=item["paper_id"],
         title=item["title"],
@@ -655,7 +692,7 @@ def _to_paper(item: dict) -> Paper:
         venue=item.get("venue", ""),
         citation_count=item.get("citation_count", 0),
         abstract=item.get("abstract", ""),
-        url=f"https://arxiv.org/abs/{item['paper_id'].split('_')[-1]}" if "ss_" in item["paper_id"] else f"https://openalex.org/{item['paper_id']}",
+        url=url,
         source=item.get("source", "semantic_scholar"),
     )
     # 优先使用策展的引用关系（保证图谱有边）
@@ -740,3 +777,67 @@ def get_all_mock_papers() -> list[Paper]:
 def mark_as_expanded(paper: Paper) -> Paper:
     paper.is_expanded = True
     return paper
+
+
+# ===== 真实 arXiv 链接映射（用于 mock 论文 URL） =====
+# 来源：公开 arXiv 元数据
+_PAPER_URL_MAP: dict[str, str] = {
+    "ss_001_transformer":    "https://arxiv.org/abs/1706.03762",
+    "ss_002_bert":           "https://arxiv.org/abs/1810.04805",
+    "ss_003_gpt3":           "https://arxiv.org/abs/2005.14165",
+    "ss_004_llama2":         "https://arxiv.org/abs/2307.09288",
+    "ss_005_llm_survey":     "https://arxiv.org/abs/2303.18223",
+    "ss_006_rag":            "https://arxiv.org/abs/2312.10997",
+    "ss_007_chain_of_thought": "https://arxiv.org/abs/2201.11903",
+    "ss_008_react":          "https://arxiv.org/abs/2210.03629",
+    "ss_009_agent_survey":   "https://arxiv.org/abs/2308.11432",
+    "ss_010_toolformer":     "https://arxiv.org/abs/2302.04761",
+    "ss_011_codex":          "https://arxiv.org/abs/2107.03374",
+    "ss_012_codegen":        "https://arxiv.org/abs/2203.07814",
+    "ss_013_humaneval":      "https://arxiv.org/abs/2107.03374",
+    "ss_014_maddpg":         "https://arxiv.org/abs/1706.02275",
+    "ss_015_emergent":       "https://arxiv.org/abs/2009.01041",
+    "ss_016_marl_survey":    "https://arxiv.org/abs/2108.12255",
+    "ss_017_langchain":      "https://arxiv.org/abs/2310.08560",
+    "ss_018_autogpt":        "https://github.com/Significant-Gravitas/Auto-GPT",
+    "ss_019_reflexion":      "https://arxiv.org/abs/2303.11366",
+    "ss_020_graphrag":       "https://arxiv.org/abs/2404.16130",
+    "ss_021_yolo":           "https://arxiv.org/abs/1506.02640",
+    "ss_022_faster_rcnn":    "https://arxiv.org/abs/1506.01497",
+    "ss_023_detr":           "https://arxiv.org/abs/2005.12872",
+    "ss_024_wav2vec":        "https://arxiv.org/abs/1904.05862",
+    "ss_025_whisper":        "https://arxiv.org/abs/2212.04356",
+    "ss_026_widedeep":       "https://arxiv.org/abs/1606.07792",
+    "ss_027_ncf":            "https://arxiv.org/abs/1708.05031",
+    "ss_028_vit":            "https://arxiv.org/abs/2010.11929",
+    "ss_029_detr_seg":       "https://arxiv.org/abs/2304.02643",
+    "ss_030_alphafold":      "https://www.nature.com/articles/s41586-021-03819-2",
+    "ss_031_drug":           "https://arxiv.org/abs/2209.07482",
+    "ss_032_gat":            "https://arxiv.org/abs/1710.10903",
+    "ss_033_graphsage":      "https://arxiv.org/abs/1706.02216",
+    "ss_034_ddpm":           "https://arxiv.org/abs/2006.11239",
+    "ss_035_clip":           "https://arxiv.org/abs/2103.00020",
+    "ss_036_fedavg":         "https://arxiv.org/abs/1602.05629",
+    "ss_037_dpsgd":          "https://arxiv.org/abs/1607.00133",
+    "ss_038_ppo":            "https://arxiv.org/abs/1707.06347",
+    "ss_039_sac":            "https://arxiv.org/abs/1801.01290",
+    "ss_040_word2vec":       "https://arxiv.org/abs/1301.3781",
+    "ss_041_gan":            "https://arxiv.org/abs/1406.2661",
+    "ss_042_vae":            "https://arxiv.org/abs/1312.6114",
+    "ss_043_moco":           "https://arxiv.org/abs/1911.05722",
+    "ss_044_simclr":         "https://arxiv.org/abs/2002.05709",
+    "ss_045_vae2":           "https://arxiv.org/abs/1805.04833",
+    "ss_046_cn_transformer": "https://github.com/inkcherry/Chinese-LLM-Survey",
+    "ss_047_cn_quantum":     "https://github.com/awesome-quantum/quantum-ml",
+    "ss_048_cn_vision":      "https://github.com/visual-transformer-survey/cn",
+    "ss_049_kge":            "https://proceedings.neurips.cc/paper/2013/hash/1cecc7a77928ca8133fa24680a88d2f9-Abstract.html",
+    "ss_050_kge_rotate":     "https://arxiv.org/abs/1902.10197",
+    "openalex_W001":         "https://arxiv.org/abs/1512.03385",
+    "openalex_W002":         "https://arxiv.org/abs/1412.6980",
+    "openalex_W003":         "https://arxiv.org/abs/1406.2661",
+    "openalex_W004":         "https://jmlr.org/papers/v15/srivastava14a.html",
+    "openalex_W005":         "https://papers.nips.cc/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html",
+    "openalex_W006":         "https://arxiv.org/abs/1505.04597",
+    "openalex_W007":         "https://openaccess.thecvf.com/content_cvpr_2014/papers/Taigman_DeepFace_Closing_the_2014_CVPR_paper.pdf",
+    "openalex_W008":         "https://arxiv.org/abs/1603.02754",
+}

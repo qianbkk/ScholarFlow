@@ -208,20 +208,45 @@ def _mock_relevance_score(paper_title: str, query: str) -> str:
     }, ensure_ascii=False)
 
 
-def _mock_refine(query: str, top5_titles: list[str]) -> str:
-    """Mock 查询改写：返回 3 个新子查询。"""
+def _mock_refine(prompt: str, top5_titles: list[str]) -> str:
+    """Mock 查询改写：从 prompt 提取真实 query，返回 3 个新子查询。"""
+    actual_query = prompt
+    m = re.search(r"Original query:\s*(.+?)(?:\n|$)", prompt)
+    if m:
+        actual_query = m.group(1).strip()
+    else:
+        m2 = re.search(r"Query:\s*(.+?)(?:\n|$)", prompt)
+        if m2:
+            actual_query = m2.group(1).strip()
+        else:
+            actual_query = prompt.split("\n")[0].strip()[:60]
     return json.dumps({
-        "gap_analysis": f"基于 Top5 结果，补充「{query}」的应用与对比研究维度。",
+        "gap_analysis": f"基于 Top5 结果，补充「{actual_query}」的应用与对比研究维度。",
         "new_sub_queries": [
-            f"{query} evaluation",
-            f"{query} comparison",
-            f"{query} limitations",
+            f"{actual_query} evaluation",
+            f"{actual_query} comparison",
+            f"{actual_query} limitations",
         ],
     }, ensure_ascii=False)
 
 
-def _mock_synthesis(query: str, ranked_count: int) -> str:
-    """Mock 综述报告：返回结构化 Markdown。"""
+def _mock_synthesis(prompt: str, ranked_count: int) -> str:
+    """Mock 综述报告：返回结构化 Markdown。
+    关键修复：从 prompt 中提取真实研究问题（不再使用 prompt 前 80 字符）。"""
+    # 从 prompt 提取研究问题
+    m = re.search(r"研究问题[：:]\s*(.+?)(?:\n|$)", prompt)
+    if m:
+        query = m.group(1).strip()
+    else:
+        m2 = re.search(r"Original query:\s*(.+?)(?:\n|$)", prompt)
+        if m2:
+            query = m2.group(1).strip()
+        else:
+            # 兜底：用 prompt 第一行
+            query = prompt.split("\n")[0].strip()[:60]
+    if not query:
+        query = "（未指定查询）"
+
     return f"""## 研究概述
 针对查询「{query}」，ScholarFlow 通过 8 节点流水线（查询分解 → 双源检索 → 引文扩展 → 三维排序 → 自适应改写 → 综述生成 → 图谱构建 → 成本汇总）从 Semantic Scholar 与 OpenAlex 汇总后返回 Top {ranked_count} 篇高质量论文。
 
@@ -272,9 +297,9 @@ def _mock_response(prompt: str, task_type: str, json_mode: bool) -> str:
             return _mock_relevance_score(m_title.group(1).strip(), m_query.group(1).strip())
         return json.dumps({"relevance": 6.0, "reason": "mock fallback"})
     if task_type == "refine_strategy":
-        return _mock_refine(prompt[:50], [])
+        return _mock_refine(prompt, [])
     if task_type == "synthesis":
-        return _mock_synthesis(prompt[:80], 10)
+        return _mock_synthesis(prompt, 10)
     # 兜底
     return json.dumps({"result": "mock"})
 
