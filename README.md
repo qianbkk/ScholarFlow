@@ -1,7 +1,6 @@
 # ScholarFlow
 
 > 面向研究生科研工作流的自主多 Agent 学术情报系统
-> 第八届中国研究生人工智能创新大赛 · 华为赛题三
 
 ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 个串联的 LangGraph 节点**完成：查询理解与分解 → 多源并行检索 → 引文网络扩展 → 三维质检排序 → 自适应迭代优化 → 结构化综述报告 → 引文知识图谱 → 成本追踪汇报。
 
@@ -48,10 +47,9 @@ ScholarFlow/
 │       ├── hooks/      ← useSearch
 │       ├── services/   ← api
 │       └── types/
-├── eval/            ← f1_score.py + test_cases.json
+├── eval/            ← f1_score.py + test_cases.json (PaSa 风格评测)
 ├── test_run.py      ← 端到端冒烟测试
-├── .env.example     ← 配置模板
-└── TASK.md          ← 项目原始任务书
+└── .env.example     ← 配置模板
 ```
 
 ### 1. 配置环境变量
@@ -66,11 +64,11 @@ cp .env.example .env
 | 模式 | 设置 | 适用场景 |
 |------|------|---------|
 | **MOCK（默认）** | `LLM_MOCK=true` `API_MOCK=true` | 无网络 / 无 key / 演示 |
-| **REAL** | `LLM_MOCK=false` `API_MOCK=false` + 填入有效 key | 实际参赛 / 评测 |
+| **REAL** | `LLM_MOCK=false` `API_MOCK=false` + 填入有效 key | 实际运行 / 评测 |
 
 MOCK 模式特点：
 - LLM 调用走预置响应（query 分解、相关性评分、综述生成、查询改写）
-- 学术 API 返回 25 篇真实存在的代表性论文（Transformer / BERT / GPT-3 / Llama 2 / GraphRAG 等）
+- 学术 API 返回 ~58 篇真实存在的代表性论文（Transformer / BERT / GPT-3 / Llama 2 / GraphRAG 等）
 - 流水线完整 8 节点全部跑通，输出可观察
 
 ### 2. 启动后端
@@ -166,12 +164,12 @@ END
 
 ## 📊 评测指标
 
-华为赛题评分：F1 Score (70%) + 运行效率 (20%) + 结果结构化 (10%)
-
 F1 计算：`precision = |ret ∩ rel| / |ret|`, `recall = |ret ∩ rel| / |rel|`, `F1 = 2PR/(P+R)`
-（按论文标题前 60 字符归一化后取集合交集）
+（按论文标题前 60 字符归一化后取集合交集，详见 `eval/f1_score.py`）
 
-> **Mock 模式下的 F1**：因为内置数据集只有 25 篇代表性论文，precision 受限（top-20 里会混入非期望论文）。这是 mock 数据池的固有限制，**真实 API 模式下会显著提升**。Recall 较高（≥0.9）说明流水线能正确识别并返回相关论文。
+支持 PaSa 风格指标：Recall@K、Precision@K、nDCG@K、随机基线对比。
+
+> **Mock 模式下的 F1**：因为内置数据集只有约 58 篇代表性论文，precision 受限（top-20 里会混入非期望论文）。这是 mock 数据池的固有限制，**真实 API 模式下会显著提升**。Recall 较高（≥0.85）说明流水线能正确识别并返回相关论文。
 
 ---
 
