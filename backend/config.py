@@ -5,7 +5,7 @@ ScholarFlow 配置文件
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)  # .env 总是覆盖已存在的 env 变量（避免 shell 里残留的旧 key 干扰）
 
 
 # ===== 离线运行 / Mock 模式 =====
