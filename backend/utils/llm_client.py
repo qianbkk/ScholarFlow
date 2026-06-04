@@ -333,10 +333,17 @@ async def call_llm(
         model = cfg.get("fast_model" if tier == "fast" else "model", cfg.get("model", ""))
 
     if provider == "deepseek" or model.startswith("deepseek-"):
-        return await _call_deepseek(prompt, system, max_tokens, json_mode)
-    return await _call_anthropic_compatible(
-        provider, model, prompt, system, max_tokens, json_mode
-    )
+        result = await _call_deepseek(prompt, system, max_tokens, json_mode)
+    else:
+        result = await _call_anthropic_compatible(
+            provider, model, prompt, system, max_tokens, json_mode
+        )
+    # ===== 失败降级：real 失败时回退 mock，保证 8 节点流水线不卡住 =====
+    text, usage = result
+    if not text and usage.get("error"):
+        print(f"[llm_client] {provider}/{model} failed: {usage['error']}  → fallback to mock")
+        return await _call_mock(prompt, task_type, json_mode)
+    return result
 
 
 async def _call_mock(prompt: str, task_type: str, json_mode: bool) -> tuple[str, dict]:

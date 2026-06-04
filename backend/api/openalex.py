@@ -17,14 +17,34 @@ SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,c
 MAX_RETRIES = 2
 
 
+def _mock_fallback(query: str, limit: int) -> list[Paper]:
+    """Real 模式失败时降级到 mock。"""
+    all_papers = get_mock_papers(query, limit=limit * 2)
+    return [p for p in all_papers if p.source == "openalex"][:limit]
+
+
 def _get_proxy() -> str | None:
-    return (
-        os.environ.get("HTTPS_PROXY")
-        or os.environ.get("https_proxy")
-        or os.environ.get("HTTP_PROXY")
-        or os.environ.get("http_proxy")
-        or None
-    )
+    """与 semantic_scholar._get_proxy 保持一致：env → urllib → 本地端口兜底。"""
+    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
+        v = os.environ.get(var)
+        if v:
+            return v
+    try:
+        import urllib.request
+        proxies = urllib.request.getproxies()
+        for key in ("https", "http"):
+            if key in proxies and proxies[key] and "127.0.0.1" in proxies[key]:
+                return proxies[key]
+    except Exception:
+        pass
+    for port in (7890, 7891, 7897, 10809, 1080):
+        try:
+            import socket
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return f"http://127.0.0.1:{port}"
+        except Exception:
+            continue
+    return None
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
@@ -81,12 +101,12 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
                 },
             )
             if resp.status_code != 200:
-                print(f"[OpenAlex] search error {resp.status_code}: {query[:60]}")
-                return []
+                print(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
+                return _mock_fallback(query, limit)
             data = resp.json()
     except Exception as e:
-        print(f"[OpenAlex] search exception: {e}")
-        return []
+        print(f"[OpenAlex] search exception: {e}  → 降级到 mock")
+        return _mock_fallback(query, limit)
 
     papers = []
     for item in data.get("results", []):
