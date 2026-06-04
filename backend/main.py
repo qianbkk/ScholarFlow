@@ -61,6 +61,7 @@ class PaperResult(BaseModel):
     is_expanded: bool = False
     relevance_score: float = 0.0
     authority_score: float = 0.0
+    consistency_score: float = 0.0
     final_score: float = 0.0
 
 

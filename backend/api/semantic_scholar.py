@@ -5,17 +5,29 @@ https://api.semanticscholar.org/graph/v1
 当 API_MOCK=true 时返回内置 mock 数据（无网络也能跑通）。
 """
 import asyncio
+import os
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
-PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url"
-BATCH_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url"
+PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
+BATCH_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
 HEADERS = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY else {}
 TIMEOUT = 30.0
 MAX_RETRIES = 2
+
+
+def _get_proxy() -> str | None:
+    """读取系统代理环境变量。httpx 默认不读 env，需要显式传 proxy=..."""
+    return (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or None
+    )
 
 
 async def _get_with_retry(client: httpx.AsyncClient, url: str, params: dict, headers: dict) -> httpx.Response:
@@ -49,7 +61,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return papers
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/paper/search",
@@ -71,7 +83,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         doi = ""
         if item.get("externalIds") and isinstance(item["externalIds"], dict):
             doi = item["externalIds"].get("DOI", "") or ""
-        papers.append(Paper(
+        paper = Paper(
             paper_id=item["paperId"],
             title=item.get("title", ""),
             abstract=item.get("abstract") or "",
@@ -82,7 +94,17 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             doi=doi,
             url=item.get("url") or f"https://www.semanticscholar.org/paper/{item['paperId']}",
             source="semantic_scholar",
-        ))
+        )
+        # 解析 references 字段（已在 PAPER_FIELDS 中请求）
+        refs = item.get("references") or []
+        if refs:
+            ref_ids = []
+            for r in refs:
+                if isinstance(r, dict) and r.get("paperId"):
+                    ref_ids.append(r["paperId"])
+            if ref_ids:
+                paper.__dict__["references"] = ref_ids
+        papers.append(paper)
     return papers
 
 
@@ -104,7 +126,7 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
         return refs
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/paper/{paper_id}/references",

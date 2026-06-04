@@ -5,6 +5,7 @@ https://api.openalex.org
 当 API_MOCK=true 时返回内置 mock 数据。
 """
 import asyncio
+import os
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
@@ -14,6 +15,16 @@ BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
 SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,cited_by_count,primary_location,doi,referenced_works"
 MAX_RETRIES = 2
+
+
+def _get_proxy() -> str | None:
+    return (
+        os.environ.get("HTTPS_PROXY")
+        or os.environ.get("https_proxy")
+        or os.environ.get("HTTP_PROXY")
+        or os.environ.get("http_proxy")
+        or None
+    )
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
@@ -57,7 +68,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return [p for p in all_papers if p.source == "openalex"][:limit]
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/works",
