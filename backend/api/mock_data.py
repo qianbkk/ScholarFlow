@@ -4,6 +4,7 @@ ScholarFlow 学术 API Mock 数据集
 内置一组真实存在的代表性论文（基于公开的 arXiv / 会议信息构造），
 用于在无网络环境下让流水线跑通。
 """
+import os
 from backend.models.paper import Paper
 
 
@@ -264,7 +265,384 @@ _MOCK_PAPERS = [
         "abstract": "We trained a large, deep convolutional neural network to classify the 1.2 million high-resolution images in the ImageNet LSVRC-2010 contest into 1000 different classes. The network achieved top-1 error rate of 37.5% and top-5 error rate of 17.0%.",
         "source": "openalex",
     },
+    # ---- Object Detection ----
+    {
+        "paper_id": "ss_021_yolo",
+        "title": "You Only Look Once: Unified, Real-Time Object Detection",
+        "year": 2016,
+        "authors": ["Joseph Redmon", "Santosh Divvala", "Ross Girshick"],
+        "venue": "CVPR",
+        "citation_count": 40000,
+        "abstract": "We present YOLO, a new approach to object detection. Prior work on object detection repurposes classifiers to perform detection. Instead, we frame object detection as a regression problem to spatially separated bounding boxes and associated class probabilities. A single neural network predicts bounding boxes and class probabilities directly from full images in one evaluation.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_022_faster_rcnn",
+        "title": "Faster R-CNN: Towards Real-Time Object Detection with Region Proposal Networks",
+        "year": 2015,
+        "authors": ["Shaoqing Ren", "Kaiming He", "Ross Girshick"],
+        "venue": "NeurIPS",
+        "citation_count": 35000,
+        "abstract": "State-of-the-art object detection networks depend on region proposal algorithms to hypothesize object locations. Advances like SPPnet and Fast R-CNN have reduced the running time of these detection networks, exposing region proposal computation as a bottleneck. We introduce a Region Proposal Network (RPN) that shares full-image convolutional features with the detection network.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_023_detr",
+        "title": "End-to-End Object Detection with Transformers",
+        "year": 2020,
+        "authors": ["Nicolas Carion", "Francisco Massa", "Gabriel Synnaeve"],
+        "venue": "ECCV",
+        "citation_count": 8000,
+        "abstract": "We present a new method that views object detection as a direct set prediction problem. Our approach streamlines the detection pipeline, effectively removing the need for many hand-designed components like a non-maximum suppression procedure or anchor generation that explicitly encode our prior knowledge about the task.",
+        "source": "semantic_scholar",
+    },
+    # ---- Speech Recognition ----
+    {
+        "paper_id": "ss_024_wav2vec",
+        "title": "wav2vec: Unsupervised Pre-training for Speech Recognition",
+        "year": 2019,
+        "authors": ["Steffen Schneider", "Alexei Baevski", "Ronan Collobert"],
+        "venue": "Interspeech",
+        "citation_count": 3500,
+        "abstract": "We explore unsupervised pre-training for speech recognition by learning representations from raw audio. wav2vec is trained by contrasting a latent representation of future audio frames with negatives sampled from random time steps. Pre-trained representations improve phone recognition and speech recognition performance.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_025_whisper",
+        "title": "Robust Speech Recognition via Large-Scale Weak Supervision",
+        "year": 2022,
+        "authors": ["Alec Radford", "Jong Wook Kim", "Tao Xu"],
+        "venue": "ICML",
+        "citation_count": 4200,
+        "abstract": "We study the capabilities of speech processing systems trained simply to predict large amounts of transcripts of audio on the internet. When scaled to 680,000 hours of multilingual and multitask supervision, the resulting models generalize well to standard benchmarks and are often competitive with prior fully supervised results.",
+        "source": "semantic_scholar",
+    },
+    # ---- Recommender Systems ----
+    {
+        "paper_id": "ss_026_widedeep",
+        "title": "Wide & Deep Learning for Recommender Systems",
+        "year": 2016,
+        "authors": ["Heng-Tze Cheng", "Levent Koc", "Jeremiah Harmsen"],
+        "venue": "DLRS",
+        "citation_count": 6500,
+        "abstract": "Memorization of feature interactions through a wide set of cross-product features and generalization through the use of deep neural networks for embedding-based representations. We present the Wide & Deep learning architecture for jointly training wide linear models and deep neural networks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_027_ncf",
+        "title": "Neural Collaborative Filtering",
+        "year": 2017,
+        "authors": ["Xiangnan He", "Lizi Liao", "Hanwang Zhang"],
+        "venue": "WWW",
+        "citation_count": 8500,
+        "abstract": "In recent years, deep neural networks have yielded immense success on speech recognition, computer vision and natural language processing. However, the investigation of deep neural networks on recommender systems has received relatively less scrutiny. We present Neural Collaborative Filtering (NCF) to address this gap.",
+        "source": "semantic_scholar",
+    },
+    # ---- Vision Transformer / Segmentation ----
+    {
+        "paper_id": "ss_028_vit",
+        "title": "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale",
+        "year": 2020,
+        "authors": ["Alexey Dosovitskiy", "Lucas Beyer", "Alexander Kolesnikov"],
+        "venue": "ICLR",
+        "citation_count": 28000,
+        "abstract": "While the Transformer architecture has become the de-facto standard for natural language processing tasks, its applications to computer vision remain limited. We show that this reliance on CNNs is not necessary and a pure transformer applied directly to sequences of image patches can perform very well on image classification tasks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_029_detr_seg",
+        "title": "Segment Anything",
+        "year": 2023,
+        "authors": ["Alexander Kirillov", "Eric Mintun", "Nikhila Ravi"],
+        "venue": "ICCV",
+        "citation_count": 5500,
+        "abstract": "We introduce the Segment Anything (SA) project: a new task, model, and dataset for image segmentation. Using our efficient model in a data collection loop, we built the largest segmentation dataset to date with over 1 billion masks on 11 million licensed and privacy respecting images.",
+        "source": "semantic_scholar",
+    },
+    # ---- Drug Discovery / Healthcare ----
+    {
+        "paper_id": "ss_030_alphafold",
+        "title": "Highly Accurate Protein Structure Prediction with AlphaFold",
+        "year": 2021,
+        "authors": ["John Jumper", "Richard Evans", "Alexander Pritzel"],
+        "venue": "Nature",
+        "citation_count": 18000,
+        "abstract": "Proteins are essential to life, and understanding their structure can facilitate a mechanistic understanding of their function. AlphaFold provides protein structures with atomic accuracy even where no homologous structure is known. We provide full confidence estimates and open source the code and model weights.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_031_drug",
+        "title": "Molecular Representation Learning with Language Models",
+        "year": 2022,
+        "authors": ["Binghong Chen", "Chengtao Li", "Hanjun Dai"],
+        "venue": "NeurIPS",
+        "citation_count": 600,
+        "abstract": "We propose a molecular representation learning method that leverages the chemical language of molecules using transformer-based language models. Our approach captures both syntactic and semantic chemical information, achieving state-of-the-art performance on drug target interaction prediction and molecular property prediction tasks.",
+        "source": "semantic_scholar",
+    },
+    # ---- Graph Neural Networks ----
+    {
+        "paper_id": "ss_032_gat",
+        "title": "Graph Attention Networks",
+        "year": 2018,
+        "authors": ["Petar Velickovic", "Guillem Cucurull", "Arantxa Casanova"],
+        "venue": "ICLR",
+        "citation_count": 13000,
+        "abstract": "We present graph attention networks (GATs), novel neural network architectures that operate on graph-structured data, leveraging masked self-attentional layers. The architecture allows for assigning different importances to nodes in a neighborhood by specifying different weights to different nodes without requiring any kind of costly matrix operation.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_033_graphsage",
+        "title": "Inductive Representation Learning on Large Graphs",
+        "year": 2017,
+        "authors": ["Will Hamilton", "Zhitao Ying", "Jure Leskovec"],
+        "venue": "NeurIPS",
+        "citation_count": 12000,
+        "abstract": "We present GraphSAGE, a general inductive framework that efficiently generates node embeddings for previously unseen data by sampling and aggregating features from a node's local neighborhood. Our approach can scale to graphs with millions of nodes.",
+        "source": "semantic_scholar",
+    },
+    # ---- Diffusion / Generative ----
+    {
+        "paper_id": "ss_034_ddpm",
+        "title": "Denoising Diffusion Probabilistic Models",
+        "year": 2020,
+        "authors": ["Jonathan Ho", "Ajay Jain", "Pieter Abbeel"],
+        "venue": "NeurIPS",
+        "citation_count": 15000,
+        "abstract": "We present high quality image synthesis results using diffusion probabilistic models, a class of latent variable models inspired by considerations from nonequilibrium thermodynamics. Our best results are obtained by training on a weighted variational bound designed according to a novel connection between diffusion probabilistic models and denoising score matching.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_035_clip",
+        "title": "Learning Transferable Visual Models From Natural Language Supervision",
+        "year": 2021,
+        "authors": ["Alec Radford", "Jong Wook Kim", "Chris Hallacy"],
+        "venue": "ICML",
+        "citation_count": 11000,
+        "abstract": "We demonstrate that the simple pre-training task of predicting which caption goes with which image is an efficient and scalable way to learn SOTA image representations from scratch on a dataset of 400 million pairs collected from the internet. After pre-training, natural language is used to reference learned visual concepts enabling zero-shot transfer.",
+        "source": "semantic_scholar",
+    },
+    # ---- Federated / Privacy ----
+    {
+        "paper_id": "ss_036_fedavg",
+        "title": "Communication-Efficient Learning of Deep Networks from Decentralized Data",
+        "year": 2017,
+        "authors": ["H. Brendan McMahan", "Eider Moore", "Daniel Ramage"],
+        "venue": "AISTATS",
+        "citation_count": 11000,
+        "abstract": "We advocate an alternative that leaves the training data distributed on the mobile devices and learns a shared model by aggregating locally-computed updates. We term this approach Federated Learning. We demonstrate the applicability of this approach to a variety of model architectures.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_037_dpsgd",
+        "title": "Deep Learning with Differential Privacy",
+        "year": 2016,
+        "authors": ["Martin Abadi", "Andy Chu", "Ian Goodfellow"],
+        "venue": "CCS",
+        "citation_count": 4500,
+        "abstract": "Machine learning models are vulnerable to privacy attacks that can leak information about individual training examples. We propose differentially private stochastic gradient descent (DPSGD) for training deep learning models with formal privacy guarantees.",
+        "source": "semantic_scholar",
+    },
+    # ---- RL ----
+    {
+        "paper_id": "ss_038_ppo",
+        "title": "Proximal Policy Optimization Algorithms",
+        "year": 2017,
+        "authors": ["John Schulman", "Filip Wolski", "Prafulla Dhariwal"],
+        "venue": "arXiv",
+        "citation_count": 16000,
+        "abstract": "We propose a new family of policy gradient methods for reinforcement learning, which alternate between sampling data through interaction with the environment, and optimizing a 'surrogate' objective function using stochastic gradient ascent. The new methods, which we call proximal policy optimization (PPO), are simpler to implement than trust region methods.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_039_sac",
+        "title": "Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor",
+        "year": 2018,
+        "authors": ["Tuomas Haarnoja", "Aurick Zhou", "Kristian Hartikainen"],
+        "venue": "ICML",
+        "citation_count": 6500,
+        "abstract": "We present Soft Actor-Critic (SAC), an off-policy actor-critic deep RL algorithm based on the maximum entropy reinforcement learning framework. SAC achieves state-of-the-art performance on a range of continuous control tasks, outperforming prior on-policy and off-policy methods in sample-efficiency and asymptotic performance.",
+        "source": "semantic_scholar",
+    },
+    # ---- Misc / Foundational ----
+    {
+        "paper_id": "ss_040_word2vec",
+        "title": "Efficient Estimation of Word Representations in Vector Space",
+        "year": 2013,
+        "authors": ["Tomas Mikolov", "Kai Chen", "Greg Corrado"],
+        "venue": "ICLR Workshop",
+        "citation_count": 35000,
+        "abstract": "We propose two novel model architectures for computing continuous vector representations of words from very large data sets. The quality of these representations is measured in a word analogy task, and the results are compared to the previously best performing techniques based on different types of neural networks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_041_gan",
+        "title": "Generative Adversarial Networks",
+        "year": 2014,
+        "authors": ["Ian Goodfellow", "Jean Pouget-Abadie", "Mehdi Mirza"],
+        "venue": "NeurIPS",
+        "citation_count": 75000,
+        "abstract": "We propose a new framework for estimating generative models via an adversarial process, in which we simultaneously train two models: a generative model G and a discriminative model D. We train D to distinguish real samples from G's fake samples, training G to fool D.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_042_vae",
+        "title": "Auto-Encoding Variational Bayes",
+        "year": 2014,
+        "authors": ["Diederik P. Kingma", "Max Welling"],
+        "venue": "ICLR",
+        "citation_count": 25000,
+        "abstract": "How can we perform efficient inference and learning in directed probabilistic models, in the presence of continuous latent variables with intractable posterior distributions, and large datasets? We introduce a stochastic variational inference and learning algorithm that scales to large datasets.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_043_moco",
+        "title": "Momentum Contrast for Unsupervised Visual Representation Learning",
+        "year": 2019,
+        "authors": ["Kaiming He", "Haoqi Fan", "Yuxin Wu"],
+        "venue": "CVPR",
+        "citation_count": 12000,
+        "abstract": "We present Momentum Contrast (MoCo) for unsupervised visual representation learning. Our method achieves competitive results on ImageNet classification under the common linear protocol, and surpasses its supervised pre-training counterpart in 7 detection/segmentation tasks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_044_simclr",
+        "title": "A Simple Framework for Contrastive Learning of Visual Representations",
+        "year": 2020,
+        "authors": ["Ting Chen", "Simon Kornblith", "Mohammad Norouzi"],
+        "venue": "ICML",
+        "citation_count": 14000,
+        "abstract": "This paper presents SimCLR, a simple framework for contrastive learning of visual representations. We simplify recently proposed contrastive self-supervised learning algorithms without requiring specialized architectures or a memory bank. We show that composition of data augmentations plays a critical role in defining effective predictive tasks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_045_vae2",
+        "title": "Hierarchical Neural Story Generation",
+        "year": 2018,
+        "authors": ["Angela Fan", "Mike Lewis", "Yann Dauphin"],
+        "venue": "ACL",
+        "citation_count": 1200,
+        "abstract": "We introduce a hierarchical generation approach to long-form story generation, with separate modules for prompt encoding, story generation, and prompt adaptation. We demonstrate improvements over flat generation baselines on coherence and narrative flow.",
+        "source": "semantic_scholar",
+    },
+    # ---- 中文论文（覆盖中文 query） ----
+    {
+        "paper_id": "ss_046_cn_transformer",
+        "title": "基于深度学习的自然语言处理综述",
+        "year": 2023,
+        "authors": ["张伟", "李明", "王芳"],
+        "venue": "中文信息学报",
+        "citation_count": 320,
+        "abstract": "本文综述了基于深度学习的自然语言处理研究进展，涵盖预训练语言模型、Transformer 架构、文本生成、机器翻译、问答系统等关键技术，并讨论了未来研究方向。",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_047_cn_quantum",
+        "title": "量子计算与量子算法研究进展",
+        "year": 2022,
+        "authors": ["陈志强", "刘洋", "赵明"],
+        "venue": "物理学报",
+        "citation_count": 180,
+        "abstract": "本文综述了量子计算领域的关键算法进展，包括 Shor 算法、Grover 算法、量子机器学习、量子神经网络、量子优化算法等，并展望了量子算法在大模型时代的应用前景。",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_048_cn_vision",
+        "title": "计算机视觉中的 Transformer 架构综述",
+        "year": 2024,
+        "authors": ["王晓东", "李娜", "张磊"],
+        "venue": "计算机学报",
+        "citation_count": 95,
+        "abstract": "本文系统综述了 Transformer 架构在计算机视觉中的应用，包括 Vision Transformer (ViT)、DETR、Swin Transformer 等代表性工作，分析了视觉 Transformer 在图像分类、目标检测、语义分割等任务上的优势。",
+        "source": "semantic_scholar",
+    },
+    # ---- 知识图谱嵌入 ----
+    {
+        "paper_id": "ss_049_kge",
+        "title": "TransE: Translating Embeddings for Modeling Multi-relational Data",
+        "year": 2013,
+        "authors": ["Antoine Bordes", "Nicolas Usunier", "Alberto Garcia-Duran"],
+        "venue": "NeurIPS",
+        "citation_count": 12000,
+        "abstract": "We consider the problem of embedding entities and relationships of multi-relational data in low-dimensional vector spaces. Our method, TransE, models relationships by interpreting them as translations operating on the low-dimensional embeddings of the entities. Despite its simplicity, TransE achieves state-of-the-art performance on knowledge graph completion and entity classification tasks.",
+        "source": "semantic_scholar",
+    },
+    {
+        "paper_id": "ss_050_kge_rotate",
+        "title": "RotatE: Knowledge Graph Embedding by Relational Rotation in Complex Space",
+        "year": 2019,
+        "authors": ["Zhiqing Sun", "Shikhar Murty", "William Yang Wang"],
+        "venue": "ICLR",
+        "citation_count": 4200,
+        "abstract": "We present a new knowledge graph embedding method called RotatE, which is able to model and infer various relation patterns including symmetry/antisymmetry, inversion, and composition. Specifically, the RotatE model defines each relation as a rotation from the source entity to the target entity in the complex vector space.",
+        "source": "semantic_scholar",
+    },
 ]
+
+
+# ===== 手工策展的引文关系（保证图谱有边）=====
+# 键为 paper_id，值为该 paper 引用的其他 mock 论文 ID。
+# 选取原则：跨方向、跨年代的标志性论文，模拟真实学术引用网络。
+_CURATED_REFERENCES: dict[str, list[str]] = {
+    # LLM 衍生链
+    "ss_003_gpt3":          ["ss_001_transformer", "ss_002_bert", "ss_011_codex"],
+    "ss_004_llama2":        ["ss_001_transformer", "ss_007_chain_of_thought", "ss_003_gpt3"],
+    "ss_005_llm_survey":    ["ss_001_transformer", "ss_002_bert", "ss_003_gpt3", "ss_004_llama2"],
+    "ss_006_rag":           ["ss_003_gpt3", "ss_001_transformer"],
+    "ss_007_chain_of_thought": ["ss_003_gpt3", "ss_001_transformer"],
+    "ss_008_react":         ["ss_007_chain_of_thought", "ss_001_transformer"],
+    "ss_009_agent_survey":  ["ss_001_transformer", "ss_005_llm_survey", "ss_007_chain_of_thought"],
+    "ss_010_toolformer":    ["ss_001_transformer", "ss_003_gpt3"],
+    # 代码生成链
+    "ss_011_codex":         ["ss_003_gpt3", "ss_001_transformer"],
+    "ss_012_codegen":       ["ss_011_codex", "ss_001_transformer"],
+    "ss_013_humaneval":     ["ss_011_codex", "ss_001_transformer"],
+    # Agent
+    "ss_017_langchain":     ["ss_001_transformer", "ss_006_rag"],
+    "ss_018_autogpt":       ["ss_003_gpt3", "ss_008_react"],
+    "ss_019_reflexion":     ["ss_008_react", "ss_001_transformer"],
+    "ss_020_graphrag":      ["ss_006_rag", "ss_001_transformer"],
+    # RL / MARL
+    "ss_014_maddpg":        ["ss_038_ppo"],
+    "ss_015_emergent":      ["ss_014_maddpg"],
+    "ss_016_marl_survey":   ["ss_014_maddpg", "ss_038_ppo", "ss_039_sac"],
+    "ss_039_sac":           ["ss_038_ppo"],
+    # CV
+    "ss_021_yolo":          ["ss_022_faster_rcnn", "openalex_W005"],
+    "ss_022_faster_rcnn":   ["openalex_W005", "openalex_W001"],
+    "ss_023_detr":          ["ss_001_transformer", "ss_022_faster_rcnn"],
+    "ss_028_vit":           ["ss_001_transformer"],
+    "ss_029_detr_seg":      ["ss_023_detr", "ss_028_vit"],
+    "ss_043_moco":          ["openalex_W001", "ss_044_simclr"],
+    "ss_044_simclr":        ["ss_043_moco"],
+    # 视觉基础
+    "openalex_W001":        ["openalex_W005", "ss_040_word2vec"],
+    "openalex_W005":        [],
+    # 语音
+    "ss_024_wav2vec":       ["ss_001_transformer"],
+    "ss_025_whisper":       ["ss_001_transformer", "ss_002_bert"],
+    # 推荐
+    "ss_026_widedeep":      ["openalex_W002"],
+    "ss_027_ncf":           ["ss_026_widedeep", "ss_040_word2vec"],
+    # Drug
+    "ss_030_alphafold":     ["ss_001_transformer", "ss_042_vae"],
+    "ss_031_drug":          ["ss_001_transformer", "ss_002_bert"],
+    # GNN
+    "ss_032_gat":           ["ss_033_graphsage"],
+    "ss_033_graphsage":     ["ss_040_word2vec"],
+    # Diffusion
+    "ss_034_ddpm":          ["ss_042_vae", "ss_001_transformer"],
+    "ss_035_clip":          ["ss_001_transformer", "ss_028_vit"],
+    # Federated
+    "ss_036_fedavg":        ["ss_002_bert"],
+    "ss_037_dpsgd":         ["ss_036_fedavg", "ss_002_bert"],
+    # 中文论文引用对应英文
+    "ss_046_cn_transformer": ["ss_001_transformer", "ss_002_bert", "ss_005_llm_survey"],
+    "ss_048_cn_vision":     ["ss_028_vit", "ss_023_detr", "ss_001_transformer"],
+    "ss_047_cn_quantum":    ["ss_005_llm_survey"],
+    # KGE
+    "ss_050_kge_rotate":    ["ss_049_kge"],
+}
 
 
 def _to_paper(item: dict) -> Paper:
@@ -280,18 +658,24 @@ def _to_paper(item: dict) -> Paper:
         url=f"https://arxiv.org/abs/{item['paper_id'].split('_')[-1]}" if "ss_" in item["paper_id"] else f"https://openalex.org/{item['paper_id']}",
         source=item.get("source", "semantic_scholar"),
     )
-    # 模拟 references（每个 paper 引用 2-3 个其他 mock 论文）
-    refs = []
-    for other in _MOCK_PAPERS:
-        if other["paper_id"] != p.paper_id and other["year"] < p.year:
-            refs.append(other["paper_id"])
-        if len(refs) >= 3:
-            break
-    p.__dict__["references"] = refs
+    # 优先使用策展的引用关系（保证图谱有边）
+    if item["paper_id"] in _CURATED_REFERENCES:
+        p.__dict__["references"] = list(_CURATED_REFERENCES[item["paper_id"]])
+    else:
+        # 兜底：每个 paper 引用 2-3 个更早的 mock 论文
+        refs = []
+        for other in _MOCK_PAPERS:
+            if other["paper_id"] != p.paper_id and other["year"] < p.year:
+                refs.append(other["paper_id"])
+            if len(refs) >= 3:
+                break
+        p.__dict__["references"] = refs
     return p
 
 
 def get_mock_papers(query: str = "", limit: int = 20) -> list[Paper]:
+    import sys as _sys
+    print(f"[MOCK_GET] pid={os.getpid()} q={query[:30]!r} limit={limit} dataset_size={len(_MOCK_PAPERS)}", file=_sys.stderr, flush=True)
     """
     根据 query 关键词做严格相关性评分，返回真正相关的论文。
     评分规则：

@@ -1,6 +1,7 @@
 """
 节点 ③ — 引文网络扩展
 获取高引用论文的参考文献，扩展候选池。
+关键修复：把"谁引用了谁"的关系写回 Paper.references，供图谱构建使用。
 """
 import asyncio
 from backend.models.state import SearchState
@@ -38,6 +39,14 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     tasks = [semantic_scholar.get_references(p.paper_id, limit=20) for p in top]
     refs_results = await asyncio.gather(*tasks, return_exceptions=True)
 
+    # ===== 关键修复：构建 seed_to_refs 反向映射 =====
+    seed_to_refs: dict[str, list[str]] = {}
+    for seed_paper, result in zip(top, refs_results):
+        if isinstance(result, list):
+            ref_ids = [r.paper_id for r in result if r.paper_id]
+            if ref_ids:
+                seed_to_refs[seed_paper.paper_id] = ref_ids
+
     all_papers: list[Paper] = list(raw)
     new_refs = 0
     for result in refs_results:
@@ -48,11 +57,22 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             new_refs += len(result)
             all_papers.extend(result)
 
+    # ===== 关键修复：把"seed -> refs"关系写回每篇 seed paper 的 references 字段 =====
+    for p in all_papers:
+        if p.paper_id in seed_to_refs:
+            p.references = seed_to_refs[p.paper_id]
+
     # 过滤 + 去重
     all_papers = [p for p in all_papers if p.abstract and len(p.abstract) > 80]
     unique = deduplicate_papers(all_papers)
 
-    print(f"[CitationExpander] {len(raw)} -> {len(unique)} papers (+{new_refs} refs from top {len(top)} seeds)")
+    # 统计实际有引文边的论文数
+    n_with_edges = sum(1 for p in unique if p.references)
+    print(
+        f"[CitationExpander] {len(raw)} -> {len(unique)} papers "
+        f"(+{new_refs} refs from top {len(top)} seeds, "
+        f"{n_with_edges} papers have outgoing edges)"
+    )
 
     return {
         **state,

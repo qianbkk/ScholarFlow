@@ -31,9 +31,10 @@ app.add_middleware(
         "http://localhost:3000",
         "http://127.0.0.1:5173",
         "http://127.0.0.1:3000",
-        "*",
     ],
-    allow_credentials=True,
+    # 注意：CORS 规范禁止在 allow_credentials=True 时使用通配符 "*"。
+    # 本项目 API 不需要携带 cookie/凭证，因此关闭 allow_credentials。
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -114,7 +115,8 @@ async def search(req: SearchRequest):
     import time
     t0 = time.time()
     try:
-        final = await search_graph.ainvoke(initial)
+        # 120s 上限：避免 Real 模式下某个 API 卡死导致前端无限转圈
+        final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=120.0)
         elapsed = time.time() - t0
         return SearchResponse(
             report=final.get("report", ""),
@@ -132,6 +134,11 @@ async def search(req: SearchRequest):
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,
+            detail=f"搜索超时（>{120}s）。建议缩小查询范围或降低 max_iterations。",
+        )
 
 
 @app.get("/")
