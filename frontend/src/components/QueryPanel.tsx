@@ -1,12 +1,21 @@
 import { useState } from 'react';
 import type { Paper } from '../types';
 
+interface PipelineStep {
+  key: string;
+  label: string;
+  emoji: string;
+}
+
 interface Props {
   loading: boolean;
   onSearch: (query: string, budget: number, maxIter: number) => void;
   onReset: () => void;
   papers: Paper[];
   lastQuery: string;
+  currentStep?: number;
+  elapsedSec?: number;
+  pipelineSteps?: PipelineStep[];
 }
 
 const SUGGESTIONS = [
@@ -17,7 +26,10 @@ const SUGGESTIONS = [
   'chain of thought reasoning in LLMs',
 ];
 
-export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Props) {
+export function QueryPanel({
+  loading, onSearch, onReset, papers, lastQuery,
+  currentStep = 0, elapsedSec = 0, pipelineSteps = [],
+}: Props) {
   const [query, setQuery] = useState('');
   const [budget, setBudget] = useState(2.0);
   const [maxIter, setMaxIter] = useState(3);
@@ -91,6 +103,31 @@ export function QueryPanel({ loading, onSearch, onReset, papers, lastQuery }: Pr
             </button>
           </div>
         </form>
+
+        {loading && (
+          <div className="mt-2 p-2 bg-brand-50 border border-brand-200 rounded-md">
+            <div className="flex items-center justify-between text-[10px] text-brand-700 mb-1.5">
+              <span className="font-medium">
+                {pipelineSteps[currentStep]?.emoji} {pipelineSteps[currentStep]?.label}
+              </span>
+              <span className="font-mono">{elapsedSec.toFixed(1)}s</span>
+            </div>
+            <div className="grid grid-cols-4 gap-0.5">
+              {pipelineSteps.map((s, i) => (
+                <div
+                  key={s.key}
+                  className={`h-1 rounded ${
+                    i < currentStep
+                      ? 'bg-brand-500'
+                      : i === currentStep
+                      ? 'bg-brand-300 animate-pulse'
+                      : 'bg-slate-200'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
         <div className="mt-2">
           <p className="text-[10px] uppercase text-slate-500 mb-1">示例</p>

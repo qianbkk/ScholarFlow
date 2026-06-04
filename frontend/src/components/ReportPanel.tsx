@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react';
 import { marked } from 'marked';
 
+// marked v14+：setOptions 已废弃，改用 marked.use()。
+// 多次调用 use() 会合并，所以这里只设一次。
+marked.use({ gfm: true, breaks: true });
+
 interface Props {
   report: string;
   loading: boolean;
@@ -13,7 +17,6 @@ export function ReportPanel({ report, loading, query }: Props) {
   const html = useMemo(() => {
     if (!report) return '';
     try {
-      marked.setOptions({ gfm: true, breaks: true });
       return marked.parse(report) as string;
     } catch (e) {
       return `<pre>${report}</pre>`;

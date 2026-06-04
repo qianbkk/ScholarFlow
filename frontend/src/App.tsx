@@ -7,7 +7,10 @@ import { useSearch } from './hooks/useSearch';
 import { healthCheck } from './services/api';
 
 export default function App() {
-  const { loading, error, result, lastQuery, search, reset } = useSearch();
+  const {
+    loading, error, result, lastQuery, search, reset,
+    currentStep, elapsedSec, pipelineSteps,
+  } = useSearch();
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const [elapsed, setElapsed] = useState(0);
 
@@ -49,6 +52,9 @@ export default function App() {
           onReset={reset}
           papers={result?.ranked_papers ?? []}
           lastQuery={lastQuery}
+          currentStep={currentStep}
+          elapsedSec={elapsedSec}
+          pipelineSteps={pipelineSteps}
         />
         <ReportPanel report={result?.report ?? ''} loading={loading} query={lastQuery} />
         <GraphPanel graph={result?.citation_graph ?? null} />

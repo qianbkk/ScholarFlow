@@ -172,8 +172,12 @@ export function GraphPanel({ graph }: Props) {
           <div
             className="absolute pointer-events-none bg-slate-900/95 text-white rounded-md px-3 py-2 text-xs max-w-xs shadow-xl z-10"
             style={{
-              left: Math.min(tooltipPos.x + 12, 300),
-              top: Math.min(tooltipPos.y + 12, 500),
+              // 动态读取 SVG 宽度（避免硬编码 300 导致大屏右侧节点 tooltip 被压到左边）
+              left: Math.min(
+                tooltipPos.x + 12,
+                (svgRef.current?.clientWidth || 400) - 280
+              ),
+              top: Math.min(tooltipPos.y + 12, (svgRef.current?.clientHeight || 600) - 140),
             }}
           >
             <p className="font-semibold mb-1 line-clamp-2">{hovered.title}</p>
