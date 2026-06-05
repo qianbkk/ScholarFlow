@@ -19,6 +19,8 @@ class SearchState(TypedDict):
     # 迭代控制
     iteration: int
     max_iterations: int
+    # 已做过引文扩展的 seed paper_id（跨迭代去重，避免重复调 get_references）
+    expanded_paper_ids: list[str]
 
     # 成本追踪
     total_tokens_used: int

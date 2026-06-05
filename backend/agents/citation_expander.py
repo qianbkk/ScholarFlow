@@ -32,13 +32,18 @@ async def expand_citations_node(state: SearchState) -> SearchState:
 
     # 选引用数最高的前 5 篇做引文扩展（只用 SS，有结构化引用数据）
     ss_papers = [p for p in raw if p.source == "semantic_scholar" and p.paper_id]
-    top = sorted(ss_papers, key=lambda p: p.citation_count, reverse=True)[:5]
+
+    # ===== 跨迭代去重：跳过已扩展过的 seed =====
+    seen = set(state.get("expanded_paper_ids", []))
+    top = [p for p in sorted(ss_papers, key=lambda p: p.citation_count, reverse=True)[:5]
+           if p.paper_id not in seen]
 
     if not top:
-        # 没有 SS 论文也能继续：直接把 raw 作为 expanded
+        # 没有 SS 论文 或 全部已扩展过：直接把 raw 作为 expanded，继续流程
         return {
             **state,
             "expanded_papers": [p.to_dict() for p in raw],
+            "expanded_paper_ids": list(seen),
             "status": "ranking",
         }
 
@@ -83,5 +88,6 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     return {
         **state,
         "expanded_papers": [p.to_dict() for p in unique],
+        "expanded_paper_ids": list(seen | {p.paper_id for p in top if p.paper_id}),
         "status": "ranking",
     }
