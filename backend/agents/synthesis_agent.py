@@ -4,6 +4,7 @@
 """
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
+from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
 
 
 SYSTEM = (
@@ -50,13 +51,17 @@ async def synthesize_node(state: SearchState) -> SearchState:
         f"Abstract: {p.get('abstract','')[:400]}"
         for i, p in enumerate(ranked)
     ])
+    # ===== 纵深防御 (VULN-001 Layer 1) =====
+    # 论文元数据来自外部 API (Semantic Scholar / OpenAlex)，
+    # title/abstract 字段可被恶意构造，wrap_user_input 用 XML 标签隔离。
+    safe_papers = wrap_user_input(papers_text, tag="paper_list")
 
     prompt = f"""根据以下学术论文列表，为研究问题生成一份结构化文献综述报告。
 
 研究问题：{query}
 
 检索论文列表：
-{papers_text}
+{safe_papers}
 
 请生成Markdown格式的综述报告，严格包含以下6个部分：
 
@@ -83,7 +88,7 @@ async def synthesize_node(state: SearchState) -> SearchState:
     report, usage = await call_llm(
         prompt,
         task_type="synthesis",
-        system=SYSTEM,
+        system=SYSTEM + isolation_system_suffix(),
         max_tokens=3500,
     )
 
