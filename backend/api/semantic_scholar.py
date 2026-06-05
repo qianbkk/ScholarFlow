@@ -141,7 +141,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
 
 
 async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
-    """获取一篇论文的参考文献列表。"""
+    """获取一篇论文的参考文献列表（backward citations: 该论文引用了谁）。"""
     if API_MOCK:
         await asyncio.sleep(0.03)
         # 在 mock 数据里找这个 paper，然后返回它存的 references
@@ -191,6 +191,71 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
             venue=cited.get("venue") or "",
             doi=doi,
             url=cited.get("url") or f"https://www.semanticscholar.org/paper/{cited['paperId']}",
+            source="semantic_scholar",
+            is_expanded=True,
+        ))
+    return papers
+
+
+async def get_citations(paper_id: str, limit: int = 20) -> list[Paper]:
+    """获取引用了一篇论文的论文列表（forward citations: 谁引用了这篇论文）。
+
+    犀利评论 #8 修复：补充前向引文扩展路径，避免"Matthew effect"——高引论文的
+    references 通常是 5-10 年前的，缺少 2025/2026 的最新 preprints。
+    """
+    if API_MOCK:
+        await asyncio.sleep(0.03)
+        # 在 mock 数据里找这个 paper
+        all_papers = get_all_mock_papers()
+        target = next((p for p in all_papers if p.paper_id == paper_id), None)
+        if not target:
+            return []
+        # 找所有引用了这个 paper 的论文（即把它们放在自己的 references 里）
+        citers: list[Paper] = []
+        for other in all_papers:
+            if other.paper_id == paper_id:
+                continue
+            other_refs = other.__dict__.get("references", [])
+            if paper_id in other_refs:
+                citers.append(mark_as_expanded(other))
+                if len(citers) >= limit:
+                    break
+        return citers
+
+    try:
+        client = _get_client()
+        resp = await _get_with_retry(
+            client,
+            f"{BASE_URL}/paper/{paper_id}/citations",
+            params={"fields": BATCH_FIELDS, "limit": limit},
+            headers=HEADERS,
+        )
+        if resp.status_code != 200:
+            print(f"[SemanticScholar] citations {paper_id} status {resp.status_code}")
+            return []
+        data = resp.json()
+    except Exception as e:
+        print(f"[SemanticScholar] citations exception: {scrub_sensitive(str(e))}")
+        return []
+
+    papers = []
+    for item in data.get("data", []):
+        citing = item.get("citingPaper", {})
+        if not citing or not citing.get("paperId") or not citing.get("title"):
+            continue
+        doi = ""
+        if citing.get("externalIds") and isinstance(citing["externalIds"], dict):
+            doi = citing["externalIds"].get("DOI", "") or ""
+        papers.append(Paper(
+            paper_id=citing["paperId"],
+            title=citing.get("title", ""),
+            abstract=citing.get("abstract") or "",
+            year=citing.get("year") or 0,
+            authors=[a.get("name", "") for a in citing.get("authors", []) if a.get("name")],
+            citation_count=citing.get("citationCount") or 0,
+            venue=citing.get("venue") or "",
+            doi=doi,
+            url=citing.get("url") or f"https://www.semanticscholar.org/paper/{citing['paperId']}",
             source="semantic_scholar",
             is_expanded=True,
         ))
