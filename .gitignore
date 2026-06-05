@@ -37,6 +37,9 @@ logs/
 .coverage
 htmlcov/
 
+# Runtime state files
+backend/.budget_state.json
+
 # Personal notes & verification artifacts (not for public repo)
 docs/
 playwright_runs/
