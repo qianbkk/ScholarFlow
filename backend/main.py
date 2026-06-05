@@ -4,24 +4,54 @@ ScholarFlow FastAPI 入口
 提供 /search 和 /health 接口
 """
 import asyncio
+import logging
 import os
 import sys
+import time as _time
+from collections import defaultdict
+from contextlib import asynccontextmanager
 
 # 让 uvicorn 直接启动时也能找到 backend 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from backend.workflow.graph import search_graph
+from backend.api import semantic_scholar as _ss_mod
+from backend.api import openalex as _oa_mod
+from backend.utils.proxy import get_proxy  # 预热代理缓存
+from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
+
+# NEW-002 修复：logger 移至模块级
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动期预热代理缓存，关闭期释放连接池。"""
+    # 启动：预热代理检测（后台线程，避免阻塞事件循环）
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, get_proxy)
+    logger.info("[lifespan] proxy cache pre-warmed, HTTP pool ready")
+    yield
+    # 关闭：释放 httpx 连接池
+    await _ss_mod.close_client()
+    await _oa_mod.close_client()
+    logger.info("[lifespan] HTTP clients closed")
 
 
 app = FastAPI(
     title="ScholarFlow API",
     version="1.0.0",
     description="科研文献智能搜索系统 — 多 Agent 学术情报 API",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -38,6 +68,28 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ===== Rate limiting + global budget (VULN-002) =====
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# 全局每小时预算计数器（进程内，RESTART 归零）
+GLOBAL_HOURLY_BUDGET = float(os.getenv("GLOBAL_HOURLY_BUDGET", "50.0"))
+_budget_counter: dict[str, float] = defaultdict(float)
+_budget_reset_ts: float = _time.time()
+
+
+def _check_global_budget() -> None:
+    """每小时滚动窗口：累计总开销超过 GLOBAL_HOURLY_BUDGET 时拒绝服务。"""
+    global _budget_reset_ts
+    now = _time.time()
+    if now - _budget_reset_ts > 3600:
+        _budget_counter.clear()
+        _budget_reset_ts = now
+    if _budget_counter["total"] > GLOBAL_HOURLY_BUDGET:
+        raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
 
 
 # ===== Request / Response Models =====
@@ -90,13 +142,21 @@ async def health():
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(req: SearchRequest):
+@limiter.limit("5/minute;20/hour")
+async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。"""
-    if not req.query.strip():
+    # VULN-002: 全局每小时预算闸门
+    _check_global_budget()
+    # VULN-001 Layer 0: 入口处净化用户 query
+    try:
+        safe_query = sanitize_query(req.query)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"查询无效: {e}")
+    if not safe_query:
         raise HTTPException(status_code=400, detail="查询内容不能为空")
 
     initial = {
-        "original_query": req.query.strip(),
+        "original_query": safe_query,
         "sub_queries": [],
         "raw_papers": [],
         "expanded_papers": [],
@@ -114,13 +174,13 @@ async def search(req: SearchRequest):
     }
 
     import time
-    import logging
     t0 = time.time()
-    logger = logging.getLogger(__name__)
     try:
         # 120s 上限：避免 Real 模式下某个 API 卡死导致前端无限转圈
         final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=120.0)
         elapsed = time.time() - t0
+        # VULN-002: 累加本次开销到全局预算
+        _budget_counter["total"] += float(final.get("total_cost_usd", 0.0))
         return SearchResponse(
             report=final.get("report", ""),
             ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:20]],
