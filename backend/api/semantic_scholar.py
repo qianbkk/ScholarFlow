@@ -168,7 +168,7 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
         if resp.status_code != 200:
             print(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
             return []
-            data = resp.json()
+        data = resp.json()
     except Exception as e:
         print(f"[SemanticScholar] refs exception: {scrub_sensitive(str(e))}")
         return []
