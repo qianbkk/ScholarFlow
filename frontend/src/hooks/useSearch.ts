@@ -240,6 +240,8 @@ export function useSearch() {
       };
 
       es.onerror = () => {
+        // H5: 陈旧事件 — 这条 es 已被新 search 替换
+        if (myEs !== esRef.current) return;
         // EventSource 出错：若从未收到任何事件（连接本身就失败），回退到 /search + 假进度
         if (!receivedAnyEvent) {
           cleanup();
