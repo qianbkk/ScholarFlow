@@ -178,13 +178,14 @@ def test_sanitize_blocks_cyrillic_a_injection():
 
 
 def test_sanitize_blocks_greek_o_injection():
-    """希腊 ο (U+03BF) 冒充拉丁 o 拼出 'ignore' 不可能（g 没有同形），但其他词可以"""
-    from backend.utils.sanitize import sanitize_query
-    # 用希腊 Ο (大写) 替换 ignore 中的 o 以外的部分不容易制造注入
-    # 这里只验证 Greek → Latin 转换函数本身正确
-    from backend.utils.sanitize import _normalize_homoglyphs
+    """犀利评论 #1 修复后: 大写 Ο (U+039F) 仍归一化为 O (注入阻断),
+    但小写 ο (U+03BF) 保留 — 学术术语如 'o-micron variant' 是合法查询。
+    """
+    from backend.utils.sanitize import sanitize_query, _normalize_homoglyphs
+    # 大写 Ο → 拉丁 O (注入阻断保留)
     assert _normalize_homoglyphs("ΟΟ") == "OO"
-    assert _normalize_homoglyphs("οο") == "oo"
+    # 小写 ο 现在保留 (与 B1 修复一致)
+    assert _normalize_homoglyphs("οο") == "οο"
 
 
 def test_sanitize_strips_zero_width_chars():

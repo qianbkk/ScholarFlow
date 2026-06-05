@@ -35,6 +35,18 @@ def test_sanitize_preserves_full_scientific_term():
     assert sanitize_query("γ-ray spectroscopy") == "γ-ray spectroscopy"
 
 
+def test_sanitize_preserves_tau_protein():
+    """τ protein (Alzheimer's 研究核心蛋白) 中的 τ 必须保留。"""
+    # 修复前: "τ protein" → "t protein" (语义破坏)
+    # 修复后: "τ protein" → "τ protein"
+    assert sanitize_query("τ protein") == "τ protein"
+
+
+def test_sanitize_preserves_chi_square():
+    """χ-square test (卡方检验) 中的 χ 必须保留。"""
+    assert sanitize_query("χ-square test") == "χ-square test"
+
+
 # ===== 大写希腊字母仍需归一化 (注入阻断) =====
 
 def test_sanitize_normalizes_caps_greek_alpha():
