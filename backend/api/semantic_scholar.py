@@ -54,10 +54,16 @@ async def close_client() -> None:
 
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
-    """Real 模式失败时降级到 mock，保证流水线不空跑。"""
+    """Real 模式失败时降级到 mock，保证流水线不空跑。
+
+    C5 修复：将所有返回的论文标记 is_fallback=True，便于前端区分真实数据
+    与 mock 兜底数据，避免用户在 200 响应中误以为拿到真实结果。
+    """
     papers = get_mock_papers(query, limit=limit)
     if papers:
         print(f"[SemanticScholar] fallback to mock for {query[:40]!r}: {len(papers)} papers")
+    for p in papers:
+        p.is_fallback = True
     return papers
 
 

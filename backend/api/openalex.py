@@ -49,9 +49,16 @@ async def close_client() -> None:
 
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
-    """Real 模式失败时降级到 mock。"""
+    """Real 模式失败时降级到 mock。
+
+    C5 修复：将所有返回的论文标记 is_fallback=True，便于前端区分真实数据
+    与 mock 兜底数据，避免用户在 200 响应中误以为拿到真实结果。
+    """
     all_papers = get_mock_papers(query, limit=limit * 2)
-    return [p for p in all_papers if p.source == "openalex"][:limit]
+    papers = [p for p in all_papers if p.source == "openalex"][:limit]
+    for p in papers:
+        p.is_fallback = True
+    return papers
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:

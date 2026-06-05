@@ -6,7 +6,7 @@ from typing import Optional
 # to_dict / 反序列化时保留的有效字段
 _PAPER_FIELDS = (
     "paper_id", "title", "abstract", "year", "authors", "citation_count",
-    "venue", "doi", "url", "source", "is_expanded",
+    "venue", "doi", "url", "source", "is_expanded", "is_fallback",
     "relevance_score", "authority_score", "consistency_score", "final_score",
     "references",
 )
@@ -25,6 +25,9 @@ class Paper:
     url: str = ""
     source: str = ""
     is_expanded: bool = False
+    # C5 修复：当 API 真实调用失败、降级到 mock 数据时，标记 is_fallback=True。
+    # 前端 QueryPanel 可据此显示警告 banner，告知用户当前结果是 fallback 模拟数据。
+    is_fallback: bool = False
 
     # 由 RankerAgent 填写
     relevance_score: float = 0.0
