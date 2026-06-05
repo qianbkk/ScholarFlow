@@ -4,6 +4,7 @@
 """
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
+from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
 
 
@@ -39,9 +40,13 @@ def _fallback_decompose(query: str) -> list[str]:
 async def query_decompose_node(state: SearchState) -> SearchState:
     """将用户原始查询分解为多个英文子查询。"""
 
+    # ===== 纵深防御 (VULN-001 Layer 1) =====
+    # 这是首个 LLM 调用节点：用户原始查询直接拼入 prompt，必须隔离。
+    safe_query = wrap_user_input(state['original_query'], tag="user_query")
+
     prompt = f"""Analyze this research query and decompose it into 4-5 focused sub-queries.
 
-Original query: {state['original_query']}
+{safe_query}
 
 Output JSON format:
 {{
@@ -65,7 +70,7 @@ Rules:
     text, usage = await call_llm(
         prompt,
         task_type="complex_reason",
-        system=SYSTEM,
+        system=SYSTEM + isolation_system_suffix(),
         max_tokens=800,
         json_mode=True,
     )

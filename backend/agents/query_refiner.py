@@ -4,6 +4,7 @@
 """
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
+from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
 
 
@@ -13,18 +14,24 @@ async def query_refine_node(state: SearchState) -> SearchState:
     ranked = state.get("ranked_papers") or []
     iteration = state.get("iteration", 0)
 
+    # ===== 纵深防御 (VULN-001 Layer 1) =====
+    # 用户原始查询：不可信输入
+    safe_query = wrap_user_input(state['original_query'], tag="user_query")
+    # 论文标题来自外部 API (Semantic Scholar / OpenAlex)，是间接注入向量
+    # 同样用 XML 标签隔离
     top5_summary = "\n".join([
         f"- [{p.get('year','')}] {p.get('title','')} (relevance: {p.get('relevance_score',0):.1f})"
         for p in ranked[:5]
     ])
+    safe_top5 = wrap_user_input(top5_summary, tag="paper_list")
 
     prompt = f"""You're a research strategy expert. Analyze these search results and identify gaps.
 
-Original query: {state['original_query']}
+{safe_query}
 Search iteration: {iteration + 1}
 
 Current top results:
-{top5_summary}
+{safe_top5}
 
 What important aspects are MISSING from these results?
 Generate 3 NEW search queries to fill the gaps.
@@ -40,7 +47,11 @@ JSON output:
 }}"""
 
     text, usage = await call_llm(
-        prompt, task_type="refine_strategy", max_tokens=400, json_mode=True
+        prompt,
+        task_type="refine_strategy",
+        system=isolation_system_suffix(),
+        max_tokens=400,
+        json_mode=True,
     )
 
     new_queries: list[str] = []
