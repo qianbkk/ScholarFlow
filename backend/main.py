@@ -232,8 +232,9 @@ async def search(req: SearchRequest, request: Request):
     import time
     t0 = time.time()
     try:
-        # 120s 上限：避免 Real 模式下某个 API 卡死导致前端无限转圈
-        final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=120.0)
+        # 240s 上限：real 模式下 8 个 LLM 调用 + 双源检索 + 引文扩展通常需 100-180s,
+        # 120s 在 query 复杂时会过早超时(Phase 3 验证: AlphaFold 查询实际 135s)
+        final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
         elapsed = time.time() - t0
         # VULN-002: 累加本次开销到全局预算（异步加锁落盘，避免并发写冲突）
         async with _budget_lock:
@@ -253,10 +254,10 @@ async def search(req: SearchRequest, request: Request):
         )
     except asyncio.TimeoutError:
         # 必须在 except Exception 之前（TimeoutError 是 Exception 子类，会被吞掉）
-        logger.warning("[/search] timed out after 120s")
+        logger.warning("[/search] timed out after 240s")
         raise HTTPException(
             status_code=504,
-            detail="搜索超时（>120s）。建议缩小查询范围或降低 max_iterations。",
+            detail="搜索超时（>240s）。建议缩小查询范围或降低 max_iterations。",
         )
     except Exception as e:
         # 仅服务端日志记详情，HTTP body 不暴露内部信息（VULN-002 修复）
