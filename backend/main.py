@@ -137,17 +137,31 @@ async def _persist_budget_state_async() -> None:
         await loop.run_in_executor(None, _persist_budget_state)
 
 
-def _check_global_budget() -> None:
-    """每小时滚动窗口：累计总开销超过 GLOBAL_HOURLY_BUDGET 时拒绝服务。"""
+async def _check_and_reserve_budget(estimated_cost: float) -> None:
+    """原子化地"检查 + 预留"全局预算（H1 修复：关闭 TOCTOU 竞态）。
+
+    整个检查 + 累加过程都在 `_budget_lock` 临界区内完成，并发请求不可能
+    在 `_budget_counter["total"] + estimated_cost` 计算后、累加前插队。
+    旧版的"先 check、后 increment"两阶段实现存在窗口期：
+      20 个并发请求都读到 total=49.5，check 通过后全部累加 → 69.5（超额 38%）。
+
+    Args:
+        estimated_cost: 本次请求愿意预留的最大开销（= `req.budget`，即用户上限）。
+            因为预留金额 >= 实际开销，所以"超预留"是安全的、不会少算。
+    """
     global _budget_reset_ts
-    now = _time.time()
-    if now - _budget_reset_ts > 3600:
-        _budget_counter.clear()
-        _budget_reset_ts = now
-        # 新窗口开始时也落盘（total 归零）
+    async with _budget_lock:
+        now = _time.time()
+        if now - _budget_reset_ts > 3600:
+            _budget_counter.clear()
+            _budget_reset_ts = now
+            # 新窗口开始时也落盘（total 归零）
+            _persist_budget_state()
+        if _budget_counter["total"] + estimated_cost > GLOBAL_HOURLY_BUDGET:
+            raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
+        # 在锁内完成预留（并发请求接下来看到的是已更新的 total）
+        _budget_counter["total"] += estimated_cost
         _persist_budget_state()
-    if _budget_counter["total"] > GLOBAL_HOURLY_BUDGET:
-        raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
 
 
 # ===== Request / Response Models =====
@@ -203,8 +217,8 @@ async def health():
 @limiter.limit("5/minute;20/hour")
 async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。"""
-    # VULN-002: 全局每小时预算闸门
-    _check_global_budget()
+    # VULN-002: 全局每小时预算闸门（H1 修复：原子化 check-and-reserve）
+    await _check_and_reserve_budget(req.budget)
     # VULN-001 Layer 0: 入口处净化用户 query
     try:
         safe_query = sanitize_query(req.query)
@@ -249,11 +263,8 @@ async def search(req: SearchRequest, request: Request):
         # 120s 在 query 复杂时会过早超时(Phase 3 验证: AlphaFold 查询实际 135s)
         final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
         elapsed = time.time() - t0
-        # VULN-002: 累加本次开销到全局预算（异步加锁落盘，避免并发写冲突）
-        async with _budget_lock:
-            _budget_counter["total"] += float(final.get("total_cost_usd", 0.0))
-            # 提交后台任务落盘（不阻塞响应）
-            asyncio.create_task(_persist_budget_state_async())
+        # H1 修复：预算已在入口处原子化预留（_check_and_reserve_budget），
+        # 实际开销 ≤ req.budget（用户的 max），无需再次累加。
 
         response_obj = SearchResponse(
             report=final.get("report", ""),
@@ -338,7 +349,8 @@ async def search_stream(
     max_iter: int = Query(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, alias="max_iter"),
 ):
     """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
-    _check_global_budget()
+    # H1 修复：原子化 check-and-reserve（避免 TOCTOU 竞态）
+    await _check_and_reserve_budget(budget)
     try:
         safe_query = sanitize_query(q)
     except ValueError as e:
@@ -439,14 +451,7 @@ async def search_stream(
             elapsed_seconds=round(elapsed, 2),
         )
 
-        # 4) 落预算 + 写缓存（与 /search 一致）
-        try:
-            async with _budget_lock:
-                _budget_counter["total"] += float(accumulated.get("total_cost_usd", 0.0))
-                asyncio.create_task(_persist_budget_state_async())
-        except Exception:
-            logger.warning("[/search/stream] budget update failed (non-fatal)")
-
+        # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
         try:
             set_cached(
                 safe_query,
