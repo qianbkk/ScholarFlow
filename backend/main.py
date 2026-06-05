@@ -27,7 +27,7 @@ from backend.api import semantic_scholar as _ss_mod
 from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
-from backend.utils.cache import get_cached, set_cached  # result cache
+from backend.utils.cache import get_cached_async, set_cached_async  # H4: result cache (async, non-blocking)
 from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
 
 # NEW-002 修复：logger 移至模块级
@@ -56,19 +56,32 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = os.getenv(
-    "ALLOWED_ORIGINS",
-    "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000",
-).split(",")
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv(
+        "ALLOWED_ORIGINS",
+        "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000",
+    ).split(",") if o.strip()
+]
+
+# H8 修复：禁止通配符 "*"。如果部署时 ALLOWED_ORIGINS=* 或者包含 *,
+# 任何网站都能跨域调用 API，等同 CSRF 完全敞开。Fail-fast at startup.
+if "*" in ALLOWED_ORIGINS:
+    raise ValueError(
+        "ALLOWED_ORIGINS must not contain '*' (CORS wildcard). "
+        "Explicitly enumerate allowed origins, e.g. "
+        "ALLOWED_ORIGINS=https://app.example.com"
+    )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in ALLOWED_ORIGINS],
+    allow_origins=ALLOWED_ORIGINS,
     # 注意：CORS 规范禁止在 allow_credentials=True 时使用通配符 "*"。
     # 本项目 API 不需要携带 cookie/凭证，因此关闭 allow_credentials。
     allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    # H8 修复：缩小 methods / headers 范围，缩小 CSRF 攻击面。
+    # 只暴露真正用到的 GET（health/stream）+ POST（search）。
+    allow_methods=["GET", "POST"],
+    allow_headers=["Content-Type", "Accept", "Cache-Control"],
 )
 
 
@@ -282,7 +295,8 @@ async def search(req: SearchRequest, request: Request):
     t0 = time.time()
 
     # 缓存命中：直接返回上次结果（避免重复跑付费流水线）
-    cached = get_cached(safe_query, req.max_iterations, req.budget)
+    # H4 修复：用 async 版本，SQLite I/O 走 to_thread、retry 退避走 asyncio.sleep
+    cached = await get_cached_async(safe_query, req.max_iterations, req.budget)
     if cached is not None:
         cached_response, cached_cost, cached_tokens = cached
         logger.info(
