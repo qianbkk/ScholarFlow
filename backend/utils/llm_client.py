@@ -268,7 +268,12 @@ def _mock_refine(prompt: str, top5_titles: list[str]) -> str:
 
 def _mock_synthesis(prompt: str, ranked_count: int) -> str:
     """Mock 综述报告：返回结构化 Markdown。
-    关键修复：从 prompt 中提取真实研究问题（不再使用 prompt 前 80 字符）。"""
+    关键修复：从 prompt 中提取真实研究问题（不再使用 prompt 前 80 字符）。
+    关键修复（B-002 / 任务 3）：Top5/分类/趋势/延伸阅读全部动态从 prompt 中的
+    **[Paper i]** {title}\nYear: {year} | Citations: {citation_count} | Venue: {venue}
+    Relevance: {relevance_score} | URL: {url}\nAbstract: {abstract[:400]}
+    块解析，不再硬编码 Transformer/BERT/GPT-3/Llama 2。
+    """
     # 从 prompt 提取研究问题
     m = re.search(r"研究问题[：:]\s*(.+?)(?:\n|$)", prompt)
     if m:
@@ -283,42 +288,200 @@ def _mock_synthesis(prompt: str, ranked_count: int) -> str:
     if not query:
         query = "（未指定查询）"
 
+    # ===== 关键修复：从 prompt 解析真实论文块（按 [Paper i] 块切分） =====
+    paper_pattern = re.compile(
+        r"\*\*\[Paper (\d+)\]\*\*\s+(.+?)\n"
+        r"Year:\s*(\d+).*?Citations:\s*(\d+).*?Venue:\s*(.*?)\n"
+        r"Relevance:\s*([\d.]+).*?URL:\s*(\S+).*?\n"
+        r"Abstract:\s*(.+?)(?=\n\*\*\[Paper|\Z)",
+        re.DOTALL,
+    )
+    papers: list[dict] = []
+    for m in paper_pattern.finditer(prompt):
+        papers.append({
+            "idx": int(m.group(1)),
+            "title": m.group(2).strip(),
+            "year": m.group(3).strip(),
+            "citations": int(m.group(4) or 0),
+            "venue": (m.group(5) or "").strip(),
+            "relevance": float(m.group(6) or 0.0),
+            "url": (m.group(7) or "").strip(),
+            "abstract": (m.group(8) or "").strip()[:200],
+        })
+    # 按 idx 排序（保证稳定顺序）
+    papers.sort(key=lambda p: p["idx"])
+
+    if not papers:
+        # 兜底：解析失败时返回极简报告
+        return f"""## 研究概述
+针对查询「{query}」，ScholarFlow 从 Semantic Scholar + OpenAlex 汇总后返回 {ranked_count} 篇论文。
+
+## 检索说明
+本次检索使用 ScholarFlow 8 节点流水线。注：当前为 mock 模式，且 prompt 中未识别到论文块，无法生成结构化 Top 列表。
+"""
+
+    # ===== 动态 Top 5 =====
+    top5 = papers[:5]
+    top5_lines = []
+    for i, p in enumerate(top5, 1):
+        year = p["year"] or "?"
+        cites = p["citations"]
+        cite_str = f"cite {cites}+" if cites >= 1000 else f"cite {cites}"
+        top5_lines.append(
+            f"{i}. **{p['title']}** [{year}] — 相关性 {p['relevance']:.1f}/10（{cite_str}）"
+        )
+    top5_block = "\n".join(top5_lines)
+
+    # ===== 研究方向分类：按 venue 聚类 =====
+    # 聚类 venue 相同的论文；无 venue 时退化为按 title 关键词聚类
+    venue_groups: dict[str, list[dict]] = {}
+    no_venue_papers: list[dict] = []
+    for p in papers:
+        v = (p.get("venue") or "").strip()
+        if v:
+            venue_groups.setdefault(v, []).append(p)
+        else:
+            no_venue_papers.append(p)
+
+    cluster_blocks: list[str] = []
+    if venue_groups:
+        for venue, group in list(venue_groups.items())[:3]:
+            cluster_blocks.append(f"### {venue}（{len(group)} 篇）")
+            for p in group[:3]:
+                cluster_blocks.append(f"- **{p['title']}** [{p['year']}] — 相关性 {p['relevance']:.1f}/10")
+    if no_venue_papers:
+        cluster_blocks.append("### 其他研究")
+        for p in no_venue_papers[:3]:
+            cluster_blocks.append(f"- **{p['title']}** [{p['year']}] — 相关性 {p['relevance']:.1f}/10")
+    if not cluster_blocks:
+        cluster_blocks = ["- （无可分类的 venue 信息）"]
+    cluster_block = "\n".join(cluster_blocks)
+
+    # ===== 关键研究趋势：按时间排序，最早 2 篇 + 最近 2 篇 =====
+    by_year = sorted(papers, key=lambda p: int(p["year"]) if p["year"].isdigit() else 0)
+    earliest2 = [p for p in by_year if p["year"].isdigit()][:2]
+    latest2 = [p for p in by_year if p["year"].isdigit()][-2:] if len(by_year) >= 2 else []
+    trend_lines = []
+    for i, p in enumerate(earliest2, 1):
+        trend_lines.append(
+            f"{i}. **{p['title'][:80]}** [{p['year']}] 为该方向奠基性工作，相关性 {p['relevance']:.1f}/10。"
+        )
+    for i, p in enumerate(latest2, len(earliest2) + 1):
+        trend_lines.append(
+            f"{i}. **前沿工作**：**{p['title'][:80]}** [{p['year']}] 反映当前研究热点，相关性 {p['relevance']:.1f}/10。"
+        )
+    if not trend_lines:
+        trend_lines = ["1. （论文年份信息不足，无法生成趋势分析）"]
+    trend_block = "\n".join(trend_lines)
+
+    # ===== 延伸阅读：取 Top 5 论文的 URL =====
+    extend_lines = []
+    for p in papers[:5]:
+        url = p["url"] or ""
+        title_short = p["title"][:60]
+        extend_lines.append(f"- [{title_short}]({url}) — 相关性 {p['relevance']:.1f}/10")
+    extend_block = "\n".join(extend_lines)
+
     return f"""## 研究概述
 针对查询「{query}」，ScholarFlow 通过 8 节点流水线（查询分解 → 双源检索 → 引文扩展 → 三维排序 → 自适应改写 → 综述生成 → 图谱构建 → 成本汇总）从 Semantic Scholar 与 OpenAlex 汇总后返回 Top {ranked_count} 篇高质量论文。
 
 ## 核心论文推荐（Top 5）
-1. **Attention Is All You Need** [2017] — 提出 Transformer 架构，开启大模型时代（cite 90000+）
-2. **BERT: Pre-training of Deep Bidirectional Transformers** [2018] — 双向预训练语言模型（cite 50000+）
-3. **GPT-3: Language Models are Few-Shot Learners** [2020] — Few-shot 学习的标志性工作（cite 30000+）
-4. **Llama 2: Open Foundation and Fine-Tuned Chat Models** [2023] — 开源大语言模型代表
-5. **A Survey of Large Language Models** [2023] — LLM 综述论文
+{top5_block}
 
 ## 研究方向分类
-
-### 架构与方法 (Architecture)
-- **Attention Is All You Need** — 自注意力机制奠基
-- **BERT** — 双向预训练范式
-- **GPT-3** — 规模化与 in-context learning
-
-### 评测与基准 (Evaluation)
-- **Llama 2** — 工业级模型评测实践
-- **A Survey of LLMs** — 综合 benchmark 综述
+{cluster_block}
 
 ## 关键研究趋势
-1. **规模效应 (Scaling Laws)**：模型参数与数据规模呈幂律关系
-2. **指令微调与 RLHF**：从预训练到对齐的范式转变
-3. **多模态融合**：从纯文本走向图文音统一表征
+{trend_block}
 
 ## 延伸阅读
-- [Attention Is All You Need](https://arxiv.org/abs/1706.03762) — Transformer 原论文
-- [BERT](https://arxiv.org/abs/1810.04805) — 双向预训练语言模型
-- [GPT-3](https://arxiv.org/abs/2005.14165) — Few-shot 学习的里程碑
+{extend_block}
 
 ## 检索说明
-本次检索使用 ScholarFlow 8 节点流水线，数据源为 Semantic Scholar + OpenAlex，迭代轮次 = 配置 max_iterations，论文数 = {ranked_count}，评分方法为三维加权（相关性 50% + 权威性 30% + 一致性 20%）。
+本次检索使用 ScholarFlow 8 节点流水线，数据源为 Semantic Scholar + OpenAlex，论文数 = {ranked_count}，评分方法为三维加权（相关性 50% + 权威性 30% + 一致性 20%）。
 
-> 注：当前为 mock 模式（LLM_MOCK=true），报告由本地模板生成。生产环境请配置 LLM_PROVIDER=kimi|glm|minimax 并设置 LLM_MOCK=false 启用真实 LLM。
+> 注：当前为 mock 模式（LLM_MOCK=true），报告由本地模板基于真实 ranked_papers 动态生成。生产环境请配置 LLM_PROVIDER=kimi|glm|minimax 并设置 LLM_MOCK=false 启用真实 LLM。
 """
+
+
+def _mock_batch_score(prompt: str, is_consistency: bool) -> str:
+    """Mock 批量评分：解析 prompt 中的 [i+1] Title 块，按 query-title 重叠度打分。
+
+    返回 JSON 格式：
+      {
+        "scores": {"1": 7.5, "2": 8.0, ...},   # ranker_agent 实际读取
+        "reasons": {"1": "...", "2": "..."}    # 可选说明
+      }
+    """
+    # 1) 解析 query
+    query = ""
+    m = re.search(r"<user_query>([\s\S]*?)</user_query>", prompt)
+    if m:
+        query = m.group(1).strip()
+        # 反转义 wrap_user_input 的 HTML 实体
+        query = query.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    if not query:
+        m2 = re.search(r"Query:\s*(.+?)(?:\n|$)", prompt)
+        if m2:
+            query = m2.group(1).strip()
+    if not query:
+        query = prompt.split("\n")[0].strip()[:60]
+    if not query:
+        query = ""
+
+    # 2) 解析所有 [i+1] Title: 块
+    title_pattern = re.compile(r"\[(\d+)\]\s+Title:\s*(.+?)(?:\nAbstract:|$)", re.DOTALL)
+    paper_blocks = title_pattern.findall(prompt)
+    if not paper_blocks:
+        # 兜底：更宽松的 [i+1] Title: 匹配
+        title_pattern2 = re.compile(r"\[(\d+)\]\s+Title:\s*(.+)")
+        paper_blocks = title_pattern2.findall(prompt)
+
+    scores: dict[str, float] = {}
+    reasons: dict[str, str] = {}
+    q_lower = query.lower()
+    query_words = set(re.findall(r"[a-z]+", q_lower))
+    cn_query = re.findall(r"[一-鿿]+", q_lower)
+
+    for idx_str, title in paper_blocks:
+        title = (title or "").strip()[:200]
+        t_lower = title.lower()
+        title_words = set(re.findall(r"[a-z]+", t_lower))
+        overlap = len(query_words & title_words)
+        cn_title = re.findall(r"[一-鿿]+", t_lower)
+        cn_overlap = 0
+        for q_seg in cn_query:
+            for t_seg in cn_title:
+                common = set(q_seg) & set(t_seg)
+                if len(common) >= 1 and len(q_seg) >= 2:
+                    cn_overlap = max(cn_overlap, min(len(common), 2))
+        total_overlap = overlap + cn_overlap
+
+        if is_consistency:
+            # 一致性维度：基础分较高
+            if total_overlap >= 2:
+                score = 8.0
+            elif total_overlap >= 1:
+                score = 7.0
+            else:
+                score = 5.5
+        else:
+            # 相关性维度
+            if total_overlap >= 4:
+                score = 9.0
+            elif total_overlap >= 2:
+                score = 8.0
+            elif total_overlap >= 1:
+                score = 7.5
+            else:
+                score = 5.0
+        scores[idx_str] = round(score, 1)
+        reasons[idx_str] = f"Batch overlap={total_overlap} (en={overlap}, cn={cn_overlap})."
+
+    return json.dumps({
+        "scores": scores,
+        "reasons": reasons,
+    }, ensure_ascii=False)
 
 
 def _mock_response(prompt: str, task_type: str, json_mode: bool) -> str:
@@ -326,10 +489,15 @@ def _mock_response(prompt: str, task_type: str, json_mode: bool) -> str:
 
     B-005 修复：consistency prompt 使用 "Query domain:" 而 relevance 用 "Query:"。
     通过 prompt 特征区分两者，避免 mock 永远走兜底。
+    任务 2 修复：批量评分 prompt 使用 [i+1] Title + <paper_list>，新增 _mock_batch_score 处理。
     """
     if task_type == "complex_reason":
         return _mock_query_decompose(prompt)
     if task_type == "fast_score":
+        # 批量评分（[i+1] Title: + <paper_list> 标签）— 优先匹配
+        if re.search(r"\[\d+\]\s+Title:", prompt) or "<paper_list>" in prompt:
+            is_cons = "consistency" in prompt.lower()
+            return _mock_batch_score(prompt, is_consistency=is_cons)
         # 一致性评分 prompt 含 "consistency" 关键词 + "Query domain:" 字段
         if "consistency" in prompt.lower():
             m_title = re.search(r"Paper:\s*(.+)", prompt)
