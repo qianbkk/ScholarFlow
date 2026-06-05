@@ -47,7 +47,6 @@ ScholarFlow/
 │       ├── hooks/      ← useSearch
 │       ├── services/   ← api
 │       └── types/
-├── eval/            ← f1_score.py + test_cases.json (PaSa 风格评测)
 ├── test_run.py      ← 端到端冒烟测试
 └── .env.example     ← 配置模板
 ```
@@ -110,17 +109,6 @@ npx vite --host 127.0.0.1 --port 5173
 PYTHONIOENCODING=utf-8 python test_run.py
 ```
 
-### 5. 跑 F1 评测
-
-```bash
-# 单条
-python eval/f1_score.py --query "transformer attention" \
-  --expected "Attention Is All You Need" "BERT"
-
-# 批量（5 条 test cases）
-python eval/f1_score.py --batch
-```
-
 ---
 
 ## 🏗️ 架构
@@ -173,12 +161,14 @@ END
 
 ---
 
-## 📊 评测指标
+## 📊 评测与质量保障
 
-F1 计算：`precision = |ret ∩ rel| / |ret|`, `recall = |ret ∩ rel| / |rel|`, `F1 = 2PR/(P+R)`
-（按论文标题前 60 字符归一化后取集合交集，详见 `eval/f1_score.py`）
+流水线在每轮迭代中执行以下质量检查：
 
-支持 PaSa 风格指标：Recall@K、Precision@K、nDCG@K、随机基线对比。
+- **数量检查** — 排序后论文数 ≥ 5 才进入综述
+- **相关性检查** — Top 论文平均相关性 ≥ 7/10 才视为充分
+- **预算检查** — 累计成本 < $0.3 才允许下一轮迭代
+- **成本汇总** — 最后一节点统一汇总 tokens / USD / per-model 分摊
 
 > **Mock 模式下的 F1**：因为内置数据集只有约 58 篇代表性论文，precision 受限（top-20 里会混入非期望论文）。这是 mock 数据池的固有限制，**真实 API 模式下会显著提升**。Recall 较高（≥0.85）说明流水线能正确识别并返回相关论文。
 
