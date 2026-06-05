@@ -614,7 +614,26 @@ async def call_llm(
     text, usage = result
     if not text and usage.get("error"):
         print(f"[llm_client] {provider}/{model} failed: {scrub_sensitive(usage['error'])}  → fallback to mock")
-        return await _call_mock(prompt, task_type, json_mode)
+        # 真实调用已消耗 token/cost（即使失败也计费），必须保留在 usage 中，
+        # 否则 cost_tracker / total_cost_usd 漏报。
+        mock_text, mock_usage = await _call_mock(prompt, task_type, json_mode)
+        merged_usage = dict(mock_usage)
+        # 累加真实调用的 cost / token，便于计费对账
+        merged_usage["cost_usd"] = (
+            mock_usage.get("cost_usd", 0.0) + usage.get("cost_usd", 0.0)
+        )
+        merged_usage["input_tokens"] = (
+            mock_usage.get("input_tokens", 0) + usage.get("input_tokens", 0)
+        )
+        merged_usage["output_tokens"] = (
+            mock_usage.get("output_tokens", 0) + usage.get("output_tokens", 0)
+        )
+        # 标记：此结果是 mock 回退，但包含真实调用的已计费成本
+        original_model = usage.get("model") or model
+        merged_usage["model"] = f"{original_model} (fallback to mock)"
+        merged_usage["fallback_to_mock"] = True
+        merged_usage["original_error"] = usage.get("error", "")
+        return mock_text, merged_usage
     return result
 
 
