@@ -4,6 +4,7 @@ ScholarFlow FastAPI 入口
 提供 /search 和 /health 接口
 """
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -76,9 +77,62 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # 全局每小时预算计数器（进程内，RESTART 归零）
+# 修复：增加磁盘持久化 — 启动时从 .budget_state.json 还原，每次累加后异步落盘
 GLOBAL_HOURLY_BUDGET = float(os.getenv("GLOBAL_HOURLY_BUDGET", "50.0"))
 _budget_counter: dict[str, float] = defaultdict(float)
 _budget_reset_ts: float = _time.time()
+_BUDGET_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".budget_state.json")
+_budget_lock = asyncio.Lock()
+
+
+def _load_budget_state() -> None:
+    """启动时从磁盘恢复预算计数（无文件则保持默认）。"""
+    global _budget_reset_ts
+    try:
+        with open(_BUDGET_STATE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            _budget_counter["total"] = float(data.get("total", 0.0))
+            ts = float(data.get("reset_ts", _time.time()))
+            # 若磁盘记录的窗口已过期，则丢弃
+            if _time.time() - ts > 3600:
+                _budget_counter["total"] = 0.0
+                _budget_reset_ts = _time.time()
+            else:
+                _budget_reset_ts = ts
+            logger.info(
+                f"[budget] loaded persisted state: total=${_budget_counter['total']:.4f}, "
+                f"reset_ts={_budget_reset_ts:.0f}"
+            )
+    except FileNotFoundError:
+        logger.info("[budget] no persisted state file, starting fresh")
+    except Exception as e:
+        logger.warning(f"[budget] failed to load state: {e}, starting fresh")
+
+
+def _persist_budget_state() -> None:
+    """落盘当前预算计数（同步写，文件小不阻塞）。"""
+    try:
+        with open(_BUDGET_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(
+                {"total": _budget_counter["total"], "reset_ts": _budget_reset_ts},
+                f,
+                ensure_ascii=False,
+            )
+    except Exception as e:
+        logger.warning(f"[budget] failed to persist state: {e}")
+
+
+# 启动时尝试恢复
+_load_budget_state()
+
+
+async def _persist_budget_state_async() -> None:
+    """异步落盘：先取锁防并发，再写文件。"""
+    async with _budget_lock:
+        # 用 run_in_executor 避免阻塞事件循环
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _persist_budget_state)
 
 
 def _check_global_budget() -> None:
@@ -88,6 +142,8 @@ def _check_global_budget() -> None:
     if now - _budget_reset_ts > 3600:
         _budget_counter.clear()
         _budget_reset_ts = now
+        # 新窗口开始时也落盘（total 归零）
+        _persist_budget_state()
     if _budget_counter["total"] > GLOBAL_HOURLY_BUDGET:
         raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
 
@@ -179,8 +235,11 @@ async def search(req: SearchRequest, request: Request):
         # 120s 上限：避免 Real 模式下某个 API 卡死导致前端无限转圈
         final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=120.0)
         elapsed = time.time() - t0
-        # VULN-002: 累加本次开销到全局预算
-        _budget_counter["total"] += float(final.get("total_cost_usd", 0.0))
+        # VULN-002: 累加本次开销到全局预算（异步加锁落盘，避免并发写冲突）
+        async with _budget_lock:
+            _budget_counter["total"] += float(final.get("total_cost_usd", 0.0))
+            # 提交后台任务落盘（不阻塞响应）
+            asyncio.create_task(_persist_budget_state_async())
         return SearchResponse(
             report=final.get("report", ""),
             ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:20]],
