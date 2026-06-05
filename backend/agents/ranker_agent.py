@@ -260,14 +260,33 @@ async def rank_node(state: SearchState) -> SearchState:
         async with semaphore:
             return await _score_papers_combined_batch(batch, query)
 
-    combined_batches = await asyncio.gather(*[_combined_batch(b) for b in batches])
+    # H3 修复：gather 必须用 return_exceptions=True
+    # 旧实现：单批失败（LLM 429 / JSON parse error）会传播并崩溃整个 ranker 节点，
+    # 导致整条流水线 500。对照 search_node:29 / citation_expander:61,65 都已用
+    # return_exceptions=True + 后续 isinstance 过滤异常。
+    combined_batches = await asyncio.gather(
+        *[_combined_batch(b) for b in batches],
+        return_exceptions=True,
+    )
 
-    # 展平
+    # 展平（H3 修复：失败的批次用兜底分数 5.0/6.0，与 _score_papers_combined_batch 内部兜底一致）
     rel_results: list[float] = []
     cons_results: list[float] = []
     total_cost = 0.0
     total_tokens = 0
-    for rel_scores, cons_scores, usage in combined_batches:
+    for batch, result in zip(batches, combined_batches):
+        if isinstance(result, Exception):
+            # 单批失败：记录 warning，用兜底分数填平（不污染其他批次的结果）
+            logger.warning(
+                f"[rank_node] batch scoring failed "
+                f"(batch_size={len(batch)}, err={type(result).__name__}: "
+                f"{scrub_sensitive(str(result))}); "
+                f"using fallback scores 5.0/6.0 for this batch"
+            )
+            rel_results.extend([5.0] * len(batch))
+            cons_results.extend([6.0] * len(batch))
+            continue
+        rel_scores, cons_scores, usage = result
         rel_results.extend(rel_scores)
         cons_results.extend(cons_scores)
         total_cost += usage.get("cost_usd", 0.0)
