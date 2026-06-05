@@ -2,6 +2,9 @@
 节点 ⑥ — 综述报告生成
 基于排序后的论文，生成结构化 Markdown 综述。
 """
+import html
+import re
+
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
@@ -99,9 +102,41 @@ async def synthesize_node(state: SearchState) -> SearchState:
     # ===== 纵深防御 (VULN-001 Layer 1) =====
     # 检测 LLM 输出中是否含可疑 HTML 标签 / 事件处理器 / 伪协议，
     # 若有则降级到模板报告（不污染前端 DOM）。
-    DANGEROUS_PATTERNS = ["<script", "javascript:", "onerror=", "onload=",
-                         "onclick=", "<iframe", "<object", "<embed"]
-    if any(p in report.lower() for p in DANGEROUS_PATTERNS):
+    #
+    # 历史 (H7): 旧 denylist 只匹配 `onerror=` 这种紧凑形式，
+    # 无法拦截 SVG SMIL 事件 / 空白混淆 / HTML 实体绕过。常见绕过的例子：
+    #   * `<svg><animate onbegin=alert(1)></svg>` —— SVG SMIL 事件
+    #   * `onerror =alert(1)` —— onerror 后面有空白再 `=`
+    #   * `<a href="java&#x09;script:alert(1)">` —— tab/换行混淆 javascript:
+    #   * `<style>body{...}` / `<form>` / `<input>` / `<link>` / `<meta>` —— 危险 HTML
+    #   * `data:text/html,<script>alert(1)</script>` —— data URI
+    DANGEROUS_PATTERNS = [
+        "<script", "javascript:", "vbscript:",
+        "<iframe", "<object", "<embed", "<svg", "<math",
+        "<form", "<input", "<style", "<link", "<meta", "<base",
+        "data:text/html",
+    ]
+    # 用正则匹配带可选空白的事件处理器属性（`onerror=`、`onerror =`、
+    # `onerror  =`、`onerror\t=`、`onerror\n=`）。匹配 `on\w+` 之后 0+
+    # 个空白再 `=`。这对 SVG SMIL (`onbegin`、`onrepeat`、`onload`) 和
+    # HTML 内联事件 (`onclick`、`onerror`、`onmouseover` 等) 都生效。
+    on_attr_re = re.compile(r"on[a-z]+\s*=", re.IGNORECASE)
+
+    # 关键：先做 HTML 实体解码（`java&#x09;script:` → `java\tscript:`），
+    # 再做大小写归一化，再做 denylist 匹配。否则实体混淆的伪协议
+    # （如 `java&#x09;script:`）会绕过 `javascript:` 子串检查。
+    decoded = html.unescape(report).lower()
+    # 把所有空白折叠成单个空格（应对 `java&#x09;script:` → `java\tscript:`
+    # 这种带空白伪协议）。
+    whitespace_folded = re.sub(r"\s+", " ", decoded)
+    # `javascript:` / `vbscript:` 在浏览器里允许带任意空白 — 用正则匹配
+    # `java\s*script:` 和 `vb\s*script:` 覆盖所有混淆形式。
+    pseudo_proto_re = re.compile(r"(?:java|vb)\s*script\s*:", re.IGNORECASE)
+    if (
+        any(p in whitespace_folded for p in DANGEROUS_PATTERNS)
+        or pseudo_proto_re.search(whitespace_folded)
+        or on_attr_re.search(decoded)
+    ):
         report = _fallback_report(query, ranked)
 
     cost_update = merge_usage_into_state(state, usage)
