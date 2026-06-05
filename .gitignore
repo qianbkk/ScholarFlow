@@ -39,6 +39,7 @@ htmlcov/
 
 # Runtime state files
 backend/.budget_state.json
+backend/.cache/
 
 # Personal notes & verification artifacts (not for public repo)
 docs/
