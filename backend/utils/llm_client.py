@@ -680,17 +680,31 @@ async def _call_anthropic_compatible(
             for block in resp.content:
                 if hasattr(block, "text"):
                     text += block.text
+        in_tokens = resp.usage.input_tokens if resp.usage else 0
+        out_tokens = resp.usage.output_tokens if resp.usage else 0
         usage = {
             "model": model,
             "provider": provider,
-            "input_tokens": resp.usage.input_tokens if resp.usage else 0,
-            "output_tokens": resp.usage.output_tokens if resp.usage else 0,
-            "cost_usd": _calc_cost_usd(
-                model,
-                resp.usage.input_tokens if resp.usage else 0,
-                resp.usage.output_tokens if resp.usage else 0,
-            ),
+            "input_tokens": in_tokens,
+            "output_tokens": out_tokens,
+            "cost_usd": _calc_cost_usd(model, in_tokens, out_tokens),
         }
+        # ===== VULN-C4: 200-OK with empty / error body / no text block =====
+        # 真实 provider 可能返回:
+        #   - content=[]              (空响应)
+        #   - content=[{type: tool_use}] (无 text block)
+        #   - stop_reason == "error"  (服务端标记为错误)
+        # 这些情形下 text="" 但没有 error 字段 → call_llm 的 fallback 不会触发 →
+        # agents 拿到 text="" → extract_json_object 返回 None → 静默降级。
+        # 此处显式给 usage 添加 error 字段，让 fallback 路径生效。
+        if not text:
+            if not resp.content:
+                usage["error"] = "empty_response"
+            else:
+                # 响应非空但没 text block (例如纯 tool_use)
+                usage["error"] = "no_text_block"
+        elif getattr(resp, "stop_reason", None) == "error":
+            usage["error"] = "stop_reason_error"
         return text, usage
     except Exception as e:
         print(f"[llm_client] {provider}/{model} ERROR: {type(e).__name__}: {scrub_sensitive(str(e))}")
