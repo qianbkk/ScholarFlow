@@ -41,5 +41,3 @@ htmlcov/
 docs/
 playwright_runs/
 
-# Local-only dev tools (PESS-style MiniMax quota monitor)
-.pess-tools/
