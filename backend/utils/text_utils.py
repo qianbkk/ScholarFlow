@@ -167,17 +167,45 @@ def truncate(text: str, max_len: int) -> str:
 
 
 def extract_json_object(text: str) -> Optional[dict]:
-    """从 LLM 输出文本中提取第一个 JSON 对象。"""
+    """从 LLM 输出文本中提取第一个完整的 JSON 对象。
+
+    健壮策略（替代旧的贪婪正则 `r"\\{[\\s\\S]*\\}"`）：
+      1) 先尝试 `json.loads(text)` —— 整段就是 JSON 的情形。
+      2) 否则用 `json.JSONDecoder().raw_decode(text)` —— 从 text 开头解析首个 JSON 值。
+      3) 若 2) 失败（text 开头不是 JSON），从 text 中找第一个 `{` 位置，从该位置
+         再次调用 `raw_decode` —— 兼容 "Here's the JSON: {...}" / markdown code block
+         / "Some text {...} more text" 等情形。
+      4) 全部失败返回 None。
+
+    该方法避免了贪婪正则的经典问题：
+      - 多个 JSON 对象: `'{"a":1} {"b":2}'` → 旧正则匹配到 `{"a":1} {"b":2}`；
+        `raw_decode` 严格按 JSON 语法解析，停在第一个完整对象。
+      - 字符串内的花括号: `'{"text":"a}b","c":1}'` → 旧正则只在外层 `{...}` 内匹配
+        第一个内层 `}`；`raw_decode` 正确识别字符串字面量。
+      - URL 中的 `}`: `'{"reason":"see https://example.com/}"}'` → 旧正则可能把 URL
+        的 `}` 误当作 JSON 结束；`raw_decode` 不会。
+    """
     if not text:
         return None
+    decoder = json.JSONDecoder()
+    # 1) 整段就是 JSON（去掉首尾空白也行）
     try:
-        return json.loads(text)
-    except Exception:
+        obj, _ = decoder.raw_decode(text.lstrip())
+        if isinstance(obj, dict):
+            return obj
+    except (ValueError, json.JSONDecodeError):
         pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
+
+    # 2/3) 在 text 中找第一个 '{'，从那里开始 raw_decode
+    #     raw_decode 会自动跳过前导空白，并解析首个完整 JSON 值。
+    idx = text.find("{")
+    while idx != -1:
         try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
+            obj, _ = decoder.raw_decode(text[idx:])
+            if isinstance(obj, dict):
+                return obj
+        except (ValueError, json.JSONDecodeError):
+            pass
+        # 当前 '{' 不是 JSON 对象起点，找下一个 '{'
+        idx = text.find("{", idx + 1)
     return None

@@ -68,6 +68,10 @@ export function useSearch() {
   const esRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fallbackStartRef = useRef<number>(0);
+  // H6: generation counter — bumped on every search / reset.
+  // Captured per-call (`myGen`) so a late SSE event from a previous search
+  // (or a reset search) is recognized as stale and ignored.
+  const genRef = useRef<number>(0);
 
   // 启动假进度（fallback 用）。仅在 EventSource 不可用时启用。
   const startFallbackProgress = useCallback(() => {
@@ -116,6 +120,12 @@ export function useSearch() {
       setElapsedSec(0);
       setUsingFallback(false);
 
+      // H5: 关闭旧 EventSource（在 new EventSource 之前显式关掉，避免短暂重叠）
+      if (esRef.current) {
+        try { esRef.current.close(); } catch { /* ignore */ }
+        esRef.current = null;
+      }
+
       // 先启动假进度（EventSource 第一次 message 到达后立即覆盖成真实进度）
       // 这样 SSE 连接未建立的几百 ms 内 UI 不会卡在 0
       setCurrentStep(0);
@@ -155,14 +165,23 @@ export function useSearch() {
       }
 
       esRef.current = es;
+      // H5: 闭包内捕获本次 EventSource — cleanup / handler 通过这个常量引用，
+      // 不再读取 esRef.current（动态引用指向最新连接），避免跨连接误关。
+      const myEs = es;
+      // H6: 闭包内捕获本次 generation — 任何后续 search/reset 都会 bump genRef，
+      // 这里的 myGen 仍持有旧值，handler 通过不等式检测出"陈旧事件"并直接 return。
+      const myGen = genRef.current;
       let receivedAnyEvent = false;
       let stopped = false;
 
       const cleanup = () => {
         if (stopped) return;
         stopped = true;
-        if (esRef.current) {
-          esRef.current.close();
+        // H5: 关的是本次创建的那条 es（闭包常量），不是 esRef.current 当前指向的对象
+        if (myEs) {
+          try { myEs.close(); } catch { /* ignore */ }
+        }
+        if (esRef.current === myEs) {
           esRef.current = null;
         }
         if (fallbackTimerRef.current) {
@@ -176,6 +195,10 @@ export function useSearch() {
       };
 
       es.onmessage = (ev) => {
+        // H5: 陈旧事件 — 这条 es 已被新 search 替换为 esRef.current 的最新值
+        if (myEs !== esRef.current) return;
+        // H6: 陈旧事件 — 用户已 reset / 启动新 search，genRef 已被 bump
+        if (myGen !== genRef.current) return;
         receivedAnyEvent = true;
         // 收到第一条真实事件，关闭"乐观"假进度
         if (fallbackTimerRef.current) {
