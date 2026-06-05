@@ -2,10 +2,9 @@
 节点 ① — 查询理解与分解
 将用户原始查询拆解为 4-5 个英文子查询，供后续多源并行搜索。
 """
-import json
-import re
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
+from backend.utils.text_utils import extract_json_object as _extract_json_object
 
 
 SYSTEM = (
@@ -35,25 +34,6 @@ def _fallback_decompose(query: str) -> list[str]:
             seen.add(k)
             result.append(q)
     return result[:5]
-
-
-def _extract_json_object(text: str) -> dict | None:
-    """从 LLM 文本中提取第一个 JSON 对象。"""
-    if not text:
-        return None
-    # 直接解析
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    # 抽取代码块中的 JSON
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
-    return None
 
 
 async def query_decompose_node(state: SearchState) -> SearchState:

@@ -1,5 +1,7 @@
 """文本与论文去重工具。"""
-from typing import Iterable
+import json
+import re
+from typing import Iterable, Optional
 
 
 def deduplicate_papers(papers: Iterable) -> list:
@@ -36,3 +38,20 @@ def truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 3] + "..."
+
+
+def extract_json_object(text: str) -> Optional[dict]:
+    """从 LLM 输出文本中提取第一个 JSON 对象。"""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+    m = re.search(r"\{[\s\S]*\}", text)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            return None
+    return None

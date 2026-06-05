@@ -11,15 +11,13 @@ final = 0.5*rel + 0.3*auth + 0.2*cons
 注：早期版本 consistency 是 (rel+auth)/2 估算，存在文档与代码不一致的诚信问题。
 本次实现真正调用 LLM 进行一致性评估，并提供 mock 兜底以保证 mock 模式可演示。
 """
-import json
-import json as _json_batch
 import asyncio
 import logging
-import re
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+from backend.utils.text_utils import extract_json_object as _extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -49,22 +47,6 @@ def _authority_score(citation_count: int, venue: str = "") -> float:
             break
     bonus = _VENUE_BONUS.get(venue, 0.0)
     return min(10.0, base + bonus)
-
-
-def _extract_json_object(text: str) -> dict | None:
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
-    return None
 
 
 async def _score_relevance(paper: Paper, query: str) -> tuple[float, dict]:

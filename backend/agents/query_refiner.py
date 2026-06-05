@@ -2,26 +2,9 @@
 节点 ⑤ — 自适应查询优化
 分析当前结果不足，生成补充查询词。
 """
-import json
-import re
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
-
-
-def _extract_json_object(text: str) -> dict | None:
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    m = re.search(r"\{[\s\S]*\}", text)
-    if m:
-        try:
-            return json.loads(m.group(0))
-        except Exception:
-            return None
-    return None
+from backend.utils.text_utils import extract_json_object as _extract_json_object
 
 
 async def query_refine_node(state: SearchState) -> SearchState:
