@@ -404,13 +404,19 @@ def _mock_synthesis(prompt: str, ranked_count: int) -> str:
 """
 
 
-def _mock_batch_score(prompt: str, is_consistency: bool) -> str:
+def _mock_batch_score(prompt: str, is_consistency: bool, is_combined: bool = False) -> str:
     """Mock 批量评分：解析 prompt 中的 [i+1] Title 块，按 query-title 重叠度打分。
 
-    返回 JSON 格式：
+    返回 JSON 格式（is_combined=False 时，ranker_agent 旧版读取）：
       {
-        "scores": {"1": 7.5, "2": 8.0, ...},   # ranker_agent 实际读取
-        "reasons": {"1": "...", "2": "..."}    # 可选说明
+        "scores": {"1": 7.5, "2": 8.0, ...},
+        "reasons": {"1": "...", "2": "..."}
+      }
+    返回 JSON 格式（is_combined=True 时，ranker_agent 合并版读取）：
+      {
+        "1": {"relevance": 7.5, "consistency": 6.0},
+        "2": {"relevance": 8.0, "consistency": 7.5},
+        ...
       }
     """
     # 1) 解析 query
@@ -437,12 +443,52 @@ def _mock_batch_score(prompt: str, is_consistency: bool) -> str:
         title_pattern2 = re.compile(r"\[(\d+)\]\s+Title:\s*(.+)")
         paper_blocks = title_pattern2.findall(prompt)
 
-    scores: dict[str, float] = {}
-    reasons: dict[str, str] = {}
     q_lower = query.lower()
     query_words = set(re.findall(r"[a-z]+", q_lower))
     cn_query = re.findall(r"[一-鿿]+", q_lower)
 
+    # ===== 合并模式：单次返回 relevance + consistency =====
+    if is_combined:
+        combined: dict[str, dict] = {}
+        for idx_str, title in paper_blocks:
+            title = (title or "").strip()[:200]
+            t_lower = title.lower()
+            title_words = set(re.findall(r"[a-z]+", t_lower))
+            overlap = len(query_words & title_words)
+            cn_title = re.findall(r"[一-鿿]+", t_lower)
+            cn_overlap = 0
+            for q_seg in cn_query:
+                for t_seg in cn_title:
+                    common = set(q_seg) & set(t_seg)
+                    if len(common) >= 1 and len(q_seg) >= 2:
+                        cn_overlap = max(cn_overlap, min(len(common), 2))
+            total_overlap = overlap + cn_overlap
+
+            # 相关性维度
+            if total_overlap >= 4:
+                rel = 9.0
+            elif total_overlap >= 2:
+                rel = 8.0
+            elif total_overlap >= 1:
+                rel = 7.5
+            else:
+                rel = 5.0
+            # 一致性维度：基础分较高
+            if total_overlap >= 2:
+                cons = 8.0
+            elif total_overlap >= 1:
+                cons = 7.0
+            else:
+                cons = 5.5
+            combined[idx_str] = {
+                "relevance": round(rel, 1),
+                "consistency": round(cons, 1),
+            }
+        return json.dumps(combined, ensure_ascii=False)
+
+    # ===== 单维模式（兼容旧版）=====
+    scores: dict[str, float] = {}
+    reasons: dict[str, str] = {}
     for idx_str, title in paper_blocks:
         title = (title or "").strip()[:200]
         t_lower = title.lower()
@@ -490,13 +536,20 @@ def _mock_response(prompt: str, task_type: str, json_mode: bool) -> str:
     B-005 修复：consistency prompt 使用 "Query domain:" 而 relevance 用 "Query:"。
     通过 prompt 特征区分两者，避免 mock 永远走兜底。
     任务 2 修复：批量评分 prompt 使用 [i+1] Title + <paper_list>，新增 _mock_batch_score 处理。
+    任务 1 修复：合并 relevance + consistency 批量 prompt（同时含两个关键词）→ 走 is_combined=True。
     """
     if task_type == "complex_reason":
         return _mock_query_decompose(prompt)
     if task_type == "fast_score":
         # 批量评分（[i+1] Title: + <paper_list> 标签）— 优先匹配
         if re.search(r"\[\d+\]\s+Title:", prompt) or "<paper_list>" in prompt:
-            is_cons = "consistency" in prompt.lower()
+            prompt_lower = prompt.lower()
+            has_rel = "relevance" in prompt_lower
+            has_cons = "consistency" in prompt_lower
+            # 合并 prompt：同时含 relevance + consistency 关键词
+            if has_rel and has_cons:
+                return _mock_batch_score(prompt, is_consistency=False, is_combined=True)
+            is_cons = has_cons
             return _mock_batch_score(prompt, is_consistency=is_cons)
         # 一致性评分 prompt 含 "consistency" 关键词 + "Query domain:" 字段
         if "consistency" in prompt.lower():

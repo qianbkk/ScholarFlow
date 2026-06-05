@@ -8,6 +8,9 @@
 
 final = 0.5*rel + 0.3*auth + 0.2*cons
 
+PERF 优化：相关性 + 一致性 已合并为单次 LLM 调用（_score_papers_combined_batch），
+节省约 50% token（原本每篇论文 2 次 LLM 调用，现在 1 次）。
+
 注：早期版本 consistency 是 (rel+auth)/2 估算，存在文档与代码不一致的诚信问题。
 本次实现真正调用 LLM 进行一致性评估，并提供 mock 兜底以保证 mock 模式可演示。
 """
@@ -135,8 +138,14 @@ Respond with JSON only:
     return score, usage
 
 
-async def _score_relevance_batch(papers: list[Paper], query: str) -> tuple[list[float], dict]:
-    """Batch relevance scoring: 1 LLM call for up to 10 papers. Returns list of 0-10 scores."""
+async def _score_papers_combined_batch(
+    papers: list[Paper], query: str,
+) -> tuple[list[float], list[float], dict]:
+    """Combined batch scoring: 1 LLM call returns BOTH relevance + consistency per paper.
+
+    Returns: (relevance_scores, consistency_scores, usage)
+    节省约 50% token：相关性 + 一致性 双维度单次 LLM 调用合并。
+    """
     from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
     safe_query = wrap_user_input(query, tag="user_query")
 
@@ -146,99 +155,67 @@ async def _score_relevance_batch(papers: list[Paper], query: str) -> tuple[list[
     ])
     safe_papers = wrap_user_input(papers_text, tag="paper_list")
 
-    prompt = f"""Rate how relevant each of these papers is to the research query.
+    prompt = f"""Rate each paper on TWO dimensions in a single response.
+
+Dimension 1 — relevance (how relevant the paper is to the research query):
+- 8-10: Directly addresses the query
+- 5-7:  Tangentially related
+- 1-4:  Not relevant
+
+Dimension 2 — consistency (internal consistency and field-alignment of claims):
+- 8-10: Conclusions well-supported, method clear, aligns with mainstream views
+- 5-7:  Generally consistent, minor gaps
+- 1-4:  Internal contradictions or weak support
 {isolation_system_suffix()}
 
 {safe_query}
 
 {safe_papers}
 
-Respond with JSON only, mapping paper index to a 0-10 relevance score:
+Respond with JSON only, mapping paper index to BOTH scores:
 {{
-  "scores": {{
-    "1": <relevance 0-10>,
-    "2": <relevance 0-10>,
-    ...
-  }}
+  "1": {{"relevance": <0-10>, "consistency": <0-10>}},
+  "2": {{"relevance": <0-10>, "consistency": <0-10>}},
+  ...
 }}"""
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=400, json_mode=True)
+    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True)
     data = _extract_json_object(text)
-    scores: list[float] = []
-    if data and "scores" in data and isinstance(data["scores"], dict):
-        raw = data["scores"]
+    rel_scores: list[float] = []
+    cons_scores: list[float] = []
+    if isinstance(data, dict):
         for i in range(1, len(papers) + 1):
+            entry = data.get(str(i), data.get(i, {}))
+            if not isinstance(entry, dict):
+                entry = {}
             try:
-                s = float(raw.get(str(i), raw.get(i, 5.0)))
-                scores.append(max(0.0, min(10.0, s)))
+                r = float(entry.get("relevance", 5.0))
+                rel_scores.append(max(0.0, min(10.0, r)))
             except (ValueError, TypeError):
-                scores.append(5.0)
+                rel_scores.append(5.0)
+            try:
+                c = float(entry.get("consistency", 6.0))
+                cons_scores.append(max(0.0, min(10.0, c)))
+            except (ValueError, TypeError):
+                cons_scores.append(6.0)
     else:
-        # 兜底：标题关键词重合度
+        # 兜底：按 query-title 重叠度（与原 batch 行为一致）
         query_words = set(query.lower().split())
         for p in papers:
             title_words = set(p.title.lower().split())
             overlap = len(query_words & title_words)
             if overlap >= 3:
-                scores.append(7.5)
+                rel_scores.append(7.5)
             elif overlap >= 1:
-                scores.append(6.0)
+                rel_scores.append(6.0)
             else:
-                scores.append(5.0)
-    return scores, usage
-
-
-async def _score_consistency_batch(papers: list[Paper], query: str) -> tuple[list[float], dict]:
-    """Batch consistency scoring: 1 LLM call for up to 10 papers. Returns list of 0-10 scores."""
-    from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
-    safe_query = wrap_user_input(query, tag="user_query")
-
-    papers_text = "\n\n".join([
-        f"[{i+1}] Title: {p.title}\nAbstract: {p.abstract[:200]}"
-        for i, p in enumerate(papers)
-    ])
-    safe_papers = wrap_user_input(papers_text, tag="paper_list")
-
-    prompt = f"""Evaluate the internal consistency and field-alignment of these papers' claims.
-{isolation_system_suffix()}
-
-{safe_query}
-
-{safe_papers}
-
-For each paper, score 0-10:
-- 8-10: Conclusions well-supported, method clear, aligns with mainstream views
-- 5-7:  Generally consistent, minor gaps
-- 1-4:  Internal contradictions or weak support
-
-Respond with JSON only:
-{{
-  "scores": {{
-    "1": <consistency 0-10>,
-    "2": <consistency 0-10>,
-    ...
-  }}
-}}"""
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=400, json_mode=True)
-    data = _extract_json_object(text)
-    scores: list[float] = []
-    if data and "scores" in data and isinstance(data["scores"], dict):
-        raw = data["scores"]
-        for i in range(1, len(papers) + 1):
-            try:
-                s = float(raw.get(str(i), raw.get(i, 6.0)))
-                scores.append(max(0.0, min(10.0, s)))
-            except (ValueError, TypeError):
-                scores.append(6.0)
-    else:
-        # 兜底 mock
-        for p in papers:
-            s = 6.0
+                rel_scores.append(5.0)
+            c = 6.0
             if p.year and p.year < 2018:
-                s = 7.0
+                c = 7.0
             if p.venue in ("NeurIPS", "ICML", "ICLR", "Nature", "Science"):
-                s = min(8.0, s + 0.5)
-            scores.append(s)
-    return scores, usage
+                c = min(8.0, c + 0.5)
+            cons_scores.append(c)
+    return rel_scores, cons_scores, usage
 
 
 async def rank_node(state: SearchState) -> SearchState:
@@ -274,33 +251,25 @@ async def rank_node(state: SearchState) -> SearchState:
     BATCH_SIZE = 10
     batches = [papers_filtered[i:i+BATCH_SIZE] for i in range(0, len(papers_filtered), BATCH_SIZE)]
 
-    # 并发跑两维度的所有 batch（用 semaphore 限流）
+    # ===== PERF: 合并相关性 + 一致性 单次 LLM 调用（节省 50% token）=====
+    # 旧版：每篇论文 × 2 次调用 (relevance + consistency)
+    # 新版：每批 × 1 次调用，同时返回两个分数
     semaphore = asyncio.Semaphore(3)
 
-    async def _rel_batch(batch):
+    async def _combined_batch(batch):
         async with semaphore:
-            return await _score_relevance_batch(batch, query)
+            return await _score_papers_combined_batch(batch, query)
 
-    async def _cons_batch(batch):
-        async with semaphore:
-            return await _score_consistency_batch(batch, query)
-
-    rel_batches, cons_batches = await asyncio.gather(
-        asyncio.gather(*[_rel_batch(b) for b in batches]),
-        asyncio.gather(*[_cons_batch(b) for b in batches]),
-    )
+    combined_batches = await asyncio.gather(*[_combined_batch(b) for b in batches])
 
     # 展平
     rel_results: list[float] = []
     cons_results: list[float] = []
     total_cost = 0.0
     total_tokens = 0
-    for scores, usage in rel_batches:
-        rel_results.extend(scores)
-        total_cost += usage.get("cost_usd", 0.0)
-        total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
-    for scores, usage in cons_batches:
-        cons_results.extend(scores)
+    for rel_scores, cons_scores, usage in combined_batches:
+        rel_results.extend(rel_scores)
+        cons_results.extend(cons_scores)
         total_cost += usage.get("cost_usd", 0.0)
         total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
@@ -329,7 +298,7 @@ async def rank_node(state: SearchState) -> SearchState:
     top_score = ranked[0].final_score if ranked else 0
     print(
         f"[RankerAgent] Ranked {len(ranked)} papers, top_score={top_score:.2f}, "
-        f"cost=${total_cost:.4f}, n_batches_rel={len(rel_batches)}, n_batches_cons={len(cons_batches)}"
+        f"cost=${total_cost:.4f}, n_batches_combined={len(combined_batches)}"
     )
 
     cost_update = merge_usage_into_state(state, {
