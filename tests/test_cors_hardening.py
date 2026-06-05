@@ -19,7 +19,6 @@ These tests verify:
     ``allow_methods`` / ``allow_headers`` (no wildcards).
 """
 import importlib
-import os
 import sys
 from pathlib import Path
 
@@ -57,9 +56,25 @@ def test_cors_wildcard_in_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         importlib.import_module("backend.main")
 
 
-def test_cors_normal_origins_import_ok(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Normal comma-separated origins import without error and the CORS
-    middleware has the explicit (non-wildcard) configuration."""
+def _get_cors_middleware_opts(app) -> dict:
+    """Inspect the CORSMiddleware's stored options on the app.
+
+    Starlette's ``Middleware`` namedtuple stores the user's kwargs in
+    ``mw.kwargs``. We scan ``app.user_middleware`` and return that
+    kwargs dict for the CORS entry.
+    """
+    from starlette.middleware.cors import CORSMiddleware as _CORS
+
+    for mw in app.user_middleware:
+        cls = getattr(mw, "cls", None)
+        if cls is _CORS:
+            return dict(getattr(mw, "kwargs", {}) or {})
+    raise AssertionError("CORSMiddleware not found in app.user_middleware")
+
+
+def test_cors_normal_origins_no_wildcards(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Normal comma-separated origins import without error, and the
+    CORSMiddleware is configured with explicit (non-wildcard) lists."""
     monkeypatch.setenv(
         "ALLOWED_ORIGINS",
         "http://localhost:5173,http://127.0.0.1:5173",
@@ -68,29 +83,7 @@ def test_cors_normal_origins_import_ok(monkeypatch: pytest.MonkeyPatch) -> None:
 
     main_mod = importlib.import_module("backend.main")
     app = main_mod.app
-
-    # Locate the CORSMiddleware on the stack
-    cors_mw = None
-    for mw in app.user_middleware:
-        if mw.cls is None:
-            # `cls` is a string in Starlette's middleware list
-            continue
-        if "CORS" in (getattr(mw.cls, "__name__", "") or ""):
-            cors_mw = mw
-            break
-    # Fallback: scan the built stack
-    if cors_mw is None:
-        from starlette.middleware.cors import CORSMiddleware as _CORS
-        for mw in app.user_middleware:
-            cls_obj = mw.cls
-            if cls_obj is _CORS or (
-                isinstance(cls_obj, type) and issubclass(cls_obj, _CORS)
-            ):
-                cors_mw = mw
-                break
-
-    assert cors_mw is not None, "CORSMiddleware is not registered on the app"
-    opts = cors_mw.options
+    opts = _get_cors_middleware_opts(app)
 
     # Hard-coded allowlist — no wildcards
     assert opts.get("allow_methods") != ["*"], (
@@ -124,16 +117,27 @@ def test_cors_credentials_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
 
     main_mod = importlib.import_module("backend.main")
     app = main_mod.app
+    opts = _get_cors_middleware_opts(app)
 
-    from starlette.middleware.cors import CORSMiddleware as _CORS
-    cors_mw = None
-    for mw in app.user_middleware:
-        cls_obj = mw.cls
-        if isinstance(cls_obj, type) and issubclass(cls_obj, _CORS):
-            cors_mw = mw
-            break
-
-    assert cors_mw is not None
-    assert cors_mw.options.get("allow_credentials") is False, (
+    assert opts.get("allow_credentials") is False, (
         "allow_credentials should be False — no cookies / no wildcard needed"
+    )
+
+
+def test_main_py_source_has_no_cors_wildcard() -> None:
+    """Static fallback: even if middleware introspection is brittle
+    across Starlette versions, the source must not contain the
+    bad wildcard patterns."""
+    main_path = PROJECT_ROOT / "backend" / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    # The fix replaces these literals with explicit allow-lists.
+    assert 'allow_methods=["*"]' not in src, (
+        "H8 FAIL: backend/main.py still has `allow_methods=['*']`"
+    )
+    assert 'allow_headers=["*"]' not in src, (
+        "H8 FAIL: backend/main.py still has `allow_headers=['*']`"
+    )
+    # And the wildcard guard must be present
+    assert "ALLOWED_ORIGINS must not contain" in src, (
+        "H8 FAIL: backend/main.py is missing the ALLOWED_ORIGINS wildcard guard"
     )
