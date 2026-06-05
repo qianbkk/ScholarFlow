@@ -2,8 +2,11 @@
 ScholarFlow 配置文件
 统一从环境变量加载配置，所有字段都有默认值（缺失时优雅降级）。
 """
+import logging
 import os
 from dotenv import load_dotenv
+
+logger = logging.getLogger(__name__)
 
 load_dotenv(override=True)  # .env 总是覆盖已存在的 env 变量（避免 shell 里残留的旧 key 干扰）
 
@@ -24,7 +27,7 @@ _has_any_llm_key = any([
 ])
 if not _has_any_llm_key:
     LLM_MOCK = True
-    print("[config] No LLM API key detected. LLM_MOCK auto-enabled.")
+    logger.warning("[config] No LLM API key detected. LLM_MOCK auto-enabled.")
 
 
 # ===== LLM Provider 路由配置 =====

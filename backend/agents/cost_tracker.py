@@ -2,7 +2,10 @@
 节点 ⑧ — 成本汇总
 纯计算节点，输出 cost 报告。
 """
+import logging
 from backend.models.state import SearchState
+
+logger = logging.getLogger(__name__)
 
 
 def track_cost_node(state: SearchState) -> SearchState:
@@ -14,6 +17,15 @@ def track_cost_node(state: SearchState) -> SearchState:
     iteration = state.get("iteration", 0)
     final_papers = len(state.get("ranked_papers", []))
 
+    # ===== 成本报告：print + logger.info 双写 =====
+    # print 保留 console 用户展示（uvicorn 启动时 logger 经常被静默）
+    # logger.info 同时写日志文件供后续审计
+    logger.info(
+        "[cost_tracker] total_tokens=%d total_cost=$%.4f budget=$%.2f "
+        "iteration=%d final_papers=%d",
+        total_tokens, total_cost, budget, iteration, final_papers,
+    )
+
     print("\n" + "=" * 60)
     print("  ScholarFlow 搜索完成 — 成本报告")
     print("=" * 60)
@@ -24,7 +36,10 @@ def track_cost_node(state: SearchState) -> SearchState:
     print(f"  最终论文数量    : {final_papers}")
     print("\n  各模型用量：")
     for model, usage in (state.get("model_usage", {}) or {}).items():
-        print(f"    {model:<40} {usage['tokens']:>8,} tokens  ${usage['cost']:.4f}")
+        line = f"    {model:<40} {usage['tokens']:>8,} tokens  ${usage['cost']:.4f}"
+        print(line)
+        logger.info("[cost_tracker] model=%s tokens=%d cost=$%.4f",
+                    model, usage['tokens'], usage['cost'])
     print("=" * 60 + "\n")
 
     return {**state, "status": "done"}
