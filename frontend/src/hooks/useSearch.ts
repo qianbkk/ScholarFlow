@@ -242,6 +242,8 @@ export function useSearch() {
       es.onerror = () => {
         // H5: 陈旧事件 — 这条 es 已被新 search 替换
         if (myEs !== esRef.current) return;
+        // H6: 陈旧事件 — 用户已 reset / 启动新 search，genRef 已被 bump
+        if (myGen !== genRef.current) return;
         // EventSource 出错：若从未收到任何事件（连接本身就失败），回退到 /search + 假进度
         if (!receivedAnyEvent) {
           cleanup();
@@ -249,11 +251,17 @@ export function useSearch() {
           startFallbackProgress();
           searchPapers(query, budget, maxIter)
             .then((data) => {
+              // H6: 异步回填时再校一次 generation — 防止 reset 后又被新数据覆盖
+              if (myGen !== genRef.current) return;
               setResult(data);
               setCurrentStep(PIPELINE_STEPS.length - 1);
             })
-            .catch((err: any) => setError(err?.message || '搜索失败'))
+            .catch((err: any) => {
+              if (myGen !== genRef.current) return;
+              setError(err?.message || '搜索失败');
+            })
             .finally(() => {
+              if (myGen !== genRef.current) return;
               stopFallbackProgress();
               setLoading(false);
             });
@@ -274,6 +282,9 @@ export function useSearch() {
         setError('请输入研究问题');
         return;
       }
+      // H6: bump generation to invalidate any in-flight stale events
+      // from a previous (possibly still-completing) search.
+      genRef.current += 1;
       setLoading(true);
       try {
         await searchWithSSE(query, budget, maxIter);
@@ -287,19 +298,25 @@ export function useSearch() {
 
   const reset = useCallback(() => {
     if (esRef.current) {
-      esRef.current.close();
+      try { esRef.current.close(); } catch { /* ignore */ }
       esRef.current = null;
     }
     if (fallbackTimerRef.current) {
       clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    // H6: bump generation so any in-flight fallback .then() / SSE late
+    // events from the cancelled search see a stale `myGen` and bail.
+    genRef.current += 1;
     setResult(null);
     setError(null);
     setLastQuery('');
     setCurrentStep(0);
     setElapsedSec(0);
     setUsingFallback(false);
+    // H6: clear loading — otherwise the submit button stays disabled
+    // and CostDashboard keeps pulsing after a mid-flight reset.
+    setLoading(false);
   }, []);
 
   return {
