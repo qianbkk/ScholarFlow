@@ -91,6 +91,14 @@ async def synthesize_node(state: SearchState) -> SearchState:
     if not report or not report.strip():
         report = _fallback_report(query, ranked)
 
+    # ===== 纵深防御 (VULN-001 Layer 1) =====
+    # 检测 LLM 输出中是否含可疑 HTML 标签 / 事件处理器 / 伪协议，
+    # 若有则降级到模板报告（不污染前端 DOM）。
+    DANGEROUS_PATTERNS = ["<script", "javascript:", "onerror=", "onload=",
+                         "onclick=", "<iframe", "<object", "<embed"]
+    if any(p in report.lower() for p in DANGEROUS_PATTERNS):
+        report = _fallback_report(query, ranked)
+
     cost_update = merge_usage_into_state(state, usage)
 
     return {

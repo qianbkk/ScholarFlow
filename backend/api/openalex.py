@@ -5,46 +5,32 @@ https://api.openalex.org
 当 API_MOCK=true 时返回内置 mock 数据。
 """
 import asyncio
-import os
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
+from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 
 BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
 SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,cited_by_count,primary_location,doi,referenced_works"
 MAX_RETRIES = 2
 
+# I-001 修复：模块级 AsyncClient 单例
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+    return _client
+
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
     """Real 模式失败时降级到 mock。"""
     all_papers = get_mock_papers(query, limit=limit * 2)
     return [p for p in all_papers if p.source == "openalex"][:limit]
-
-
-def _get_proxy() -> str | None:
-    """与 semantic_scholar._get_proxy 保持一致：env → urllib → 本地端口兜底。"""
-    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
-        v = os.environ.get(var)
-        if v:
-            return v
-    try:
-        import urllib.request
-        proxies = urllib.request.getproxies()
-        for key in ("https", "http"):
-            if key in proxies and proxies[key] and "127.0.0.1" in proxies[key]:
-                return proxies[key]
-    except Exception:
-        pass
-    for port in (7890, 7891, 7897, 10809, 1080):
-        try:
-            import socket
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return f"http://127.0.0.1:{port}"
-        except Exception:
-            continue
-    return None
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
@@ -88,7 +74,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return [p for p in all_papers if p.source == "openalex"][:limit]
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
+        async with _get_client() as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/works",

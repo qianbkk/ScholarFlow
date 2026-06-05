@@ -164,7 +164,12 @@ export function QueryPanel({
             <li
               key={p.paper_id || i}
               className="px-3 py-1.5 hover:bg-slate-50 cursor-pointer transition"
-              onClick={() => p.url && window.open(p.url, '_blank')}
+              onClick={() => {
+                // BUG-003 / VULN-004 修复：URL 协议白名单 + noopener/noreferrer
+                if (p.url && /^https?:\/\//i.test(p.url)) {
+                  window.open(p.url, '_blank', 'noopener,noreferrer');
+                }
+              }}
               title={p.title}
             >
               <div className="flex items-start gap-2">

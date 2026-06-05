@@ -711,10 +711,8 @@ def _to_paper(item: dict) -> Paper:
 
 
 def get_mock_papers(query: str = "", limit: int = 20) -> list[Paper]:
-    import sys as _sys
-    print(f"[MOCK_GET] pid={os.getpid()} q={query[:30]!r} limit={limit} dataset_size={len(_MOCK_PAPERS)}", file=_sys.stderr, flush=True)
-    """
-    根据 query 关键词做严格相关性评分，返回真正相关的论文。
+    """根据 query 关键词做严格相关性评分，返回真正相关的论文。
+
     评分规则：
       - 标题包含完整查询短语: +10
       - 标题包含任一查询词:   +3 / 词

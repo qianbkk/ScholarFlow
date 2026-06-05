@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 // marked v14+：setOptions 已废弃，改用 marked.use()。
 // 多次调用 use() 会合并，所以这里只设一次。
@@ -17,9 +18,23 @@ export function ReportPanel({ report, loading, query }: Props) {
   const html = useMemo(() => {
     if (!report) return '';
     try {
-      return marked.parse(report) as string;
+      // 三层 XSS 防护链：marked → DOMPurify 白名单 → React 渲染
+      // 关键：DOMPurify.sanitize() 必须在 dangerouslySetInnerHTML 之前调用，
+      // 防止 LLM 输出 <script> / onerror= 等可执行 payload。
+      const rawHtml = marked.parse(report) as string;
+      return DOMPurify.sanitize(rawHtml, {
+        ALLOWED_TAGS: [
+          'h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li',
+          'strong', 'em', 'a', 'code', 'pre', 'blockquote',
+          'br', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr',
+        ],
+        ALLOWED_ATTR: ['href', 'target', 'rel'],
+        FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed'],
+        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
+      });
     } catch (e) {
-      return `<pre>${report}</pre>`;
+      // 兜底：parse 失败时转义所有 < > 字符
+      return DOMPurify.sanitize(report.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     }
   }, [report]);
 

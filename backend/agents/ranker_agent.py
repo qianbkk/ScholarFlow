@@ -13,10 +13,13 @@ final = 0.5*rel + 0.3*auth + 0.2*cons
 """
 import json
 import asyncio
+import logging
 import re
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.utils.llm_client import call_llm, merge_usage_into_state
+
+logger = logging.getLogger(__name__)
 
 
 # 顶刊 / 顶会权重（用于权威性的 venue 修正）
@@ -142,8 +145,10 @@ async def rank_node(state: SearchState) -> SearchState:
     papers: list[Paper] = []
     for d in papers_dicts:
         try:
-            papers.append(Paper(**d))
-        except Exception:
+            # BUG-004 修复：使用 from_dict 替代 Paper(**d)
+            papers.append(Paper.from_dict(d))
+        except Exception as e:
+            logger.warning(f"[rank_node] Paper deserialize failed: {e}, keys={list(d.keys())[:5]}")
             continue
 
     query = state["original_query"]

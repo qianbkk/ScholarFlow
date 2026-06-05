@@ -11,6 +11,7 @@ export interface Paper {
   is_expanded: boolean;
   relevance_score: number;
   authority_score: number;
+  consistency_score: number;   // BUG-005 修复：补齐三维评分字段
   final_score: number;
 }
 

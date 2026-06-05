@@ -114,7 +114,9 @@ async def search(req: SearchRequest):
     }
 
     import time
+    import logging
     t0 = time.time()
+    logger = logging.getLogger(__name__)
     try:
         # 120s 上限：避免 Real 模式下某个 API 卡死导致前端无限转圈
         final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=120.0)
@@ -130,16 +132,17 @@ async def search(req: SearchRequest):
             status=final.get("status", "done"),
             elapsed_seconds=round(elapsed, 2),
         )
-    except Exception as e:
-        print(f"[API] /search error: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
     except asyncio.TimeoutError:
+        # 必须在 except Exception 之前（TimeoutError 是 Exception 子类，会被吞掉）
+        logger.warning("[/search] timed out after 120s")
         raise HTTPException(
             status_code=504,
-            detail=f"搜索超时（>{120}s）。建议缩小查询范围或降低 max_iterations。",
+            detail="搜索超时（>120s）。建议缩小查询范围或降低 max_iterations。",
         )
+    except Exception as e:
+        # 仅服务端日志记详情，HTTP body 不暴露内部信息（VULN-002 修复）
+        logger.error("[/search] error", exc_info=True)
+        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
 
 
 @app.get("/")

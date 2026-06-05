@@ -4,10 +4,13 @@
 关键修复：把"谁引用了谁"的关系写回 Paper.references，供图谱构建使用。
 """
 import asyncio
+import logging
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar
 from backend.utils.text_utils import deduplicate_papers
+
+logger = logging.getLogger(__name__)
 
 
 async def expand_citations_node(state: SearchState) -> SearchState:
@@ -17,8 +20,10 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     raw: list[Paper] = []
     for d in raw_dicts:
         try:
-            raw.append(Paper(**d))
-        except Exception:
+            raw.append(Paper.from_dict(d))
+        except Exception as e:
+            # BUG-004 修复：反序列化失败记录 warning，不静默丢弃
+            logger.warning(f"[expand_citations] Paper deserialize failed: {e}, keys={list(d.keys())[:5]}")
             continue
 
     if not raw:

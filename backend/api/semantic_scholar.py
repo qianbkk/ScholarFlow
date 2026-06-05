@@ -5,11 +5,11 @@ https://api.semanticscholar.org/graph/v1
 当 API_MOCK=true 时返回内置 mock 数据（无网络也能跑通）。
 """
 import asyncio
-import os
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
+from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
@@ -18,35 +18,15 @@ HEADERS = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY el
 TIMEOUT = 30.0
 MAX_RETRIES = 2
 
+# I-001 修复：模块级 AsyncClient 单例，连接池复用
+_client: httpx.AsyncClient | None = None
 
-def _get_proxy() -> str | None:
-    """读取代理设置，优先级：
-    1. 环境变量 HTTPS_PROXY / HTTP_PROXY
-    2. Python urllib 检测到的系统代理（Windows 注册表 / macOS 系统偏好 / Linux gnome）
-    3. 默认本地 7890（clash/v2rayN 常用端口）
-    """
-    for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"):
-        v = os.environ.get(var)
-        if v:
-            return v
-    # urllib.getproxies() 会自动检测 Windows 注册表 / Linux 环境
-    try:
-        import urllib.request
-        proxies = urllib.request.getproxies()
-        for key in ("https", "http"):
-            if key in proxies and proxies[key] and "127.0.0.1" in proxies[key]:
-                return proxies[key]
-    except Exception:
-        pass
-    # 兜底：常见本地代理端口
-    for port in (7890, 7891, 7897, 10809, 1080):
-        try:
-            import socket
-            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
-                return f"http://127.0.0.1:{port}"
-        except Exception:
-            continue
-    return None
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+    return _client
 
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
@@ -88,7 +68,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return papers
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
+        async with _get_client() as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/paper/search",
@@ -154,7 +134,7 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
         return refs
 
     try:
-        async with httpx.AsyncClient(timeout=TIMEOUT, proxy=_get_proxy()) as client:
+        async with _get_client() as client:
             resp = await _get_with_retry(
                 client,
                 f"{BASE_URL}/paper/{paper_id}/references",

@@ -100,7 +100,13 @@ export function GraphPanel({ graph }: Props) {
         setTooltipPos({ x: event.offsetX, y: event.offsetY });
       })
       .on('mouseout', () => setHovered(null))
-      .on('click', (_, d) => d.url && window.open(d.url, '_blank'))
+      .on('click', (_, d) => {
+        // BUG-003 / VULN-004 修复：URL 协议白名单 + noopener/noreferrer
+        // 拒绝 javascript: / data: 等伪协议；防止 window.opener 反向访问
+        if (d.url && /^https?:\/\//i.test(d.url)) {
+          window.open(d.url, '_blank', 'noopener,noreferrer');
+        }
+      })
       .call(
         d3
           .drag<any, SimNode>()

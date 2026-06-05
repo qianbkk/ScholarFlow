@@ -3,10 +3,13 @@
 并发调用 Semantic Scholar + OpenAlex，合并去重。
 """
 import asyncio
+import logging
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar, openalex
 from backend.utils.text_utils import deduplicate_papers
+
+logger = logging.getLogger(__name__)
 
 
 async def search_node(state: SearchState) -> SearchState:
@@ -27,7 +30,8 @@ async def search_node(state: SearchState) -> SearchState:
     all_papers: list[Paper] = []
     for result in results:
         if isinstance(result, Exception):
-            print(f"[SearchAgent] task exception: {type(result).__name__}: {result}")
+            # BUG-002 修复：去掉裸 print，改用 logger
+            logger.warning(f"[search_node] task exception: {type(result).__name__}: {result}")
             continue
         if isinstance(result, list):
             all_papers.extend(result)
@@ -44,12 +48,14 @@ async def search_node(state: SearchState) -> SearchState:
             existing_papers = []
             for d in existing_dicts:
                 try:
-                    existing_papers.append(Paper(**d))
-                except Exception:
+                    # BUG-004 修复：使用 from_dict 替代 Paper(**d)
+                    existing_papers.append(Paper.from_dict(d))
+                except Exception as e:
+                    logger.warning(f"[search_node] Paper deserialize failed: {e}, keys={list(d.keys())[:5]}")
                     continue
             unique_papers = deduplicate_papers(existing_papers + unique_papers)
 
-    print(f"[SearchAgent] iter={iteration} | sub_queries={len(sub_queries)} | unique={len(unique_papers)}")
+    logger.info(f"[search_node] iter={iteration} | sub_queries={len(sub_queries)} | unique={len(unique_papers)}")
 
     return {
         **state,

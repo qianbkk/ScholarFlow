@@ -93,6 +93,17 @@ npx vite --host 127.0.0.1 --port 5173
 
 前端默认 `http://127.0.0.1:5173`，已配置 Vite 代理 `/api → 127.0.0.1:8000`。
 
+> ⚠️ **Vite 代理仅开发环境有效**。生产部署需在前端服务器（nginx / caddy / cloudflare）显式反代 `/api` 到后端。示例 nginx 配置：
+>
+> ```nginx
+> location /api/ {
+>     proxy_pass http://127.0.0.1:8000/;   # 注意末尾斜杠：剥掉 /api 前缀
+>     proxy_set_header Host $host;
+>     proxy_set_header X-Real-IP $remote_addr;
+>     proxy_read_timeout 180s;              # 大于后端 120s 超时
+> }
+> ```
+
 ### 4. 端到端冒烟测试
 
 ```bash

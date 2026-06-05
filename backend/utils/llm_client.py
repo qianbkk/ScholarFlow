@@ -173,8 +173,6 @@ def _mock_query_decompose(prompt: str) -> str:
 
 def _mock_relevance_score(paper_title: str, query: str) -> str:
     """Mock 相关性评分：基于关键词重合度 + 中英混合。"""
-    import sys
-    print(f"[MOCK_REL] pid={os.getpid()} query={query[:30]!r} title={paper_title[:30]!r}", file=sys.stderr, flush=True)
     q_lower = query.lower()
     t_lower = paper_title.lower()
     # 英文 word 匹配
@@ -205,6 +203,43 @@ def _mock_relevance_score(paper_title: str, query: str) -> str:
     return json.dumps({
         "relevance": score,
         "reason": f"Overlap={total_overlap} (en={overlap}, cn={cn_overlap}).",
+    }, ensure_ascii=False)
+
+
+def _mock_consistency_score(paper_title: str, query: str) -> str:
+    """Mock 一致性评分：基于论文与 query 的领域匹配度。
+    关键修复（B-005）：ranker_agent 一致性 prompt 使用 "Query domain:" 字面量，
+    与原 _mock_response 路由正则 "Query:\\s*" 不匹配，导致 mock 永远走兜底。
+    本函数专用于 consistency 维度。
+    """
+    q_lower = query.lower()
+    t_lower = paper_title.lower()
+    query_words = set(re.findall(r"[a-z]+", q_lower))
+    title_words = set(re.findall(r"[a-z]+", t_lower))
+    overlap = len(query_words & title_words)
+
+    # 中文匹配
+    cn_query = re.findall(r"[一-鿿]+", q_lower)
+    cn_title = re.findall(r"[一-鿿]+", t_lower)
+    cn_overlap = 0
+    for q_seg in cn_query:
+        for t_seg in cn_title:
+            common = set(q_seg) & set(t_seg)
+            if len(common) >= 1 and len(q_seg) >= 2:
+                cn_overlap = max(cn_overlap, min(len(common), 2))
+
+    total = overlap + cn_overlap
+    # 一致性 7.0 基础分（学术论文通常内部一致性不错）
+    # 与 query 严重不匹配的论文压低，模拟 "领域外论文"
+    if total >= 2:
+        score = 8.0
+    elif total >= 1:
+        score = 7.0
+    else:
+        score = 4.5  # 关键词完全无交集 → 一致性低
+    return json.dumps({
+        "consistency": score,
+        "reason": f"Mock consistency (overlap={total}).",
     }, ensure_ascii=False)
 
 
@@ -286,15 +321,30 @@ def _mock_synthesis(prompt: str, ranked_count: int) -> str:
 
 
 def _mock_response(prompt: str, task_type: str, json_mode: bool) -> str:
-    """根据 task_type 路由到对应 mock 函数。"""
+    """根据 task_type 路由到对应 mock 函数。
+
+    B-005 修复：consistency prompt 使用 "Query domain:" 而 relevance 用 "Query:"。
+    通过 prompt 特征区分两者，避免 mock 永远走兜底。
+    """
     if task_type == "complex_reason":
         return _mock_query_decompose(prompt)
     if task_type == "fast_score":
-        # 从 prompt 中提取 paper title 和 query
+        # 一致性评分 prompt 含 "consistency" 关键词 + "Query domain:" 字段
+        if "consistency" in prompt.lower():
+            m_title = re.search(r"Paper:\s*(.+)", prompt)
+            m_query = re.search(r"Query domain:\s*(.+)", prompt)
+            if m_title and m_query:
+                return _mock_consistency_score(
+                    m_title.group(1).strip(), m_query.group(1).strip()
+                )
+            return json.dumps({"consistency": 6.0, "reason": "mock consistency fallback"})
+        # 相关性评分（默认 fast_score 走 relevance）
         m_title = re.search(r"Paper:\s*(.+)", prompt)
         m_query = re.search(r"Query:\s*(.+)", prompt)
         if m_title and m_query:
-            return _mock_relevance_score(m_title.group(1).strip(), m_query.group(1).strip())
+            return _mock_relevance_score(
+                m_title.group(1).strip(), m_query.group(1).strip()
+            )
         return json.dumps({"relevance": 6.0, "reason": "mock fallback"})
     if task_type == "refine_strategy":
         return _mock_refine(prompt, [])
