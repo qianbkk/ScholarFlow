@@ -13,6 +13,7 @@ Layer 2: LLM 输出端的 denylist (synthesis_agent 已有)
 from __future__ import annotations
 
 import re
+import unicodedata
 
 
 # 注入特征词（保守策略：宁可误报也不漏报）
@@ -39,6 +40,8 @@ def sanitize_query(query: str, max_len: int = 500) -> str:
     if not query:
         raise ValueError("query is empty")
 
+    # 0) NFKC 规范化：折叠西里尔/全角/零宽同形字符，阻断同形字注入
+    query = unicodedata.normalize("NFKC", query)
     # 1) 剥除控制字符（保留 \n \t）
     query = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", query)
     # 2) 截断到安全长度
