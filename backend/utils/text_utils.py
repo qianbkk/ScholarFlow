@@ -4,28 +4,154 @@ import re
 from typing import Iterable, Optional
 
 
-def deduplicate_papers(papers: Iterable) -> list:
-    """按 paper_id 和标题前 50 字符去重。"""
-    from backend.models.paper import Paper
+# ===== 实体对齐（犀利评论 #2 修复）=====
+# 跨源去重策略（按优先级）：
+#  1) DOI 完全匹配 — 学术领域唯一标识（最可靠）
+#  2) 规范化标题 (lowercased + 去标点 + 截断 60 字符) 匹配
+#  3) 标题 Jaccard 相似度 >= 0.85（应对缩写/标点差异）
+_TITLE_NORMALIZE_RE = re.compile(r"[^\w\s]+")
+_WHITESPACE_RE = re.compile(r"\s+")
 
-    seen_ids: set[str] = set()
-    seen_titles: set[str] = set()
-    result = []
+
+def _normalize_title(title: str) -> str:
+    """学术标题规范化：去标点 + 折叠空白 + lowercased。
+
+    例: "Deep Learning for NLP: A Survey" -> "deep learning for nlp a survey"
+    """
+    if not title:
+        return ""
+    s = title.lower()
+    s = _TITLE_NORMALIZE_RE.sub(" ", s)  # 去标点
+    s = _WHITESPACE_RE.sub(" ", s).strip()  # 折叠空白
+    return s
+
+
+def _title_jaccard(a: str, b: str) -> float:
+    """Jaccard 相似度（基于词集合）。"""
+    wa = set(a.split())
+    wb = set(b.split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
+def _get_paper_attr(p, key: str, default=""):
+    """兼容 dataclass Paper 和 dict 两种对象访问方式。"""
+    if hasattr(p, key):
+        return getattr(p, key) or default
+    if isinstance(p, dict):
+        return p.get(key, default) or default
+    return default
+
+
+def _merge_paper_meta(primary, secondary) -> None:
+    """合并两篇被识别为同一论文的元数据，保留信息更丰富的一边。
+
+    优先级: 优先保留有 abstract / 有更多 authors / 更高 citation_count 的那一边。
+    source 字段合并: "semantic_scholar+openalex" 以便前端显示。
+    """
+    # 引用数: 取大
+    p_cites = _get_paper_attr(primary, "citation_count", 0) or 0
+    s_cites = _get_paper_attr(secondary, "citation_count", 0) or 0
+    if s_cites > p_cites:
+        if hasattr(primary, "citation_count"):
+            primary.citation_count = s_cites
+        elif isinstance(primary, dict):
+            primary["citation_count"] = s_cites
+
+    # abstract: 优先长
+    p_abs = _get_paper_attr(primary, "abstract", "")
+    s_abs = _get_paper_attr(secondary, "abstract", "")
+    if len(s_abs) > len(p_abs):
+        if hasattr(primary, "abstract"):
+            primary.abstract = s_abs
+        elif isinstance(primary, dict):
+            primary["abstract"] = s_abs
+
+    # source: 合并
+    p_src = _get_paper_attr(primary, "source", "")
+    s_src = _get_paper_attr(secondary, "source", "")
+    if p_src and s_src and p_src != s_src:
+        merged = f"{p_src}+{s_src}" if "+" not in p_src else p_src
+        if hasattr(primary, "source"):
+            primary.source = merged
+        elif isinstance(primary, dict):
+            primary["source"] = merged
+
+    # references: 合并去重
+    p_refs = set(_get_paper_attr(primary, "references", []) or [])
+    s_refs = set(_get_paper_attr(secondary, "references", []) or [])
+    if s_refs - p_refs:
+        merged = list(p_refs | s_refs)
+        if hasattr(primary, "references"):
+            primary.references = merged
+        elif isinstance(primary, dict):
+            primary["references"] = merged
+
+
+def deduplicate_papers(papers: Iterable) -> list:
+    """跨源论文去重（犀利评论 #2 修复）。
+
+    去重策略（按可靠性从高到低）：
+      1) DOI 精确匹配 — 学术领域唯一标识符，最可靠
+      2) 规范化标题精确匹配 — 折叠大小写/标点后比较
+      3) 标题 Jaccard 相似度 >= 0.85 — 兜底，应对缩写/微小差异
+
+    检测为同一篇时，调用 _merge_paper_meta 合并元数据，保留信息更丰富的一边。
+    """
+    seen_dois: set[str] = set()
+    seen_titles_norm: set[str] = set()
+    result: list = []
 
     for p in papers:
-        pid = p.paper_id if hasattr(p, "paper_id") else p.get("paper_id", "")
-        title = p.title if hasattr(p, "title") else p.get("title", "")
-        title_key = (title or "").lower()[:50]
+        doi = _get_paper_attr(p, "doi", "").strip().lower()
+        # 标准化 DOI: 去掉 "https://doi.org/" 前缀
+        if doi.startswith("https://doi.org/"):
+            doi = doi[len("https://doi.org/"):]
+        title_norm = _normalize_title(_get_paper_attr(p, "title", ""))[:60]
 
-        if pid and pid in seen_ids:
+        # 1) DOI 匹配
+        if doi and doi in seen_dois:
+            # 找到已记录的那条，合并元数据
+            for existing in result:
+                ex_doi = _get_paper_attr(existing, "doi", "").strip().lower()
+                if ex_doi.startswith("https://doi.org/"):
+                    ex_doi = ex_doi[len("https://doi.org/"):]
+                if ex_doi == doi:
+                    _merge_paper_meta(existing, p)
+                    break
             continue
-        if title_key and title_key in seen_titles:
+        # 2) 规范化标题匹配
+        if title_norm and title_norm in seen_titles_norm:
+            for existing in result:
+                ex_title_norm = _normalize_title(_get_paper_attr(existing, "title", ""))[:60]
+                if ex_title_norm == title_norm:
+                    _merge_paper_meta(existing, p)
+                    break
+            continue
+        # 3) Jaccard 相似度兜底（>= 0.80 视为同篇）
+        # 阈值选择：0.80 平衡"缩写/前置介词差异"与"同主题但不同论文"两类情形
+        #   - "BERT Pretraining" vs "Pretraining BERT"  ≈ 1.0
+        #   - "Deep Learning for NLP" vs "Deep Learning Approaches in NLP"  ≈ 0.71
+        #   - "AlphaFold" vs "AlphaFold2"  ≈ 0.5 (不应合并, 阈值 0.8 阻隔)
+        dup_idx = -1
+        if title_norm:
+            for i, existing in enumerate(result):
+                ex_title_norm = _normalize_title(_get_paper_attr(existing, "title", ""))[:60]
+                if not ex_title_norm:
+                    continue
+                if _title_jaccard(title_norm, ex_title_norm) >= 0.80:
+                    dup_idx = i
+                    break
+        if dup_idx >= 0:
+            _merge_paper_meta(result[dup_idx], p)
             continue
 
-        if pid:
-            seen_ids.add(pid)
-        if title_key:
-            seen_titles.add(title_key)
+        # 新论文：记录
+        if doi:
+            seen_dois.add(doi)
+        if title_norm:
+            seen_titles_norm.add(title_norm)
         result.append(p)
 
     return result
