@@ -9,7 +9,6 @@ import logging
 import os
 import sys
 import time as _time
-from collections import defaultdict
 from contextlib import asynccontextmanager
 
 # 让 uvicorn 直接启动时也能找到 backend 包
@@ -78,90 +77,124 @@ limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# 全局每小时预算计数器（进程内，RESTART 归零）
-# 修复：增加磁盘持久化 — 启动时从 .budget_state.json 还原，每次累加后异步落盘
+# 全局每小时预算计数器（H2 修复：迁移到 SQLite WAL — 多 worker 原子性）
+# 旧版用进程内 dict + .budget_state.json 文件，4-worker Gunicorn 部署下：
+#   - 4 个独立进程各持一份 counter，实际预算 × 4
+#   - .json 文件非原子写入，4 进程同时写时可能损坏
+# 新版：在已有 cache DB（WAL 模式）增加 budget_state 表，跨进程 / 跨 worker 共享。
 GLOBAL_HOURLY_BUDGET = float(os.getenv("GLOBAL_HOURLY_BUDGET", "50.0"))
-_budget_counter: dict[str, float] = defaultdict(float)
-_budget_reset_ts: float = _time.time()
-_BUDGET_STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".budget_state.json")
 _budget_lock = asyncio.Lock()
+# 进程内只缓存 reset_ts（避免每次都读 DB）；total 始终从 DB 读最新值
+_budget_reset_ts: float = _time.time()
+
+
+def _init_budget_table() -> None:
+    """初始化 budget_state 表 + 插入 global 行（H2 修复：复用 cache DB 的 WAL 连接）。
+
+    幂等：多次调用只会创建一次表、只插入一次 global 行（INSERT OR IGNORE）。
+    """
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal()
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS budget_state (
+                key TEXT PRIMARY KEY,
+                total REAL NOT NULL,
+                reset_ts REAL NOT NULL
+            )
+            """
+        )
+        # 默认行：global 计数器。INSERT OR IGNORE 避免覆盖现有数据。
+        conn.execute(
+            "INSERT OR IGNORE INTO budget_state (key, total, reset_ts) VALUES ('global', 0.0, ?)",
+            (_time.time(),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_budget_from_db() -> tuple[float, float]:
+    """从 SQLite 读取 (total, reset_ts)。无行时返回 (0.0, now)。"""
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal()
+    try:
+        row = conn.execute(
+            "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+        ).fetchone()
+        if row is None:
+            return 0.0, _time.time()
+        return float(row[0]), float(row[1])
+    finally:
+        conn.close()
+
+
+def _save_budget_to_db(total: float, reset_ts: float) -> None:
+    """把 (total, reset_ts) 持久化到 SQLite（H2 修复：跨进程原子）。"""
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal()
+    try:
+        conn.execute(
+            "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+            (total, reset_ts),
+        )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _load_budget_state() -> None:
-    """启动时从磁盘恢复预算计数（无文件则保持默认）。"""
+    """启动时从 SQLite 恢复预算计数。无行/损坏时保持默认 (0, now)。"""
     global _budget_reset_ts
     try:
-        with open(_BUDGET_STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, dict):
-            _budget_counter["total"] = float(data.get("total", 0.0))
-            ts = float(data.get("reset_ts", _time.time()))
-            # 若磁盘记录的窗口已过期，则丢弃
-            if _time.time() - ts > 3600:
-                _budget_counter["total"] = 0.0
-                _budget_reset_ts = _time.time()
-            else:
-                _budget_reset_ts = ts
-            logger.info(
-                f"[budget] loaded persisted state: total=${_budget_counter['total']:.4f}, "
-                f"reset_ts={_budget_reset_ts:.0f}"
-            )
-    except FileNotFoundError:
-        logger.info("[budget] no persisted state file, starting fresh")
+        _init_budget_table()
+        total, ts = _load_budget_from_db()
+        # 若记录的窗口已过期，则丢弃
+        if _time.time() - ts > 3600:
+            _save_budget_to_db(0.0, _time.time())
+            _budget_reset_ts = _time.time()
+            total = 0.0
+        else:
+            _budget_reset_ts = ts
+        logger.info(
+            f"[budget] loaded persisted state: total=${total:.4f}, "
+            f"reset_ts={_budget_reset_ts:.0f}"
+        )
     except Exception as e:
         logger.warning(f"[budget] failed to load state: {e}, starting fresh")
-
-
-def _persist_budget_state() -> None:
-    """落盘当前预算计数（同步写，文件小不阻塞）。"""
-    try:
-        with open(_BUDGET_STATE_FILE, "w", encoding="utf-8") as f:
-            json.dump(
-                {"total": _budget_counter["total"], "reset_ts": _budget_reset_ts},
-                f,
-                ensure_ascii=False,
-            )
-    except Exception as e:
-        logger.warning(f"[budget] failed to persist state: {e}")
 
 
 # 启动时尝试恢复
 _load_budget_state()
 
 
-async def _persist_budget_state_async() -> None:
-    """异步落盘：先取锁防并发，再写文件。"""
-    async with _budget_lock:
-        # 用 run_in_executor 避免阻塞事件循环
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _persist_budget_state)
-
-
 async def _check_and_reserve_budget(estimated_cost: float) -> None:
-    """原子化地"检查 + 预留"全局预算（H1 修复：关闭 TOCTOU 竞态）。
+    """原子化地"检查 + 预留"全局预算（H1+H2 修复）。
 
-    整个检查 + 累加过程都在 `_budget_lock` 临界区内完成，并发请求不可能
-    在 `_budget_counter["total"] + estimated_cost` 计算后、累加前插队。
-    旧版的"先 check、后 increment"两阶段实现存在窗口期：
-      20 个并发请求都读到 total=49.5，check 通过后全部累加 → 69.5（超额 38%）。
+    H1: 整个 check + reserve 在 `_budget_lock` 临界区内完成，关闭 TOCTOU 竞态。
+    H2: counter 状态存储在 SQLite WAL 中（budget_state 表），跨 worker 进程原子。
+        asyncio.Lock 仅保护单 worker 内的临界区；
+        SQLite WAL + 单 global 行保证多 worker 间的原子性。
 
     Args:
         estimated_cost: 本次请求愿意预留的最大开销（= `req.budget`，即用户上限）。
-            因为预留金额 >= 实际开销，所以"超预留"是安全的、不会少算。
     """
     global _budget_reset_ts
     async with _budget_lock:
+        # 从 DB 读最新值（避免任何缓存导致跨进程看到的旧 total）
+        total, reset_ts = _load_budget_from_db()
         now = _time.time()
-        if now - _budget_reset_ts > 3600:
-            _budget_counter.clear()
-            _budget_reset_ts = now
-            # 新窗口开始时也落盘（total 归零）
-            _persist_budget_state()
-        if _budget_counter["total"] + estimated_cost > GLOBAL_HOURLY_BUDGET:
+        if now - reset_ts > 3600:
+            total = 0.0
+            reset_ts = now
+        if total + estimated_cost > GLOBAL_HOURLY_BUDGET:
             raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
-        # 在锁内完成预留（并发请求接下来看到的是已更新的 total）
-        _budget_counter["total"] += estimated_cost
-        _persist_budget_state()
+        # 在锁内完成预留 + 持久化（下一个 worker 读到的就是新 total）
+        new_total = total + estimated_cost
+        _save_budget_to_db(new_total, reset_ts)
+        # 进程内缓存 reset_ts，避免每个请求都读 DB
+        _budget_reset_ts = reset_ts
 
 
 # ===== Request / Response Models =====
