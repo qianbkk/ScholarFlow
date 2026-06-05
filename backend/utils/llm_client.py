@@ -605,7 +605,7 @@ async def call_llm(
         model = cfg.get("fast_model" if tier == "fast" else "model", cfg.get("model", ""))
 
     if provider == "deepseek" or model.startswith("deepseek-"):
-        result = await _call_deepseek(prompt, system, max_tokens, json_mode)
+        result = await _call_deepseek(prompt, system, max_tokens, json_mode, task_type=task_type)
     else:
         result = await _call_anthropic_compatible(
             provider, model, prompt, system, max_tokens, json_mode
@@ -683,7 +683,8 @@ async def _call_anthropic_compatible(
 
 
 async def _call_deepseek(
-    prompt: str, system: str, max_tokens: int, json_mode: bool
+    prompt: str, system: str, max_tokens: int, json_mode: bool,
+    task_type: str = "complex_reason",
 ) -> tuple[str, dict]:
     client = _get_deepseek_client()
     if client is None:
@@ -692,7 +693,10 @@ async def _call_deepseek(
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
             "error": "DeepSeek API key not configured",
         }
-    model = "deepseek-chat"
+    # 与其他 provider 一致：complex_reason / synthesis / refine_strategy 走 flagship
+    # 其余走 fast。fast_model 在 MODEL_COST_PER_1M 中也有对应条目用于成本估算。
+    tier = TASK_MODEL_TIER.get(task_type, "flagship")
+    model = "deepseek-reasoner" if tier == "flagship" else "deepseek-chat"
     try:
         kwargs = {
             "model": model,
