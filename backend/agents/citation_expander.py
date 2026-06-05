@@ -9,6 +9,7 @@ from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar
 from backend.utils.text_utils import deduplicate_papers
+from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             raw.append(Paper.from_dict(d))
         except Exception as e:
             # BUG-004 修复：反序列化失败记录 warning，不静默丢弃
-            logger.warning(f"[expand_citations] Paper deserialize failed: {e}, keys={list(d.keys())[:5]}")
+            logger.warning(f"[expand_citations] Paper deserialize failed: {scrub_sensitive(str(e))}, keys={list(d.keys())[:5]}")
             continue
 
     if not raw:
@@ -56,7 +57,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     new_refs = 0
     for result in refs_results:
         if isinstance(result, Exception):
-            print(f"[CitationExpander] refs exception: {type(result).__name__}: {result}")
+            print(f"[CitationExpander] refs exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
             continue
         if isinstance(result, list):
             new_refs += len(result)

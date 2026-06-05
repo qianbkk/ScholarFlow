@@ -8,6 +8,7 @@ from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar, openalex
 from backend.utils.text_utils import deduplicate_papers
+from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ async def search_node(state: SearchState) -> SearchState:
     for result in results:
         if isinstance(result, Exception):
             # BUG-002 修复：去掉裸 print，改用 logger
-            logger.warning(f"[search_node] task exception: {type(result).__name__}: {result}")
+            logger.warning(f"[search_node] task exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
             continue
         if isinstance(result, list):
             all_papers.extend(result)
@@ -51,7 +52,7 @@ async def search_node(state: SearchState) -> SearchState:
                     # BUG-004 修复：使用 from_dict 替代 Paper(**d)
                     existing_papers.append(Paper.from_dict(d))
                 except Exception as e:
-                    logger.warning(f"[search_node] Paper deserialize failed: {e}, keys={list(d.keys())[:5]}")
+                    logger.warning(f"[search_node] Paper deserialize failed: {scrub_sensitive(str(e))}, keys={list(d.keys())[:5]}")
                     continue
             unique_papers = deduplicate_papers(existing_papers + unique_papers)
 

@@ -5,26 +5,47 @@ https://api.openalex.org
 当 API_MOCK=true 时返回内置 mock 数据。
 """
 import asyncio
+import os
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
+from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
 SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,cited_by_count,primary_location,doi,referenced_works"
 MAX_RETRIES = 2
 
-# I-001 修复：模块级 AsyncClient 单例
+# NEW-001 修复：模块级 AsyncClient 单例 + 不用 async with
+_DISABLE_POOL = os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
 _client: httpx.AsyncClient | None = None
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
+    if _DISABLE_POOL:
+        return httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        _client = httpx.AsyncClient(
+            timeout=TIMEOUT,
+            proxy=get_proxy(),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
     return _client
+
+
+async def close_client() -> None:
+    """FastAPI shutdown 调用。"""
+    global _client
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
 
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
@@ -74,24 +95,24 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return [p for p in all_papers if p.source == "openalex"][:limit]
 
     try:
-        async with _get_client() as client:
-            resp = await _get_with_retry(
-                client,
-                f"{BASE_URL}/works",
-                params={
-                    "search": query,
-                    "mailto": OPENALEX_EMAIL,
-                    "per-page": limit,
-                    "select": SELECT_FIELDS,
-                    "filter": "has_abstract:true",
-                },
-            )
-            if resp.status_code != 200:
-                print(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
-                return _mock_fallback(query, limit)
-            data = resp.json()
+        client = _get_client()
+        resp = await _get_with_retry(
+            client,
+            f"{BASE_URL}/works",
+            params={
+                "search": query,
+                "mailto": OPENALEX_EMAIL,
+                "per-page": limit,
+                "select": SELECT_FIELDS,
+                "filter": "has_abstract:true",
+            },
+        )
+        if resp.status_code != 200:
+            print(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
+            return _mock_fallback(query, limit)
+        data = resp.json()
     except Exception as e:
-        print(f"[OpenAlex] search exception: {e}  → 降级到 mock")
+        print(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
     papers = []
@@ -134,6 +155,6 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             continue
         refs = item.get("referenced_works") or []
         if refs:
-            paper.__dict__["references"] = [r for r in refs if isinstance(r, str)]
+            paper.references = [r for r in refs if isinstance(r, str)]
         papers.append(paper)
     return papers

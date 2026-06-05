@@ -27,6 +27,7 @@ from backend.config import (
     DEEPSEEK_BASE_URL,
     get_provider_config,
 )
+from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 
 # ===== 路由策略 =====
@@ -84,7 +85,7 @@ def _get_anthropic_client(provider: str) -> Optional[anthropic.AsyncAnthropic]:
         _clients[provider] = client
         return client
     except Exception as e:
-        print(f"[llm_client] Failed to create client for {provider}: {e}")
+        print(f"[llm_client] Failed to create client for {provider}: {scrub_sensitive(str(e))}")
         return None
 
 
@@ -103,7 +104,7 @@ def _get_deepseek_client() -> Optional[AsyncOpenAI]:
         )
         return _deepseek_client
     except Exception as e:
-        print(f"[llm_client] Failed to create DeepSeek client: {e}")
+        print(f"[llm_client] Failed to create DeepSeek client: {scrub_sensitive(str(e))}")
         return None
 
 
@@ -391,7 +392,7 @@ async def call_llm(
     # ===== 失败降级：real 失败时回退 mock，保证 8 节点流水线不卡住 =====
     text, usage = result
     if not text and usage.get("error"):
-        print(f"[llm_client] {provider}/{model} failed: {usage['error']}  → fallback to mock")
+        print(f"[llm_client] {provider}/{model} failed: {scrub_sensitive(usage['error'])}  → fallback to mock")
         return await _call_mock(prompt, task_type, json_mode)
     return result
 
@@ -452,11 +453,11 @@ async def _call_anthropic_compatible(
         }
         return text, usage
     except Exception as e:
-        print(f"[llm_client] {provider}/{model} ERROR: {type(e).__name__}: {e}")
+        print(f"[llm_client] {provider}/{model} ERROR: {type(e).__name__}: {scrub_sensitive(str(e))}")
         return "", {
             "model": model, "provider": provider,
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
-            "error": str(e)[:200],
+            "error": scrub_sensitive(str(e)),
         }
 
 
@@ -496,11 +497,11 @@ async def _call_deepseek(
         }
         return text, usage
     except Exception as e:
-        print(f"[llm_client] deepseek ERROR: {type(e).__name__}: {e}")
+        print(f"[llm_client] deepseek ERROR: {type(e).__name__}: {scrub_sensitive(str(e))}")
         return "", {
             "model": model, "provider": "deepseek",
             "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
-            "error": str(e)[:200],
+            "error": scrub_sensitive(str(e)),
         }
 
 

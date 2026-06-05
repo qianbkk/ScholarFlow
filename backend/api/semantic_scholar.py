@@ -5,11 +5,13 @@ https://api.semanticscholar.org/graph/v1
 当 API_MOCK=true 时返回内置 mock 数据（无网络也能跑通）。
 """
 import asyncio
+import os
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
+from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
@@ -18,15 +20,37 @@ HEADERS = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY el
 TIMEOUT = 30.0
 MAX_RETRIES = 2
 
-# I-001 修复：模块级 AsyncClient 单例，连接池复用
+# NEW-001 修复：模块级 AsyncClient 单例 + 禁用 async with（避免 __aexit__ 关闭连接池）
+# 正确用法：client = _get_client()  →  await client.get(...)
+# 在 FastAPI shutdown lifespan 中统一 aclose()
+_DISABLE_POOL = os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
 _client: httpx.AsyncClient | None = None
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
+    if _DISABLE_POOL:
+        # 回滚模式：每次新建 client（无连接池）
+        return httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
     if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        _client = httpx.AsyncClient(
+            timeout=TIMEOUT,
+            proxy=get_proxy(),
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
     return _client
+
+
+async def close_client() -> None:
+    """FastAPI shutdown 调用：释放连接池。"""
+    global _client
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
 
 
 def _mock_fallback(query: str, limit: int) -> list[Paper]:
@@ -68,20 +92,20 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return papers
 
     try:
-        async with _get_client() as client:
-            resp = await _get_with_retry(
-                client,
-                f"{BASE_URL}/paper/search",
-                params={"query": query, "limit": limit, "fields": PAPER_FIELDS},
-                headers=HEADERS,
-            )
-            if resp.status_code != 200:
-                print(f"[SemanticScholar] search error {resp.status_code}: {query[:60]}")
-                # 失败降级：仍返回 mock 数据，避免 8 节点流水线空跑
-                return _mock_fallback(query, limit)
-            data = resp.json()
+        client = _get_client()
+        resp = await _get_with_retry(
+            client,
+            f"{BASE_URL}/paper/search",
+            params={"query": query, "limit": limit, "fields": PAPER_FIELDS},
+            headers=HEADERS,
+        )
+        if resp.status_code != 200:
+            print(f"[SemanticScholar] search error {resp.status_code}: {query[:60]}")
+            # 失败降级：仍返回 mock 数据，避免 8 节点流水线空跑
+            return _mock_fallback(query, limit)
+        data = resp.json()
     except Exception as e:
-        print(f"[SemanticScholar] search exception: {e}  → 降级到 mock")
+        print(f"[SemanticScholar] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
     papers = []
@@ -111,7 +135,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
                 if isinstance(r, dict) and r.get("paperId"):
                     ref_ids.append(r["paperId"])
             if ref_ids:
-                paper.__dict__["references"] = ref_ids
+                paper.references = ref_ids
         papers.append(paper)
     return papers
 
@@ -134,19 +158,19 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
         return refs
 
     try:
-        async with _get_client() as client:
-            resp = await _get_with_retry(
-                client,
-                f"{BASE_URL}/paper/{paper_id}/references",
-                params={"fields": BATCH_FIELDS, "limit": limit},
-                headers=HEADERS,
-            )
-            if resp.status_code != 200:
-                print(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
-                return []
+        client = _get_client()
+        resp = await _get_with_retry(
+            client,
+            f"{BASE_URL}/paper/{paper_id}/references",
+            params={"fields": BATCH_FIELDS, "limit": limit},
+            headers=HEADERS,
+        )
+        if resp.status_code != 200:
+            print(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
+            return []
             data = resp.json()
     except Exception as e:
-        print(f"[SemanticScholar] refs exception: {e}")
+        print(f"[SemanticScholar] refs exception: {scrub_sensitive(str(e))}")
         return []
 
     papers = []
