@@ -77,6 +77,17 @@ MOCK 模式特点：
 PYTHONIOENCODING=utf-8 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
+### 生产环境(可选):用 gunicorn 启动
+
+```bash
+pip install gunicorn
+gunicorn backend.main:app \
+  --worker-class uvicorn.workers.UvicornWorker \
+  --workers 2 \
+  --bind 0.0.0.0:8000 \
+  --timeout 240
+```
+
 验证：
 - 浏览器打开 `http://127.0.0.1:8000/health` → `{"status":"ok",...}`
 - `http://127.0.0.1:8000/docs` → Swagger API 文档
