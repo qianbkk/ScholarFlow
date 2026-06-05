@@ -326,8 +326,9 @@ async def search(req: SearchRequest, request: Request):
         )
 
         # 写入缓存（供下次同 query 复用，TTL 默认 24h）
+        # H4 修复：用 async 版本
         try:
-            set_cached(
+            await set_cached_async(
                 safe_query,
                 req.max_iterations,
                 req.budget,
@@ -428,7 +429,8 @@ async def search_stream(
 
     async def event_generator():
         # 1) 缓存命中：直接复用 /search 的缓存结果（不发节点进度，瞬间 done）
-        cached = get_cached(safe_query, max_iter, budget)
+        # H4 修复：用 async 版本
+        cached = await get_cached_async(safe_query, max_iter, budget)
         if cached is not None:
             cached_response, cached_cost, cached_tokens = cached
             logger.info(
@@ -499,8 +501,9 @@ async def search_stream(
         )
 
         # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
+        # H4 修复：用 async 版本
         try:
-            set_cached(
+            await set_cached_async(
                 safe_query,
                 max_iter,
                 budget,
