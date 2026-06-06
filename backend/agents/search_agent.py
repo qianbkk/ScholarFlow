@@ -41,10 +41,12 @@ async def search_node(state: SearchState) -> SearchState:
 
     # 并发搜索：每个子查询同时查两个数据库
     # Round 2 PERF-004: 通过 _throttled_search 走 Semaphore(4) 限流，避免 429
+    # Round 6 S2: search_agent limit 30/20 → 15/10, 250→125 papers, 节省 50% SS/OA API 配额
+    # (单次 max_iter=3 不再占满 5min 配额)
     tasks = []
     for q in sub_queries:
-        tasks.append(_throttled_search(semantic_scholar.search_papers(q, limit=30)))
-        tasks.append(_throttled_search(openalex.search_papers(q, limit=20)))
+        tasks.append(_throttled_search(semantic_scholar.search_papers(q, limit=15)))
+        tasks.append(_throttled_search(openalex.search_papers(q, limit=10)))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
