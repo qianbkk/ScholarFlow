@@ -57,6 +57,9 @@ export function GraphPanel({ graph }: Props) {
       .range(['#93c5fd', '#60a5fa', '#22c55e']);
 
     // Simulation
+    // Round 5 S-8: D3 simulation alphaDecay 0.0228→0.05 + velocityDecay 0.4→0.6, 加快收敛 1 倍, 拖拽更平滑
+    // 默认 alphaDecay 0.0228 对中等图谱 (~80 节点) 要 200+ tick 才稳; 提到 0.05 后 ~100 tick 即收敛
+    // velocityDecay 0.4 → 0.6 让拖拽后节点停止更平滑, 不会来回震荡
     const simulation = d3
       .forceSimulation<SimNode>(nodes)
       .force(
@@ -72,7 +75,10 @@ export function GraphPanel({ graph }: Props) {
       .force(
         'collision',
         d3.forceCollide<SimNode>().radius((d) => d.size + 4)
-      );
+      )
+      .alphaDecay(0.05)
+      .velocityDecay(0.6)
+      .alphaMin(0.001);
 
     // Links
     const link = svg
