@@ -47,6 +47,7 @@ from backend.config import (
     DEEPSEEK_API_KEY,
     get_provider_config,
 )
+from backend.middleware import install_security  # Round 5 M-3: HTTP 安全头 + TrustedHost
 
 # NEW-002 修复：logger 移至模块级
 logger = logging.getLogger(__name__)
@@ -319,6 +320,11 @@ app.add_middleware(
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Accept", "Cache-Control"],
 )
+
+# Round 5 M-3: HTTP 安全头 (X-Content-Type-Options/X-Frame-Options/CSP/HSTS 等 7 个)
+# + TrustedHostMiddleware (Host header 注入防护)。在 CORS 之后注册,
+# 让所有响应(含 CORS 错误)都带安全头。ALLOWED_HOSTS env 可收紧 (默认 "*" 开发友好)。
+install_security(app)
 
 
 # ===== Rate limiting + global budget (VULN-002) =====
