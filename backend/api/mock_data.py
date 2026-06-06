@@ -680,13 +680,14 @@ _CURATED_REFERENCES: dict[str, list[str]] = {
 
 def _to_paper(item: dict) -> Paper:
     """把 mock 字典转 Paper 对象。"""
-    # 优先使用真实 URL 映射，否则降级到 fake URL
-    url = _PAPER_URL_MAP.get(
-        item["paper_id"],
-        f"https://arxiv.org/abs/{item['paper_id'].split('_')[-1]}"
-        if "ss_" in item["paper_id"]
-        else f"https://openalex.org/{item['paper_id']}",
-    )
+    # 优先使用真实 URL 映射，否则降级到搜索链接 (避免拼出 "abs/transformer" 等无效 URL)
+    if item["paper_id"] in _PAPER_URL_MAP:
+        url = _PAPER_URL_MAP[item["paper_id"]]
+    elif "ss_" in item["paper_id"]:
+        # fallback: 用 Semantic Scholar 搜索 (paper_id 不是 arXiv ID, 不能直接拼 arxiv URL)
+        url = f"https://www.semanticscholar.org/search?q={item['paper_id']}"
+    else:
+        url = f"https://openalex.org/{item['paper_id']}"
     p = Paper(
         paper_id=item["paper_id"],
         title=item["title"],
