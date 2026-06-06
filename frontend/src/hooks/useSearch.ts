@@ -76,7 +76,6 @@ export function useSearch() {
   const [lastQuery, setLastQuery] = useState('');
   const [currentStep, setCurrentStep] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
-  const [usingFallback, setUsingFallback] = useState(false);
 
   const esRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -91,7 +90,6 @@ export function useSearch() {
 
   // 启动假进度（fallback 用）。仅在 EventSource 不可用时启用。
   const startFallbackProgress = useCallback(() => {
-    setUsingFallback(true);
     setCurrentStep(0);
     setElapsedSec(0);
     fallbackStartRef.current = Date.now();
@@ -108,7 +106,6 @@ export function useSearch() {
   }, []);
 
   const stopFallbackProgress = useCallback(() => {
-    setUsingFallback(false);
     if (fallbackTimerRef.current) {
       clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
@@ -137,7 +134,6 @@ export function useSearch() {
       setLastQuery(query);
       setCurrentStep(0);
       setElapsedSec(0);
-      setUsingFallback(false);
 
       // Round 5 S-5: 生成 request_id, 让 reset 时能告诉后端停哪条 in-flight pipeline
       // 用 crypto.randomUUID 短前缀, 跟后端 SearchCancelRequest.request_id 字段对齐
@@ -381,7 +377,6 @@ export function useSearch() {
     setLastQuery('');
     setCurrentStep(0);
     setElapsedSec(0);
-    setUsingFallback(false);
     // H6: clear loading — otherwise the submit button stays disabled
     // and CostDashboard keeps pulsing after a mid-flight reset.
     setLoading(false);
@@ -397,6 +392,5 @@ export function useSearch() {
     currentStep,
     elapsedSec,
     pipelineSteps: PIPELINE_STEPS,
-    usingFallback,
   };
 }
