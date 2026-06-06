@@ -720,16 +720,20 @@ async def search_stream(
     provider: Optional[str] = Query(default=None, max_length=64, description="LLM provider id"),
 ):
     """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
-    # H1 修复：原子化 check-and-reserve（避免 TOCTOU 竞态）
-    await _check_and_reserve_budget(budget)
-    # 校验 provider
-    resolved_provider = _resolve_provider(provider)
+    # VULN-001 Layer 0: 入口处净化 query (Round 2: 移到预算预留之前, 失败不消耗预算)
     try:
         safe_query = sanitize_query(q)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"查询无效: {e}")
     if not safe_query:
         raise HTTPException(status_code=400, detail="查询内容不能为空")
+    # 校验 provider (同样在预算预留前, 失败不消耗预算)
+    resolved_provider = _resolve_provider(provider)
+
+    # H1 修复：原子化 check-and-reserve（避免 TOCTOU 竞态）
+    # Round 2 CRITICAL-003: reserve 后 event_generator 内部 try/finally 兜底
+    # 所有路径 (success/cache hit/timeout/exception/cancel/disconnect) 都归还预算
+    await _check_and_reserve_budget(budget)
 
     initial = {
         "original_query": safe_query,
@@ -756,110 +760,139 @@ async def search_stream(
     t0 = time.time()
 
     async def event_generator():
-        # 1) 缓存命中：直接复用 /search 的缓存结果（不发节点进度，瞬间 done）
-        # H4 修复：用 async 版本
-        # Round 2 审计 (CRITICAL-001): SSE 路径的 cache read 也必须传 provider
-        cached = await get_cached_async(safe_query, max_iter, budget, provider=resolved_provider)
-        if cached is not None:
-            cached_response, cached_cost, cached_tokens = cached
-            logger.info(
-                f"[/search/stream] cache hit q='{safe_query[:40]}'"
+        # Round 2 CRITICAL-003: try/finally 全路径兜底, 防 SSE 客户端断开/异常/超时
+        # 泄漏预算。finally 一定执行 (包括 GeneratorExit 路径), return_amount
+        # 由各路径设置 (缓存命中/异常/超时 = budget, 成功 = diff)
+        return_amount = budget  # 默认全还 (异常/超时/缓存命中/客户端断开)
+
+        try:
+            # 1) 缓存命中：直接复用 /search 的缓存结果（不发节点进度，瞬间 done）
+            # H4 修复：用 async 版本
+            # Round 2 审计 (CRITICAL-001): SSE 路径的 cache read 也必须传 provider
+            cached = await get_cached_async(safe_query, max_iter, budget, provider=resolved_provider)
+            if cached is not None:
+                cached_response, cached_cost, cached_tokens = cached
+                logger.info(
+                    f"[/search/stream] cache hit q='{safe_query[:40]}'"
+                )
+                yield _sse_format({"event": "started", "cached": True})
+                yield _sse_format({
+                    "event": "done",
+                    "cached": True,
+                    "result": cached_response,
+                    "elapsed": round(time.time() - t0, 2),
+                })
+                # 缓存命中: 本次未消耗 LLM, 全数归还 (return_amount 保持 = budget)
+                return
+
+            # 2) 正常路径：流式跑 LangGraph
+            yield _sse_format({"event": "started", "cached": False, "max_iter": max_iter})
+
+            accumulated: dict = dict(initial)
+            step_count = 0
+
+            try:
+                # asyncio.timeout (Python 3.11+) 在整个 astream 块外层统一计时 240s
+                async with asyncio.timeout(240.0):
+                    async for chunk in search_graph.astream(initial, stream_mode="updates"):
+                        for node_name, state_update in chunk.items():
+                            if not isinstance(state_update, dict):
+                                continue
+                            # 累积 state（SearchState 是 plain TypedDict，无 reducer）
+                            accumulated.update(state_update)
+                            step_count += 1
+                            mapped = NODE_NAME_TO_STEP.get(node_name)
+                            yield _sse_format({
+                                "event": "node_complete",
+                                "node": node_name,
+                                "step": mapped if mapped is not None else step_count,
+                                "elapsed": round(time.time() - t0, 2),
+                                "iteration": accumulated.get("iteration", 0),
+                            })
+            except TimeoutError:
+                logger.warning("[/search/stream] timed out after 240s")
+                # 超时: 把预留全数归还(几乎没产生成本)
+                await _return_budget(budget)
+                return_amount = 0.0  # 已显式归还, finally 不再二次归还
+                # yield error 事件 (客户端可能已断开, 用 try/except 保护)
+                try:
+                    yield _sse_format({
+                        "event": "error",
+                        "code": "timeout",
+                        "message": "搜索超时（>240s）。建议缩小查询范围或降低 max_iter。",
+                    })
+                except Exception:
+                    pass
+                return
+            except Exception:
+                logger.error("[/search/stream] error", exc_info=True)
+                # 异常: 把预留全数归还(实际成本未知,保守起见全还)
+                await _return_budget(budget)
+                return_amount = 0.0  # 已显式归还, finally 不再二次归还
+                try:
+                    yield _sse_format({
+                        "event": "error",
+                        "code": "internal",
+                        "message": "内部服务错误，请稍后重试",
+                    })
+                except Exception:
+                    pass
+                return
+
+            # 3) 构造最终响应
+            elapsed = time.time() - t0
+            # 预算归还: 实际花费通常远低于 budget, 归还差额避免过度预留
+            actual_cost = float(accumulated.get("total_cost_usd", 0.0))
+            diff = budget - actual_cost
+            if diff > 0.01:  # $0.01 阈值避免无意义小数运算
+                return_amount = diff
+            else:
+                return_amount = 0.0
+            response_obj = SearchResponse(
+                report=accumulated.get("report", ""),
+                ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:20]],
+                citation_graph=accumulated.get("citation_graph", {}),
+                total_cost_usd=round(accumulated.get("total_cost_usd", 0.0), 4),
+                total_tokens_used=accumulated.get("total_tokens_used", 0),
+                model_usage=accumulated.get("model_usage", {}),
+                iteration=accumulated.get("iteration", 0),
+                status=accumulated.get("status", "done"),
+                elapsed_seconds=round(elapsed, 2),
             )
-            yield _sse_format({"event": "started", "cached": True})
+
+            # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
+            # H4 修复：用 async 版本
+            # Round 2 审计 (CRITICAL-001): SSE 路径的 cache write 也必须传 provider
+            try:
+                await set_cached_async(
+                    safe_query,
+                    max_iter,
+                    budget,
+                    response_obj.model_dump(),
+                    float(accumulated.get("total_cost_usd", 0.0)),
+                    int(accumulated.get("total_tokens_used", 0)),
+                    provider=resolved_provider,
+                )
+            except Exception as cache_err:
+                logger.warning(f"[/search/stream] cache write failed (non-fatal): {cache_err}")
+
+            # 5) 推 done 事件（result 用 model_dump，与 /search 响应结构一致）
             yield _sse_format({
                 "event": "done",
-                "cached": True,
-                "result": cached_response,
-                "elapsed": round(time.time() - t0, 2),
+                "result": response_obj.model_dump(),
+                "elapsed": round(elapsed, 2),
             })
-            return
-
-        # 2) 正常路径：流式跑 LangGraph
-        yield _sse_format({"event": "started", "cached": False, "max_iter": max_iter})
-
-        accumulated: dict = dict(initial)
-        step_count = 0
-
-        try:
-            # asyncio.timeout (Python 3.11+) 在整个 astream 块外层统一计时 240s
-            async with asyncio.timeout(240.0):
-                async for chunk in search_graph.astream(initial, stream_mode="updates"):
-                    for node_name, state_update in chunk.items():
-                        if not isinstance(state_update, dict):
-                            continue
-                        # 累积 state（SearchState 是 plain TypedDict，无 reducer）
-                        accumulated.update(state_update)
-                        step_count += 1
-                        mapped = NODE_NAME_TO_STEP.get(node_name)
-                        yield _sse_format({
-                            "event": "node_complete",
-                            "node": node_name,
-                            "step": mapped if mapped is not None else step_count,
-                            "elapsed": round(time.time() - t0, 2),
-                            "iteration": accumulated.get("iteration", 0),
-                        })
-        except TimeoutError:
-            logger.warning("[/search/stream] timed out after 240s")
-            # 超时: 把预留全数归还(几乎没产生成本)
-            await _return_budget(budget)
-            yield _sse_format({
-                "event": "error",
-                "code": "timeout",
-                "message": "搜索超时（>240s）。建议缩小查询范围或降低 max_iter。",
-            })
-            return
-        except Exception:
-            logger.error("[/search/stream] error", exc_info=True)
-            # 异常: 把预留全数归还(实际成本未知,保守起见全还)
-            await _return_budget(budget)
-            yield _sse_format({
-                "event": "error",
-                "code": "internal",
-                "message": "内部服务错误，请稍后重试",
-            })
-            return
-
-        # 3) 构造最终响应
-        elapsed = time.time() - t0
-        # 预算归还: 实际花费通常远低于 budget, 归还差额避免过度预留
-        actual_cost = float(accumulated.get("total_cost_usd", 0.0))
-        diff = budget - actual_cost
-        if diff > 0.01:  # $0.01 阈值避免无意义小数运算
-            await _return_budget(diff)
-        response_obj = SearchResponse(
-            report=accumulated.get("report", ""),
-            ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:20]],
-            citation_graph=accumulated.get("citation_graph", {}),
-            total_cost_usd=round(accumulated.get("total_cost_usd", 0.0), 4),
-            total_tokens_used=accumulated.get("total_tokens_used", 0),
-            model_usage=accumulated.get("model_usage", {}),
-            iteration=accumulated.get("iteration", 0),
-            status=accumulated.get("status", "done"),
-            elapsed_seconds=round(elapsed, 2),
-        )
-
-        # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
-        # H4 修复：用 async 版本
-        # Round 2 审计 (CRITICAL-001): SSE 路径的 cache write 也必须传 provider
-        try:
-            await set_cached_async(
-                safe_query,
-                max_iter,
-                budget,
-                response_obj.model_dump(),
-                float(accumulated.get("total_cost_usd", 0.0)),
-                int(accumulated.get("total_tokens_used", 0)),
-                provider=resolved_provider,
-            )
-        except Exception as cache_err:
-            logger.warning(f"[/search/stream] cache write failed (non-fatal): {cache_err}")
-
-        # 5) 推 done 事件（result 用 model_dump，与 /search 响应结构一致）
-        yield _sse_format({
-            "event": "done",
-            "result": response_obj.model_dump(),
-            "elapsed": round(elapsed, 2),
-        })
+        finally:
+            # Round 2 CRITICAL-003: 所有路径兜底 (成功/缓存/超时/异常/取消/客户端断开)
+            # async generator 的 finally 在 GeneratorExit 时也执行, 配合 return_amount
+            # 保证任何退出方式都归还预算。await 自身包 try/except 防 GeneratorExit 干扰
+            if return_amount > 0.01:
+                try:
+                    await _return_budget(return_amount)
+                except Exception as return_err:
+                    logger.warning(
+                        f"[/search/stream] budget return failed (non-fatal): {return_err}"
+                    )
 
     return StreamingResponse(
         event_generator(),
