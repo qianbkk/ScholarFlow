@@ -23,15 +23,24 @@ MAX_RETRIES = 2
 # NEW-001 修复：模块级 AsyncClient 单例 + 禁用 async with（避免 __aexit__ 关闭连接池）
 # 正确用法：client = _get_client()  →  await client.get(...)
 # 在 FastAPI shutdown lifespan 中统一 aclose()
+#
+# DISABLE_HTTP_POOL 资源泄漏修复：
+#   旧实现：_DISABLE_POOL 模式下每次 _get_client() 都新建 httpx.AsyncClient，
+#   但返回值未保存到模块状态，close_client() 只能关 _client（永远是 None），
+#   临时 client 随函数返回被 Python 引用计数释放，连接池句柄实际泄漏到 GC。
+#   新实现：把所有临时 client 记录在 _temporary_clients set，close 时统一 aclose。
 _DISABLE_POOL = os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
 _client: httpx.AsyncClient | None = None
+_temporary_clients: set[httpx.AsyncClient] = set()
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _DISABLE_POOL:
-        # 回滚模式：每次新建 client（无连接池）
-        return httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        # 回滚模式：每次新建 client（无连接池），记录以便 close 时释放
+        c = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        _temporary_clients.add(c)
+        return c
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=TIMEOUT,
@@ -46,8 +55,14 @@ def _get_client() -> httpx.AsyncClient:
 
 
 async def close_client() -> None:
-    """FastAPI shutdown 调用：释放连接池。"""
+    """FastAPI shutdown 调用：释放所有客户端（含 DISABLE_POOL 模式下的临时 client）。"""
     global _client
+    # 先关闭所有临时 client
+    for c in list(_temporary_clients):
+        if not c.is_closed:
+            await c.aclose()
+    _temporary_clients.clear()
+    # 再关闭池化单例
     if _client is not None and not _client.is_closed:
         await _client.aclose()
     _client = None

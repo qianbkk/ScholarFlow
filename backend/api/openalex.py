@@ -19,14 +19,21 @@ SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,c
 MAX_RETRIES = 2
 
 # NEW-001 修复：模块级 AsyncClient 单例 + 不用 async with
+#
+# DISABLE_HTTP_POOL 资源泄漏修复：临时 client 记录到 _temporary_clients，
+# close 时统一 aclose（详见 semantic_scholar.py 同名修复注释）。
 _DISABLE_POOL = os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
 _client: httpx.AsyncClient | None = None
+_temporary_clients: set[httpx.AsyncClient] = set()
 
 
 def _get_client() -> httpx.AsyncClient:
     global _client
     if _DISABLE_POOL:
-        return httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        # 回滚模式：每次新建 client（无连接池），记录以便 close 时释放
+        c = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        _temporary_clients.add(c)
+        return c
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=TIMEOUT,
@@ -41,8 +48,12 @@ def _get_client() -> httpx.AsyncClient:
 
 
 async def close_client() -> None:
-    """FastAPI shutdown 调用。"""
+    """FastAPI shutdown 调用：释放所有客户端（含 DISABLE_POOL 模式下的临时 client）。"""
     global _client
+    for c in list(_temporary_clients):
+        if not c.is_closed:
+            await c.aclose()
+    _temporary_clients.clear()
     if _client is not None and not _client.is_closed:
         await _client.aclose()
     _client = None
