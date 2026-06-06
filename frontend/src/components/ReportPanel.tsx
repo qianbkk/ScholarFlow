@@ -10,9 +10,19 @@ interface Props {
   report: string;
   loading: boolean;
   query: string;
+  // Round 4 U4: 错误状态 + 重试
+  // App.tsx 若已持有 useSearch 暴露的 error/lastQuery，可作为 prop 传入。
+  // 本次 PR 受约束不能改 App.tsx，所以这里设为 optional，
+  // 父组件后续接入时只需多传两个 prop + onRetry 即可，无需再改 ReportPanel。
+  errorMsg?: string | null;
+  lastQuery?: string | null;
+  onRetry?: (query: string) => void;
 }
 
-export function ReportPanel({ report, loading, query }: Props) {
+export function ReportPanel({
+  report, loading, query,
+  errorMsg = null, lastQuery = null, onRetry,
+}: Props) {
   const [copied, setCopied] = useState(false);
 
   const html = useMemo(() => {
@@ -105,12 +115,35 @@ export function ReportPanel({ report, loading, query }: Props) {
           </div>
         )}
 
-        {!loading && !report && (
+        {!loading && !report && !errorMsg && (
           <div className="bg-white border border-dashed border-slate-300 rounded-lg p-12 text-center">
             <p className="text-slate-500 text-sm">左侧输入研究问题并点击「搜索」开始</p>
             <p className="text-slate-400 text-xs mt-2">
               ScholarFlow 会自动从 Semantic Scholar + OpenAlex 拉取候选论文，并生成结构化综述。
             </p>
+          </div>
+        )}
+
+        {/* Round 4 U4: 错误状态显示 + 重试按钮
+            此前错误状态仅显示"请稍后重试"文本，无重试按钮，
+            用户必须刷新页面才能再次搜索，体验差。
+            修复：当 errorMsg 存在时，渲染红色错误块 + 重试按钮。
+            优先级：errorMsg > report > 空状态（三者互斥展示）。 */}
+        {!loading && !report && errorMsg && (
+          <div
+            className="bg-red-50 border border-red-200 rounded-md p-4 text-center"
+            data-testid="report-error"
+          >
+            <p className="text-red-700 text-sm mb-3">{errorMsg}</p>
+            {(lastQuery || query) && onRetry && (
+              <button
+                type="button"
+                onClick={() => onRetry(lastQuery || query)}
+                className="px-4 py-1.5 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 transition"
+              >
+                重试
+              </button>
+            )}
           </div>
         )}
 
