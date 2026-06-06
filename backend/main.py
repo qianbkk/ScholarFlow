@@ -90,9 +90,6 @@ _PROVIDER_META = {
 # /providers 返回误导性的 has_key=true，前端选择后真实调用失败 → 静默
 # fallback 到 mock，用户看到"当前为 mock 模式"。这里在 lifespan + 定期
 # 用最小 API 调用 (max_tokens=1) 验证 key, 缓存结果。
-import asyncio
-import time as _time
-
 _PROVIDER_HEALTH_CACHE: dict[str, tuple[bool, float]] = {}
 _PROVIDER_HEALTH_TTL_SECONDS = 300.0  # 5 min — 比 startup 一次更可靠
 
@@ -198,8 +195,6 @@ def _get_providers_with_keys() -> list[dict]:
 
 async def _refresh_provider_health_cache() -> None:
     """后台任务：刷新所有 provider 的真实 key 可用性。"""
-    import logging
-    logger = logging.getLogger(__name__)
     pids = list(_PROVIDER_META.keys())
     for pid in pids:
         try:
@@ -239,7 +234,6 @@ async def lifespan(app: FastAPI):
     # 让所有子 logger 都自动带上 request_id 字段。
     setup_logging()
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
-    import asyncio
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_proxy)
     logger.info("[lifespan] proxy cache pre-warmed, HTTP pool ready")
