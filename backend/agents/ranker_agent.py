@@ -34,6 +34,22 @@ _VENUE_BONUS = {
     "AISTATS": 0.15, "CCS": 0.15, "USENIX": 0.15, "SOSP": 0.3,
     "OSDI": 0.3, "ICRA": 0.15, "IROS": 0.15, "MICCAI": 0.2,
     "Interspeech": 0.2, "ICML Workshop": 0.1, "ACL Workshop": 0.1,
+    # 数据库
+    "SIGMOD": 0.25, "VLDB": 0.25,
+    # 软件工程
+    "FSE": 0.2, "ICSE": 0.2,
+    # HCI
+    "CHI": 0.2,
+    # 语言模型会议 (2024+)
+    "COLM": 0.3,
+    # WWW 正式名称
+    "TheWebConf": 0.2,
+    # 图形学
+    "SIGGRAPH": 0.3,
+    # 理论 CS
+    "STOC": 0.3, "FOCS": 0.3,
+    # 计算生物学
+    "RECOMB": 0.25,
 }
 
 
@@ -50,92 +66,6 @@ def _authority_score(citation_count: int, venue: str = "") -> float:
             break
     bonus = _VENUE_BONUS.get(venue, 0.0)
     return min(10.0, base + bonus)
-
-
-async def _score_relevance(paper: Paper, query: str) -> tuple[float, dict]:
-    """相关性 LLM 评分（独立信号）。"""
-    from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
-    safe_query = wrap_user_input(query, tag="user_query")
-    # 论文 title/abstract 来自外部 API，是间接注入向量，也要隔离
-    safe_paper = wrap_user_input(
-        f"Title: {paper.title}\nAbstract: {paper.abstract[:250]}",
-        tag="paper",
-    )
-    prompt = f"""Rate how relevant this paper is to the research query.
-
-{safe_query}
-
-{safe_paper}
-
-Respond with JSON only:
-{{"relevance": <number 0-10>, "reason": "<one sentence>"}}
-{isolation_system_suffix()}"""
-
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=80, json_mode=True)
-    data = _extract_json_object(text)
-    if data and "relevance" in data:
-        try:
-            score = float(data["relevance"])
-            score = max(0.0, min(10.0, score))
-        except Exception:
-            score = 5.0
-    else:
-        # 兜底：基于标题关键词重合度
-        score = 5.0
-        query_words = set(query.lower().split())
-        title_words = set(paper.title.lower().split())
-        overlap = len(query_words & title_words)
-        if overlap >= 3:
-            score = 7.5
-        elif overlap >= 1:
-            score = 6.0
-    return score, usage
-
-
-async def _score_consistency(paper: Paper, query: str) -> tuple[float, dict]:
-    """一致性 LLM 评分（第三维独立信号）：
-    评估论文的结论/方法是否与查询所在领域的主流观点对齐，
-    以及论文结论的内部一致性。
-    """
-    from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
-    safe_query = wrap_user_input(query, tag="user_query")
-    safe_paper = wrap_user_input(
-        f"Title: {paper.title}\nAbstract: {paper.abstract[:250]}",
-        tag="paper",
-    )
-    prompt = f"""Evaluate the internal consistency and field-alignment of this paper's claims.
-
-{safe_query}
-
-{safe_paper}
-
-Scoring criteria:
-- 8-10: Conclusions are well-supported, method clearly explained, aligns with mainstream views
-- 5-7:  Generally consistent, minor gaps in method/result narrative
-- 1-4:  Internal contradictions, weak support for claims, or contradicts mainstream view
-
-Respond with JSON only:
-{{"consistency": <number 0-10>, "reason": "<one sentence>"}}
-{isolation_system_suffix()}"""
-
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=80, json_mode=True)
-    data = _extract_json_object(text)
-    if data and "consistency" in data:
-        try:
-            score = float(data["consistency"])
-            score = max(0.0, min(10.0, score))
-        except Exception:
-            score = 6.0
-    else:
-        # 兜底 mock：基于年份+venue 做粗略估计
-        # 老论文（≥ 5 年）通常方法论已成共识，得分略高
-        # 顶会论文通常叙述规范，得分略高
-        score = 6.0
-        if paper.year and paper.year < 2018:
-            score = 7.0
-        if paper.venue in ("NeurIPS", "ICML", "ICLR", "Nature", "Science"):
-            score = min(8.0, score + 0.5)
-    return score, usage
 
 
 async def _score_papers_combined_batch(
