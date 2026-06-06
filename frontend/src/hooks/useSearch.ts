@@ -81,6 +81,9 @@ export function useSearch() {
   const esRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fallbackStartRef = useRef<number>(0);
+  // Round 5 S-5: 跟踪当前 SSE 流的 request_id, reset 时发给后端 /search/cancel
+  // 前端生成的短 UUID, 不用后端的 X-Request-ID (SSE EventSource 不暴露响应头)
+  const requestIdRef = useRef<string | null>(null);
   // H6: generation counter — bumped on every search / reset.
   // Captured per-call (`myGen`) so a late SSE event from a previous search
   // (or a reset search) is recognized as stale and ignored.
@@ -135,6 +138,14 @@ export function useSearch() {
       setCurrentStep(0);
       setElapsedSec(0);
       setUsingFallback(false);
+
+      // Round 5 S-5: 生成 request_id, 让 reset 时能告诉后端停哪条 in-flight pipeline
+      // 用 crypto.randomUUID 短前缀, 跟后端 SearchCancelRequest.request_id 字段对齐
+      requestIdRef.current =
+        (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+        ).replace(/-/g, '').slice(0, 12);
 
       // H5: 关闭旧 EventSource（在 new EventSource 之前显式关掉，避免短暂重叠）
       if (esRef.current) {
@@ -349,6 +360,22 @@ export function useSearch() {
     // H6: bump generation so any in-flight fallback .then() / SSE late
     // events from the cancelled search see a stale `myGen` and bail.
     genRef.current += 1;
+    // Round 5 S-5: 真调 /search/cancel 端点, 让后端有机会停 in-flight pipeline
+    // 之前 reset 只关前端 EventSource, 后端 SSE 仍可能继续跑完整个 graph (浪费 cost)
+    // 现在 fire-and-forget 调 cancel 端点; 失败静默 (cancel 是 best-effort)
+    if (requestIdRef.current) {
+      const rid = requestIdRef.current;
+      requestIdRef.current = null;
+      // 不 await: reset 应该是同步的, cancel 走后台
+      void fetch('/api/search/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ request_id: rid }),
+      }).catch((e) => {
+        // 网络错也静默, 用户体验上 cancel 是 best-effort
+        console.warn('[/search/cancel] request failed:', e);
+      });
+    }
     setResult(null);
     setError(null);
     setLastQuery('');
