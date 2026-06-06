@@ -22,11 +22,16 @@ async def query_refine_node(state: SearchState) -> SearchState:
     safe_query = wrap_user_input(state['original_query'], tag="user_query")
     # 论文标题来自外部 API (Semantic Scholar / OpenAlex)，是间接注入向量
     # 同样用 XML 标签隔离
-    top5_summary = "\n".join([
-        f"- [{p.get('year','')}] {p.get('title','')} (relevance: {p.get('relevance_score',0):.1f})"
-        for p in ranked[:5]
-    ])
-    safe_top5 = wrap_user_input(top5_summary, tag="paper_list")
+    # Round 5 S-1: 缓存 top5_summary 字符串, 跨 retry / 循环复用,
+    # 避免每次重算 ranked[:5] -> "\n".join(...) -> wrap_user_input。
+    if "top5_summary_cache" in state and state["top5_summary_cache"]:
+        safe_top5 = state["top5_summary_cache"]
+    else:
+        top5_summary = "\n".join([
+            f"- [{p.get('year','')}] {p.get('title','')} (relevance: {p.get('relevance_score',0):.1f})"
+            for p in ranked[:5]
+        ])
+        safe_top5 = wrap_user_input(top5_summary, tag="paper_list")
 
     prompt = f"""You're a research strategy expert. Analyze these search results and identify gaps.
 
@@ -80,5 +85,6 @@ JSON output:
         **cost_update,
         "sub_queries": new_queries if new_queries else (state.get("sub_queries") or [state["original_query"]]),
         "iteration": iteration + 1,
-        "status": "searching",
+        "status": "checking_refine",
+        "top5_summary_cache": safe_top5,
     }

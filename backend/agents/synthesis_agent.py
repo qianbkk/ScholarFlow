@@ -41,9 +41,10 @@ def _fallback_report(query: str, ranked: list[dict]) -> str:
 async def synthesize_node(state: SearchState) -> SearchState:
     """生成结构化 Markdown 综述报告。"""
 
-    # FIX: 统一 ranked 论文数为 25 — 与 ranker_agent / graph_builder 对齐
+    # FIX: 统一 ranked 论文数为 15 — 与 ranker_agent / graph_builder 对齐
+    # Round 5 S-1: 从 25 → 15, 减少 LLM input token 浪费 (~40% 截断量)。
     # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
-    ranked = (state.get("ranked_papers") or [])[:25]
+    ranked = (state.get("ranked_papers") or [])[:15]
     query = state["original_query"]
 
     if not ranked:
@@ -53,7 +54,7 @@ async def synthesize_node(state: SearchState) -> SearchState:
         f"**[Paper {i+1}]** {p.get('title','')}\n"
         f"Year: {p.get('year','')} | Citations: {p.get('citation_count',0)} | Venue: {p.get('venue','')}\n"
         f"Relevance: {p.get('relevance_score',0):.1f}/10 | URL: {p.get('url','')}\n"
-        f"Abstract: {p.get('abstract','')[:400]}"
+        f"Abstract: {p.get('abstract','')[:200]}"
         for i, p in enumerate(ranked)
     ])
     # ===== 纵深防御 (VULN-001 Layer 1) =====

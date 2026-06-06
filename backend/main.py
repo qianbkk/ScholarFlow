@@ -566,6 +566,11 @@ class SearchResponse(BaseModel):
     iteration: int
     status: str
     elapsed_seconds: float = 0.0
+    # Round 5 M-1: 顶层信号 — 闭环 Round 4 degraded banner.
+    # is_degraded_response: 至少有一篇论文是 fallback 来的 (search agent fallback 触发)
+    # fallback_paper_count:  fallback 论文计数 (供前端 banner 显式展示)
+    is_degraded_response: bool = False
+    fallback_paper_count: int = 0
 
 
 # ===== Routes =====
@@ -690,6 +695,10 @@ async def search(req: SearchRequest, request: Request):
         else:
             return_amount = 0.0
 
+        # Round 5 M-1: 计算顶层 is_degraded 信号 (闭环 Round 4 banner)
+        ranked = final.get("ranked_papers", [])
+        fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
+        is_degraded = fallback_count > 0
         response_obj = SearchResponse(
             report=final.get("report", ""),
             ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:25]],
@@ -700,6 +709,8 @@ async def search(req: SearchRequest, request: Request):
             iteration=final.get("iteration", 0),
             status=final.get("status", "done"),
             elapsed_seconds=round(elapsed, 2),
+            is_degraded_response=is_degraded,
+            fallback_paper_count=fallback_count,
         )
 
         # 写入缓存（供下次同 query 复用，TTL 默认 24h）
@@ -941,6 +952,10 @@ async def search_stream(
                 return_amount = diff
             else:
                 return_amount = 0.0
+            # Round 5 M-1: 计算顶层 is_degraded 信号 (闭环 Round 4 banner)
+            ranked = accumulated.get("ranked_papers", [])
+            fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
+            is_degraded = fallback_count > 0
             response_obj = SearchResponse(
                 report=accumulated.get("report", ""),
                 ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:25]],
@@ -951,6 +966,8 @@ async def search_stream(
                 iteration=accumulated.get("iteration", 0),
                 status=accumulated.get("status", "done"),
                 elapsed_seconds=round(elapsed, 2),
+                is_degraded_response=is_degraded,
+                fallback_paper_count=fallback_count,
             )
 
             # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
