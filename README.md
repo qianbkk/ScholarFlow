@@ -198,6 +198,34 @@ END
 
 ---
 
+## 🛡️ Round 5 优化 (2026-06-07)
+
+历经 5 轮密集审计+优化,本轮聚焦 **生产化硬化**:
+
+| 类别 | 项 | 描述 |
+|------|---|------|
+| **M-1** | `SearchResponse.is_degraded_response` 顶层信号 | 任一 paper fallback → 整篇响应标记为 degraded,前端 banner 闭环 |
+| **M-2** | `load_dotenv(override=True)` → `False` | 修复 K8s/Docker secret 部署时静默被 .env 覆盖 |
+| **M-3** | HTTP 7 个安全头 + `TrustedHostMiddleware` | X-Frame-Options / HSTS / CSP / X-Content-Type-Options 等 |
+| **M-4** | `model_usage` 字段白名单 | 去除 cost + provider 内部名泄露 (如 `MiniMax-M3 (fallback to mock)`) |
+| **S-1** | LLM token 浪费 3 处 | synthesis 25→15 papers, abstract 400→200 字符, decompose max_tokens 800→500 |
+| **S-2** | CJK prompt 注入 denylist | 中文/日文/韩文"忽略指令"关键词 |
+| **S-3** | Pydantic 422 不回显 input | 防日志注入 + 隐私 |
+| **S-4** | `/search/cancel` 限流 + 校验 | 10/minute + request_id 长度/charset |
+| **S-5** | 前端真调 `/search/cancel` | reset 不只关 EventSource,让后端停 in-flight pipeline |
+| **M-5** | useSearch setInterval 4Hz → 1Hz | 减少 75% setState 次数 (800 re-render → 200) |
+| **S-8** | D3 alphaDecay 调优 | 加快收敛 1 倍, 拖拽停止更平滑 |
+| **SIMPLIFY** | 抽 `_build_search_response` helper | 消除 /search + /search/stream ~30 行重复 |
+| **SIMPLIFY** | 删 `usingFallback` 死状态 | 前端 0 处读的 state + 4 处 set |
+| **TEST** | 7 个新测试 | 覆盖 M-1/M-3/M-4/S-3/S-4 |
+| **DEFER** | 9 项入 `docs/FUTURE_TASKS.md` | Dockerfile / 多 worker / K8s / 日志结构化 / etc. |
+
+**总 commit 数**: 第 5 轮 **15 个 commit**(含 docs 追加),累计 5 轮共 **~60+ commits**。
+
+详见 `docs/FUTURE_TASKS.md` 了解推迟项。
+
+---
+
 ## 🔐 切换到真实 LLM 模式
 
 编辑 `.env`：
