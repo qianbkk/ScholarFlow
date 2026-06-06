@@ -9,6 +9,7 @@ from backend.config import (
     ROUTER_QUALITY_THRESHOLD_PAPERS,
 )
 from backend.models.state import SearchState
+from backend.utils.budget_guard import check_budget  # P0-1: 硬上限辅助
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,12 @@ def should_refine(state: SearchState) -> str:
     """
     决定是继续迭代优化（refine）还是直接综述（synthesize）。
     返回值必须是 "refine" 或 "synthesize"。
+
+    P0-1: 在 ratio margin 检查之前,先做一次"硬上限"判断。
+        若 cost 已 >= budget, 无论剩余比例是多少, 一律走 synthesize
+        (refine 必然再花更多 token, 必超预算)。这是与 SSE 节点级
+        硬停止的双重保险: SSE 在 chunk 边界实时停止; router 在 refine
+        决策前拦截, 避免下一次 refine 调用白白启动 LLM。
     """
     iteration = state.get("iteration", 0) or 0
     max_iter = state.get("max_iterations", 3) or 3
@@ -37,6 +44,15 @@ def should_refine(state: SearchState) -> str:
     # 强制停止条件
     if iteration >= max_iter:
         logger.info(f"[Router] Max iterations ({max_iter}) reached -> synthesize")
+        return "synthesize"
+
+    # P0-1 硬上限: cost >= budget 时立即停, 不管 ratio 多少
+    # (check_budget 在 budget<=0 时返回 False, 即视为无预算约束)
+    if budget > 0 and check_budget(cost, budget):
+        logger.warning(
+            f"[Router] P0-1 hard cap reached: cost=${cost:.3f} >= "
+            f"budget=${budget:.2f} -> synthesize (skip refine)"
+        )
         return "synthesize"
 
     # FIX: 预算检查改为比例阈值。budget<=0 时不做预算检查（视为无预算约束）。

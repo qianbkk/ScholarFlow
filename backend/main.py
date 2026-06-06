@@ -35,6 +35,10 @@ from backend.utils.observability import (  # Round 2 PERF-007: 全链路 request
     get_request_id,
     setup_logging,
 )
+from backend.utils.budget_guard import (  # P0-1: 节点级预算硬停止
+    BudgetExceededError,
+    check_budget,
+)
 from backend.config import (
     BUDGET_LIMIT_USD,
     MAX_SEARCH_ITERATIONS,
@@ -611,13 +615,50 @@ async def search(req: SearchRequest, request: Request):
 
         # 240s 上限：real 模式下 8 个 LLM 调用 + 双源检索 + 引文扩展通常需 100-180s,
         # 120s 在 query 复杂时会过早超时(Phase 3 验证: AlphaFold 查询实际 135s)
-        final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
+        # P0-1: 包 try/except BudgetExceededError — 节点内主动 raise 时的兜底
+        # (当前 graph 节点不会主动 raise, 但保留扩展点, 未来 cost_tracker
+        # 节点可在 cost >= budget 时 raise 让主流程走 budget_exceeded 分支)
+        try:
+            final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
+        except BudgetExceededError as bee:
+            elapsed = time.time() - t0
+            logger.warning(
+                f"[/search] BudgetExceededError from graph: cost=${bee.cost:.4f} "
+                f">= limit=${bee.limit:.2f} node={bee.node}"
+            )
+            # 已花 bee.cost, 剩余预算全归还 (return_amount 由 finally 处理)
+            return_amount = max(0.0, req.budget - bee.cost)
+            return SearchResponse(
+                report=(
+                    f"搜索因预算超限中止: 累计开销 ${bee.cost:.4f} 已达/超过 "
+                    f"单次预算 ${bee.limit:.2f}。"
+                ),
+                ranked_papers=[],
+                citation_graph={},
+                total_cost_usd=round(bee.cost, 4),
+                total_tokens_used=0,
+                model_usage={},
+                iteration=0,
+                status="budget_exceeded",
+                elapsed_seconds=round(elapsed, 2),
+            )
         elapsed = time.time() - t0
         # H1 修复：预算已在入口处原子化预留（_check_and_reserve_budget），
         # 实际开销 ≤ req.budget（用户的 max），无需再次累加。
         # 预算归还: 实际花费通常远低于 req.budget, 归还差额避免过度预留
         # 阻塞后续请求 (e.g. 预留 2.0 / 实花 0.3 → 立即还 1.7)
         actual_cost = float(final.get("total_cost_usd", 0.0))
+        # P0-1 兜底: 即使 graph 没主动 raise, 出口处再核一次 (防御性)
+        # 正常 SSE 路径已实时硬停; 此处保护 /search 同步路径
+        budget_limit_state = float(final.get("budget_limit_usd", req.budget))
+        if check_budget(actual_cost, budget_limit_state):
+            logger.warning(
+                f"[/search] final cost ${actual_cost:.4f} >= budget "
+                f"${budget_limit_state:.2f}, marking budget_exceeded"
+            )
+            # 不改 actual_cost, 但 status 标记
+            final = dict(final)
+            final["status"] = "budget_exceeded"
         diff = req.budget - actual_cost
         if diff > 0.01:  # $0.01 阈值避免无意义小数运算
             return_amount = diff
@@ -809,6 +850,39 @@ async def search_stream(
                                 "elapsed": round(time.time() - t0, 2),
                                 "iteration": accumulated.get("iteration", 0),
                             })
+                            # P0-1: 节点级预算硬停止 — 每完成一个节点立即检查
+                            # 若 cost 已达/超预算, 推 budget_exceeded 事件后立即 return
+                            # (走 finally 归还 budget, 不再 yield done 事件)
+                            new_total = float(accumulated.get("total_cost_usd", 0.0))
+                            budget_limit = float(
+                                accumulated.get("budget_limit_usd", float("inf"))
+                            )
+                            if check_budget(new_total, budget_limit):
+                                accumulated["status"] = "budget_exceeded"
+                                logger.warning(
+                                    f"[/search/stream] P0-1 node-level budget hard stop: "
+                                    f"cost=${new_total:.4f} >= limit=${budget_limit:.2f} "
+                                    f"after node '{node_name}' (step={step_count})"
+                                )
+                                try:
+                                    yield _sse_format({
+                                        "event": "budget_exceeded",
+                                        "node": node_name,
+                                        "step": mapped if mapped is not None else step_count,
+                                        "message": (
+                                            f"节点 {node_name} 后累计开销 "
+                                            f"${new_total:.4f} 已达/超预算 "
+                                            f"${budget_limit:.2f}, 立即中断流水线"
+                                        ),
+                                        "cost_usd": round(new_total, 4),
+                                        "budget_usd": round(budget_limit, 2),
+                                    })
+                                except Exception:
+                                    # 客户端可能已断开, 静默吞掉 (finally 仍会归还预算)
+                                    pass
+                                # 实际已花 new_total, 归还差额避免过度预留
+                                return_amount = max(0.0, budget - new_total)
+                                return
             except TimeoutError:
                 logger.warning("[/search/stream] timed out after 240s")
                 # 超时: 把预留全数归还(几乎没产生成本)
