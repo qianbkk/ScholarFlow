@@ -104,8 +104,23 @@ export function QueryPanel({
             onChange={(e) => setQuery(e.target.value)}
             placeholder="输入研究问题（中英文均可）..."
             rows={2}
+            maxLength={2000}
             className="w-full text-sm border border-slate-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
           />
+          {/* Round 4 U3: 实时字符计数，防止超长 query 触发后端 400
+              > 1800 变橙色（警告接近上限），= 2000 变红色（已到硬上限）。 */}
+          <div
+            className={`text-xs mt-1 text-right ${
+              query.length >= 2000
+                ? 'text-red-600 font-medium'
+                : query.length > 1800
+                ? 'text-orange-500'
+                : 'text-slate-400'
+            }`}
+            aria-live="polite"
+          >
+            {query.length}/2000
+          </div>
 
           <div className="flex items-center gap-2 text-xs">
             <label className="flex items-center gap-1 text-slate-600">
