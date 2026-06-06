@@ -110,7 +110,7 @@ npx vite --host 127.0.0.1 --port 5173
 >     proxy_pass http://127.0.0.1:8000/;   # 注意末尾斜杠：剥掉 /api 前缀
 >     proxy_set_header Host $host;
 >     proxy_set_header X-Real-IP $remote_addr;
->     proxy_read_timeout 180s;              # 大于后端 120s 超时
+>     proxy_read_timeout 300s;              # 大于后端 240s 超时 (8 节点 LLM + 双源检索最多需 180s+)
 > }
 > ```
 
