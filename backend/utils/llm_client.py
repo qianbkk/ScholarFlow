@@ -76,10 +76,16 @@ def _get_anthropic_client(provider: str) -> Optional[anthropic.AsyncAnthropic]:
     if not cfg.get("enabled"):
         return None
     try:
+        # 超时 120s (vs 默认 30s):
+        # MiniMax-M3 等支持 thinking 模式的旗舰模型,在 max_tokens=3500 + 长 prompt
+        # 下,thinking 阶段可能消耗 30-60s。如果客户端超时,异常路径触发
+        # `_call_anthropic_compatible` 内部 try/except → 返回 "APITimeoutError" →
+        # call_llm fallback 到 mock, 用户看到"当前为 mock 模式"提示。
+        # 提升到 120s 让长 thinking + 长输出能完整跑完。
         client = anthropic.AsyncAnthropic(
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
-            timeout=30.0,
+            timeout=120.0,
             max_retries=1,
         )
         _clients[provider] = client
@@ -99,7 +105,7 @@ def _get_deepseek_client() -> Optional[AsyncOpenAI]:
         _deepseek_client = AsyncOpenAI(
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL,
-            timeout=30.0,
+            timeout=120.0,  # 同步提升: DeepSeek reasoner 长 prompt 也可能超时
             max_retries=1,
         )
         return _deepseek_client
