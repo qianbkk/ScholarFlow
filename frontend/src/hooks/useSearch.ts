@@ -93,12 +93,15 @@ export function useSearch() {
     setElapsedSec(0);
     fallbackStartRef.current = Date.now();
     if (fallbackTimerRef.current) clearInterval(fallbackTimerRef.current);
+    // Round 5 M-5: useSearch 假进度 setInterval 4Hz → 1Hz, 减少 75% setState 次数
+    // 之前 100s 流水线 × 4Hz × 2 setState = 800 re-render；现在 1Hz × 2 = 200，step 还要相等短路
     fallbackTimerRef.current = setInterval(() => {
       const sec = (Date.now() - fallbackStartRef.current) / 1000;
       setElapsedSec(sec);
       const step = Math.min(7, Math.floor(sec / 2));
-      setCurrentStep(step);
-    }, 250);
+      // 相等就不更新，避免无谓 re-render
+      setCurrentStep((prev) => (prev === step ? prev : step));
+    }, 1000);
   }, []);
 
   const stopFallbackProgress = useCallback(() => {
@@ -144,13 +147,15 @@ export function useSearch() {
       setCurrentStep(0);
       fallbackStartRef.current = Date.now();
       if (fallbackTimerRef.current) clearInterval(fallbackTimerRef.current);
+      // Round 5 M-5: SSE 前乐观假进度同样 4Hz → 1Hz, 减少 setState 风暴
       fallbackTimerRef.current = setInterval(() => {
         const sec = (Date.now() - fallbackStartRef.current) / 1000;
         setElapsedSec(sec);
         // SSE 没消息前，最多多推 1 步（"查询分解"），避免假进度走太远
         const step = Math.min(1, Math.floor(sec / 2));
-        setCurrentStep(step);
-      }, 250);
+        // 相等就不更新，避免无谓 re-render
+        setCurrentStep((prev) => (prev === step ? prev : step));
+      }, 1000);
 
       // 构造 SSE URL。Vite dev proxy: /api -> http://127.0.0.1:8000
       // provider 是可选项 — 未传时后端走 LLM_PROVIDER env
