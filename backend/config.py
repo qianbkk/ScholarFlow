@@ -8,7 +8,12 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
-load_dotenv(override=True)  # .env 总是覆盖已存在的 env 变量（避免 shell 里残留的旧 key 干扰）
+load_dotenv(override=False)  # Round 5 M-2: shell env 优先, .env 仅作默认值.
+                                # 之前 override=True 会静默吞掉 K8s/Docker secret
+                                # 注入的 ENV (Secret 走 env 注入, .env 不存在时反而是 fallback).
+                                # override=False 让 K8s ConfigMap/Secret、docker -e、
+                                # CI workflow env 等所有"外部注入"成为 source of truth,
+                                # .env 仅在本地开发时提供默认值。
 
 
 # ===== 离线运行 / Mock 模式 =====
