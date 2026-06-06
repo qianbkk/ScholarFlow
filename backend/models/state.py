@@ -47,3 +47,7 @@ class SearchState(TypedDict):
     # 状态机状态
     status: PipelineStatus
     error: Optional[str]
+
+    # LLM provider（用户可选；None → 用 LLM_PROVIDER env 兜底）
+    # 由 main.py 在 /search 与 /search/stream 入口解析后注入，agent 节点透传给 call_llm
+    provider: Optional[str]

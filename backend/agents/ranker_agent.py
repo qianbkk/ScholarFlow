@@ -16,6 +16,7 @@ PERF 优化：相关性 + 一致性 已合并为单次 LLM 调用（_score_paper
 """
 import asyncio
 import logging
+from typing import Optional
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.utils.llm_client import call_llm, merge_usage_into_state
@@ -69,7 +70,7 @@ def _authority_score(citation_count: int, venue: str = "") -> float:
 
 
 async def _score_papers_combined_batch(
-    papers: list[Paper], query: str,
+    papers: list[Paper], query: str, provider: Optional[str] = None,
 ) -> tuple[list[float], list[float], dict]:
     """Combined batch scoring: 1 LLM call returns BOTH relevance + consistency per paper.
 
@@ -108,7 +109,7 @@ Respond with JSON only, mapping paper index to BOTH scores:
   "2": {{"relevance": <0-10>, "consistency": <0-10>}},
   ...
 }}"""
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True)
+    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True, provider=provider)
     data = _extract_json_object(text)
     rel_scores: list[float] = []
     cons_scores: list[float] = []
@@ -185,10 +186,13 @@ async def rank_node(state: SearchState) -> SearchState:
     # 旧版：每篇论文 × 2 次调用 (relevance + consistency)
     # 新版：每批 × 1 次调用，同时返回两个分数
     semaphore = asyncio.Semaphore(3)
+    # 透传用户选择的 LLM provider — 5 个 agent 节点中此处最复杂
+    # （需要把 provider 传进 _combined_batch → _score_papers_combined_batch → call_llm）
+    rank_provider = state.get("provider")
 
     async def _combined_batch(batch):
         async with semaphore:
-            return await _score_papers_combined_batch(batch, query)
+            return await _score_papers_combined_batch(batch, query, provider=rank_provider)
 
     # H3 修复：gather 必须用 return_exceptions=True
     # 旧实现：单批失败（LLM 429 / JSON parse error）会传播并崩溃整个 ranker 节点，

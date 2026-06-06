@@ -10,6 +10,7 @@ import os
 import sys
 import time as _time
 from contextlib import asynccontextmanager
+from typing import Optional
 
 # 让 uvicorn 直接启动时也能找到 backend 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,10 +29,93 @@ from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.utils.cache import get_cached_async, set_cached_async  # H4: result cache (async, non-blocking)
-from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
+from backend.config import (
+    BUDGET_LIMIT_USD,
+    MAX_SEARCH_ITERATIONS,
+    LLM_PROVIDER,
+    DEEPSEEK_API_KEY,
+    get_provider_config,
+)
 
 # NEW-002 修复：logger 移至模块级
 logger = logging.getLogger(__name__)
+
+
+# ===== Provider 路由元数据（用户可选 LLM）=====
+# 给前端 /providers 端点用的展示元数据。
+# has_key 来自对应 *_API_KEY 环境变量 — 没有 key 的 provider 不在选择列表里。
+# DeepSeek 走 OpenAI 协议（不走 get_provider_config），单独处理。
+_PROVIDER_META = {
+    "kimi": {
+        "name": "Kimi (Moonshot)",
+        "flagship_model": "kimi-k2.5",
+        "fast_model": "kimi-k2.5",
+    },
+    "glm": {
+        "name": "GLM (智谱)",
+        "flagship_model": "glm-4.5",
+        "fast_model": "glm-4.5-air",
+    },
+    "minimax": {
+        "name": "MiniMax",
+        "flagship_model": "MiniMax-M3",
+        "fast_model": "MiniMax-M2.7",
+    },
+    "anthropic": {
+        "name": "Anthropic Claude",
+        "flagship_model": "claude-sonnet-4-6",
+        "fast_model": "claude-haiku-4-5-20251001",
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "flagship_model": "deepseek-reasoner",
+        "fast_model": "deepseek-chat",
+    },
+}
+
+
+def _get_providers_with_keys() -> list[dict]:
+    """返回所有可用的 provider 列表（含 has_key 状态）。
+
+    Anthropic-compatible 走 get_provider_config(provider)['enabled']；
+    DeepSeek 走 OpenAI 协议，看 DEEPSEEK_API_KEY 是否非空。
+    """
+    out: list[dict] = []
+    for pid, meta in _PROVIDER_META.items():
+        if pid == "deepseek":
+            has_key = bool(DEEPSEEK_API_KEY)
+        else:
+            cfg = get_provider_config(pid)
+            has_key = bool(cfg.get("enabled", False))
+        out.append({
+            "id": pid,
+            "name": meta["name"],
+            "flagship_model": meta["flagship_model"],
+            "fast_model": meta["fast_model"],
+            "has_key": has_key,
+        })
+    return out
+
+
+def _resolve_provider(provider: Optional[str]) -> str:
+    """解析并校验 provider；合法则返回小写 id，否则 raise 400。
+
+    规则：
+      * None 或空字符串 → 默认 LLM_PROVIDER（来自 .env）
+      * 在已配置 key 的 provider 列表里 → 返回该 id
+      * 其他 → 400 (含可用的 provider 列表)
+    """
+    candidates = _get_providers_with_keys()
+    valid_ids = {p["id"] for p in candidates}
+    if not provider:
+        return LLM_PROVIDER.lower()
+    provider = provider.strip().lower()
+    if provider not in valid_ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"不支持的 provider: {provider!r}. 可用: {sorted(valid_ids)}",
+        )
+    return provider
 
 
 @asynccontextmanager
@@ -216,6 +300,8 @@ class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="研究查询（中英文均可）")
     budget: float = Field(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0, description="单次预算上限 USD")
     max_iterations: int = Field(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, description="最大迭代轮次")
+    # 可选 LLM provider — None/空 → 用 LLM_PROVIDER env；其他 → 必须在 GET /providers 中 has_key=true
+    provider: Optional[str] = Field(default=None, max_length=64, description="LLM provider id (kimi/glm/minimax/anthropic/deepseek)")
 
 
 class PaperResult(BaseModel):
@@ -259,12 +345,26 @@ async def health():
     }
 
 
+@app.get("/providers")
+async def list_providers():
+    """返回所有可用 LLM provider 列表（含 has_key 状态 + 默认 provider）。
+
+    前端模型选择器用此端点渲染下拉 — 只展示 has_key=true 的 provider。
+    """
+    return {
+        "default_provider": LLM_PROVIDER.lower(),
+        "providers": _get_providers_with_keys(),
+    }
+
+
 @app.post("/search", response_model=SearchResponse)
 @limiter.limit("5/minute;20/hour")
 async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。"""
     # VULN-002: 全局每小时预算闸门（H1 修复：原子化 check-and-reserve）
     await _check_and_reserve_budget(req.budget)
+    # 校验 provider（如有）；无效或无 key → 400
+    provider = _resolve_provider(req.provider)
     # VULN-001 Layer 0: 入口处净化用户 query
     try:
         safe_query = sanitize_query(req.query)
@@ -290,6 +390,7 @@ async def search(req: SearchRequest, request: Request):
         "model_usage": {},
         "status": "decomposing",
         "error": None,
+        "provider": provider,
     }
 
     import time
@@ -360,7 +461,7 @@ async def root():
         "service": "ScholarFlow",
         "version": "1.0.0",
         "docs": "/docs",
-        "endpoints": ["GET /health", "POST /search", "GET /search/stream"],
+        "endpoints": ["GET /health", "GET /providers", "POST /search", "GET /search/stream"],
     }
 
 
@@ -396,10 +497,13 @@ async def search_stream(
     q: str = Query(..., min_length=1, max_length=2000, description="研究查询"),
     budget: float = Query(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0),
     max_iter: int = Query(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, alias="max_iter"),
+    provider: Optional[str] = Query(default=None, max_length=64, description="LLM provider id"),
 ):
     """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
     # H1 修复：原子化 check-and-reserve（避免 TOCTOU 竞态）
     await _check_and_reserve_budget(budget)
+    # 校验 provider
+    resolved_provider = _resolve_provider(provider)
     try:
         safe_query = sanitize_query(q)
     except ValueError as e:
@@ -424,6 +528,7 @@ async def search_stream(
         "model_usage": {},
         "status": "decomposing",
         "error": None,
+        "provider": resolved_provider,
     }
 
     import time

@@ -52,6 +52,7 @@ JSON output:
         system=isolation_system_suffix(),
         max_tokens=400,
         json_mode=True,
+        provider=state.get("provider"),
     )
 
     new_queries: list[str] = []

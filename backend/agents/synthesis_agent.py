@@ -93,6 +93,7 @@ async def synthesize_node(state: SearchState) -> SearchState:
         task_type="synthesis",
         system=SYSTEM + isolation_system_suffix(),
         max_tokens=3500,
+        provider=state.get("provider"),
     )
 
     # 兜底：LLM 失败时返回极简报告

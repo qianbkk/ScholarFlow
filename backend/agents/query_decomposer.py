@@ -73,6 +73,7 @@ Rules:
         system=SYSTEM + isolation_system_suffix(),
         max_tokens=800,
         json_mode=True,
+        provider=state.get("provider"),
     )
 
     sub_queries: list[str] = []

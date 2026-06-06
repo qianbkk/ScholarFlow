@@ -67,7 +67,7 @@ def test_rank_node_handles_batch_exception_gracefully(monkeypatch):
     REAL_RELEVANCE = 7.5
     REAL_CONSISTENCY = 8.5
 
-    async def mock_score(batch, query):
+    async def mock_score(batch, query, provider=None):
         # 用 paper_id 识别批次（gather 是并发的，call_count 不可靠）
         ids = [p.paper_id for p in batch]
         if "p10" in ids:  # batch 2（p10-p19）抛异常
@@ -121,7 +121,7 @@ def test_rank_node_handles_all_batches_failing(monkeypatch):
     papers = _make_papers(20)  # 2 batches of 10
     state = _build_state(papers)
 
-    async def mock_score(batch, query):
+    async def mock_score(batch, query, provider=None):
         raise RuntimeError("LLM unavailable")
 
     monkeypatch.setattr(ranker_agent, "_score_papers_combined_batch", mock_score)
@@ -140,7 +140,7 @@ def test_rank_node_handles_single_paper_batch(monkeypatch):
     papers = _make_papers(5)
     state = _build_state(papers)
 
-    async def mock_score(batch, query):
+    async def mock_score(batch, query, provider=None):
         raise ValueError("bad JSON")
 
     monkeypatch.setattr(ranker_agent, "_score_papers_combined_batch", mock_score)
@@ -162,7 +162,7 @@ def test_rank_node_no_exception_when_all_batches_succeed(monkeypatch):
     REAL_RELEVANCE = 8.0
     REAL_CONSISTENCY = 7.0
 
-    async def mock_score(batch, query):
+    async def mock_score(batch, query, provider=None):
         rels = [REAL_RELEVANCE] * len(batch)
         cons = [REAL_CONSISTENCY] * len(batch)
         usage = {"cost_usd": 0.001, "input_tokens": 10, "output_tokens": 5}
