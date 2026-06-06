@@ -13,6 +13,9 @@ export interface Paper {
   authority_score: number;
   consistency_score: number;   // BUG-005 修复：补齐三维评分字段
   final_score: number;
+  // Round 2 MEDIUM-001+PERF-005: 标识此论文是否来自 mock fallback 数据.
+  // 之前 backend 已写入但前端类型没声明, paper.is_fallback 永远是 undefined.
+  is_fallback?: boolean;
 }
 
 export interface GraphNode {
@@ -70,6 +73,10 @@ export interface SearchResult {
   iteration: number;
   status: string;
   elapsed_seconds: number;
+  // Round 2 MEDIUM-001+PERF-005: 整体响应是否包含 fallback 论文 (顶层聚合).
+  // QueryPanel 据此显示警告 banner. 老 cache 数据可能缺这俩字段, 故 optional.
+  is_degraded_response?: boolean;
+  fallback_paper_count?: number;
 }
 
 export interface SearchState {
