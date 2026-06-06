@@ -160,17 +160,38 @@ export function QueryPanel({
           </div>
 
           <div className="flex items-center gap-2 text-xs">
-            <button
-              type="submit"
-              disabled={loading || !query.trim()}
-              className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
-            >
-              {loading ? '搜索中...' : '搜索'}
-            </button>
+            {/* Round 6 S1: loading 时 search 按钮变取消按钮, 闭环 Round 5 S-5 后端 cancel.
+                之前 loading 期间用户无法中断 8 节点流水线 (SSE + LLM 调用可能跑 30s+),
+                按钮文案 '搜索中...' 误导用户以为在排队, 实际无取消能力.
+                现在 loading 时:
+                  - 按钮文案 '搜索中…' → '取消'
+                  - 颜色 brand-600 → rose-600 (语义化危险动作)
+                  - 行为 onClick(onReset) → 触发 useSearch.reset → POST /api/search/cancel
+                注意 type='button' (不是 'submit'), 避免点取消时误触发表单 submit. */}
+            {loading ? (
+              <button
+                type="button"
+                onClick={onReset}
+                aria-label="取消当前搜索"
+                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-1.5 rounded-md transition"
+              >
+                取消
+              </button>
+            ) : (
+              <button
+                type="submit"
+                disabled={!query.trim()}
+                className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
+              >
+                搜索
+              </button>
+            )}
             <button
               type="button"
               onClick={handleReset}
-              className="px-2.5 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50"
+              disabled={loading}
+              className="px-2.5 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={loading ? '请先取消当前搜索' : '清空表单'}
             >
               清空
             </button>
