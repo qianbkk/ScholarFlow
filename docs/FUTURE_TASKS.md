@@ -303,4 +303,81 @@
 
 ---
 
-*End of FUTURE_TASKS.md — 2026-06-06 创建,2026-06-07 追加 Round 5 审计 9 项*
+## Round 6 审计后续 (2026-06-07)
+
+### #33 [DEFER] SEC-001 prior/earlier 已存在 (打空气)
+- **位置**: `backend/utils/sanitize.py:13-37`
+- **状态**: Round 6 分类 agent 验证后确认已覆盖,关闭
+- **修复成本**: 0
+
+### #34 [DEFER] UX-001 深色模式
+- **位置**: `frontend/tailwind.config.js` + 所有组件
+- **触发条件**: 用户夜间使用 / 长时间盯屏幕
+- **影响**: 学术工具 2024-2026 标配, 当前无 → 用户流失
+- **何时重做**: 主要 UI 稳定后大重构
+- **修复成本**: 200+ 行 (每个组件加 dark: 前缀)
+
+### #35 [DEFER] UX-003 i18n 完整化
+- **位置**: 全部前端组件
+- **触发条件**: 国际化 / 海外用户
+- **影响**: 当前中英混杂, 不专业
+- **何时重做**: 准备多语言时
+- **修复成本**: 半天 (建 i18n 字典 + 全部 UI 文案走 t())
+
+### #36 [DEFER] UX-004 键盘快捷键
+- **位置**: `frontend/src/components/QueryPanel.tsx` + 全局 keydown
+- **触发条件**: 键盘流研究者用户
+- **影响**: Ctrl+K 聚焦 / Esc 取消 是 web app 标配
+- **何时重做**: 任何 UX 改版时
+- **修复成本**: 1 小时
+
+### #37 [DEFER] /docs 生产 gate (ARCH-004)
+- **位置**: `backend/main.py` lifespan
+- **触发条件**: 部署到生产环境
+- **影响**: /openapi.json + /docs 公开泄露 schema 给攻击者
+- **何时重做**: 真上 K8s 时
+- **修复成本**: 5 行 (EXPOSE_DOCS env)
+
+### #38 [DEFER] cache DB GC
+- **位置**: `backend/utils/cache.py`
+- **触发条件**: 长跑 30 天后 cache DB 单文件 >100MB
+- **影响**: 备份/迁移慢, VACUUM 慢
+- **何时重做**: 部署长期跑时
+- **修复成本**: 10 行 (定期 DELETE + VACUUM)
+
+### #39 [DEFER] budget SQLite 走 asyncio.to_thread
+- **位置**: `backend/main.py:_check_and_reserve_budget`
+- **触发条件**: 多 worker 部署 + 高并发
+- **影响**: 单进程下同步调用 < 1ms, 无感知
+- **何时重做**: 性能优化时
+- **修复成本**: 5 行
+
+### #40 [DEFER] /metrics 端点 (R5 已 defer 5 次,继续 defer)
+- **位置**: `backend/main.py` + 新增 metrics 模块
+- **触发条件**: 部署到生产环境需要 SLO 监控
+- **影响**: 无 /metrics → 无 alert / 容量规划
+- **何时重做**: 真上生产时
+- **修复成本**: 半天 (prometheus_client + 5 个 Counter/Histogram)
+
+### #41 [DEFER] X-Request-ID charset 收紧
+- **位置**: `backend/main.py:298-301`
+- **状态**: 现状已较严 `^[A-Za-z0-9_\-]+$`, 仍可考虑收紧到纯字母数字
+- **修复成本**: 1 行
+
+### #42 [DEFER] GraphPanel StrictMode 双跑
+- **位置**: `frontend/src/main.tsx:5-9` + `components/GraphPanel.tsx`
+- **触发条件**: dev 模式
+- **影响**: 200+ tick, 卡顿 1-2s
+- **何时重做**: 改 React 渲染层时
+- **修复成本**: 5 行 (useRef guard)
+
+### #43 [DEFER] Dockerfile + docker-compose
+- **位置**: 项目根
+- **触发条件**: 真生产部署
+- **影响**: 无容器化, 部署效率低, 多 worker 配置难
+- **何时重做**: 真上 K8s 时
+- **修复成本**: 半天 (Dockerfile + compose + 多 worker 配置)
+
+---
+
+*End of FUTURE_TASKS.md — 2026-06-06 创建,2026-06-07 追加 Round 5 审计 9 项 + Round 6 审计 11 项*
