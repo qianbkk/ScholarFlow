@@ -67,6 +67,13 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "kimi").lower()
 BUDGET_LIMIT_USD = float(os.getenv("BUDGET_LIMIT_USD", "2.0"))
 MAX_SEARCH_ITERATIONS = int(os.getenv("MAX_SEARCH_ITERATIONS", "3"))
 
+# ===== Router 决策阈值（条件路由：决定 rank 之后是 refine 还是 synthesize）=====
+# 当 top5 平均相关性达到阈值且论文数达到阈值时，判定结果质量足够直接出报告。
+ROUTER_QUALITY_THRESHOLD_REL = float(os.getenv("ROUTER_QUALITY_THRESHOLD_REL", "7.0"))
+ROUTER_QUALITY_THRESHOLD_PAPERS = int(os.getenv("ROUTER_QUALITY_THRESHOLD_PAPERS", "15"))
+# 剩余预算低于 (budget * (1 - margin)) 时，强制走 synthesize 避免耗尽预算。
+ROUTER_BUDGET_SAFETY_MARGIN = float(os.getenv("ROUTER_BUDGET_SAFETY_MARGIN", "0.3"))
+
 
 def get_provider_config(provider: str | None = None) -> dict:
     """

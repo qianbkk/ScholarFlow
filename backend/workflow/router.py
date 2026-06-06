@@ -1,7 +1,16 @@
 """
 条件路由：决定 rank 之后是 refine 还是 synthesize。
 """
+import logging
+
+from backend.config import (
+    ROUTER_QUALITY_THRESHOLD_REL,
+    ROUTER_QUALITY_THRESHOLD_PAPERS,
+    ROUTER_BUDGET_SAFETY_MARGIN,
+)
 from backend.models.state import SearchState
+
+logger = logging.getLogger(__name__)
 
 
 def should_refine(state: SearchState) -> str:
@@ -17,24 +26,36 @@ def should_refine(state: SearchState) -> str:
 
     # 强制停止条件
     if iteration >= max_iter:
-        print(f"[Router] Max iterations ({max_iter}) reached -> synthesize")
+        logger.info(f"[Router] Max iterations ({max_iter}) reached -> synthesize")
         return "synthesize"
 
-    if budget - cost < 0.3:
-        print(f"[Router] Low budget (${cost:.3f}/${budget:.2f}) -> synthesize")
+    if budget - cost < ROUTER_BUDGET_SAFETY_MARGIN:
+        logger.info(
+            f"[Router] Low budget (${cost:.3f}/${budget:.2f}, "
+            f"margin={ROUTER_BUDGET_SAFETY_MARGIN}) -> synthesize"
+        )
         return "synthesize"
 
     if len(ranked) < 5:
-        print(f"[Router] Too few papers ({len(ranked)}) -> refine")
+        logger.info(f"[Router] Too few papers ({len(ranked)}) -> refine")
         return "refine"
 
     # 质量检查：Top5 平均相关性
     top5 = ranked[:5]
     avg_relevance = sum((p.get("relevance_score", 0) or 0) for p in top5) / len(top5)
 
-    if avg_relevance >= 7.0 and len(ranked) >= 15:
-        print(f"[Router] Good quality (avg_rel={avg_relevance:.1f}, n={len(ranked)}) -> synthesize")
+    if (
+        avg_relevance >= ROUTER_QUALITY_THRESHOLD_REL
+        and len(ranked) >= ROUTER_QUALITY_THRESHOLD_PAPERS
+    ):
+        logger.info(
+            f"[Router] Good quality "
+            f"(avg_rel={avg_relevance:.1f}>={ROUTER_QUALITY_THRESHOLD_REL}, "
+            f"n={len(ranked)}>={ROUTER_QUALITY_THRESHOLD_PAPERS}) -> synthesize"
+        )
         return "synthesize"
 
-    print(f"[Router] Needs improvement (avg_rel={avg_relevance:.1f}, n={len(ranked)}) -> refine")
+    logger.info(
+        f"[Router] Needs improvement (avg_rel={avg_relevance:.1f}, n={len(ranked)}) -> refine"
+    )
     return "refine"
