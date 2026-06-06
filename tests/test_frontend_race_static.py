@@ -224,10 +224,12 @@ def test_h6_fallback_chain_guards_myGen(source: str) -> None:
     resolve from a cancelled search does not re-set state."""
     # Locate the fallback block (the one inside the `!receivedAnyEvent`
     # branch of onerror, NOT the `try { new EventSource } catch` early return).
-    # It is the one that contains both `searchPapers(query, budget, maxIter)`
+    # It is the one that contains both `searchPapers(query, budget, maxIter, ...)`
     # AND `myGen !== genRef.current`.
+    # provider 是 4th 可选参数 — 用 `[^;]*?` 兼容 `searchPapers(query, budget, maxIter)` 和
+    # `searchPapers(query, budget, maxIter, provider)` 两种形态。
     matches = re.findall(
-        r"searchPapers\(query, budget, maxIter\)[\s\S]+?\.finally\(\(\)\s*=>\s*\{[\s\S]+?\}\s*\)\s*;",
+        r"searchPapers\(query, budget, maxIter[^)]*\)[\s\S]+?\.finally\(\(\)\s*=>\s*\{[\s\S]+?\}\s*\)\s*;",
         source,
     )
     assert matches, "H6 FAIL: could not locate searchPapers fallback chain"

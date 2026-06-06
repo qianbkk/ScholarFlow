@@ -111,7 +111,7 @@ export function useSearch() {
   }, []);
 
   const searchWithSSE = useCallback(
-    (query: string, budget: number, maxIter: number) => {
+    (query: string, budget: number, maxIter: number, provider?: string) => {
       // 重置
       setError(null);
       setResult(null);
@@ -140,11 +140,14 @@ export function useSearch() {
       }, 250);
 
       // 构造 SSE URL。Vite dev proxy: /api -> http://127.0.0.1:8000
-      const url = `/api/search/stream?` + new URLSearchParams({
+      // provider 是可选项 — 未传时后端走 LLM_PROVIDER env
+      const params: Record<string, string> = {
         q: query,
         budget: String(budget),
         max_iter: String(maxIter),
-      }).toString();
+      };
+      if (provider) params.provider = provider;
+      const url = `/api/search/stream?` + new URLSearchParams(params).toString();
 
       let es: EventSource;
       try {
@@ -153,7 +156,7 @@ export function useSearch() {
         // 浏览器不支持 EventSource — 切到完整假进度 + 老 /search 接口
         stopFallbackProgress();
         startFallbackProgress();
-        return searchPapers(query, budget, maxIter)
+        return searchPapers(query, budget, maxIter, provider)
           .then((data) => {
             setResult(data);
             setCurrentStep(PIPELINE_STEPS.length - 1);
@@ -249,7 +252,7 @@ export function useSearch() {
           cleanup();
           stopFallbackProgress();
           startFallbackProgress();
-          searchPapers(query, budget, maxIter)
+          searchPapers(query, budget, maxIter, provider)
             .then((data) => {
               // H6: 异步回填时再校一次 generation — 防止 reset 后又被新数据覆盖
               if (myGen !== genRef.current) return;
@@ -277,7 +280,7 @@ export function useSearch() {
   );
 
   const search = useCallback(
-    async (query: string, budget = 2.0, maxIter = 3) => {
+    async (query: string, budget = 2.0, maxIter = 3, provider?: string) => {
       if (!query.trim()) {
         setError('请输入研究问题');
         return;
@@ -287,7 +290,7 @@ export function useSearch() {
       genRef.current += 1;
       setLoading(true);
       try {
-        await searchWithSSE(query, budget, maxIter);
+        await searchWithSSE(query, budget, maxIter, provider);
       } catch (e: any) {
         setError(e?.message || '搜索失败');
         setLoading(false);

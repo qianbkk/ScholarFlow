@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Paper } from '../types';
+import { fetchProviders, type ProviderInfo } from '../services/api';
 
 interface PipelineStep {
   key: string;
@@ -9,7 +10,7 @@ interface PipelineStep {
 
 interface Props {
   loading: boolean;
-  onSearch: (query: string, budget: number, maxIter: number) => void;
+  onSearch: (query: string, budget: number, maxIter: number, provider?: string) => void;
   onReset: () => void;
   papers: Paper[];
   lastQuery: string;
@@ -33,10 +34,39 @@ export function QueryPanel({
   const [query, setQuery] = useState('');
   const [budget, setBudget] = useState(2.0);
   const [maxIter, setMaxIter] = useState(3);
+  // LLM provider 选择 — 拉取后端 /providers 列表（仅 has_key=true 可见）
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState<string>('');
+  const [selectedProvider, setSelectedProvider] = useState<string>('');  // 空 = 用默认
+  const [providersLoading, setProvidersLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProvidersLoading(true);
+    fetchProviders()
+      .then((resp) => {
+        if (cancelled) return;
+        setProviders(resp.providers.filter((p) => p.has_key));
+        setDefaultProvider(resp.default_provider);
+        // 初始化为默认 provider（如果有 key），否则保持空
+        const def = resp.providers.find(
+          (p) => p.id === resp.default_provider && p.has_key
+        );
+        if (def) setSelectedProvider(def.id);
+      })
+      .catch((err) => {
+        // 静默失败：provider 下拉为空时回退到后端默认
+        console.warn('fetchProviders failed:', err);
+      })
+      .finally(() => {
+        if (!cancelled) setProvidersLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
-    onSearch(query, budget, maxIter);
+    onSearch(query, budget, maxIter, selectedProvider || undefined);
   };
 
   const useSuggestion = (s: string) => {
@@ -47,6 +77,7 @@ export function QueryPanel({
     setQuery("");
     setBudget(2.0);
     setMaxIter(3);
+    setSelectedProvider(defaultProvider);
     onReset();
   };
 
@@ -64,6 +95,25 @@ export function QueryPanel({
           />
 
           <div className="flex items-center gap-2 text-xs">
+            <label className="flex items-center gap-1 text-slate-600">
+              模型
+              <select
+                value={selectedProvider}
+                onChange={(e) => setSelectedProvider(e.target.value)}
+                disabled={providersLoading}
+                title={providersLoading ? '加载中…' : '选择 LLM provider（仅显示已配置 key 的）'}
+                className="border border-slate-300 rounded px-1.5 py-0.5 text-xs max-w-[120px] focus:outline-none focus:ring-1 focus:ring-brand-500"
+              >
+                {providers.length === 0 && !providersLoading && (
+                  <option value="">（无可用 provider）</option>
+                )}
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id} title={p.flagship_model}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </label>
             <label className="flex items-center gap-1 text-slate-600">
               预算
               <input
@@ -87,10 +137,13 @@ export function QueryPanel({
                 className="w-12 border border-slate-300 rounded px-1.5 py-0.5 text-center"
               />
             </label>
+          </div>
+
+          <div className="flex items-center gap-2 text-xs">
             <button
               type="submit"
               disabled={loading || !query.trim()}
-              className="ml-auto flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
+              className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
             >
               {loading ? '搜索中...' : '搜索'}
             </button>
