@@ -122,9 +122,10 @@ def test_security_headers_middleware():
 
 def test_model_usage_summary_whitelist():
     """构造 model_usage 含 "MiniMax-M3 (fallback to mock)" key, 验证序列化后:
-      * 只剩 "MiniMax-M3" (后缀 "(fallback to mock)" 被切掉)
+      * 内部 provider 名 (MiniMax-M3 / kimi-k2.5) 都被映射到公开白名单 (language_model)
+        (R6 M3 fix: 之前 R5 M-4 只切 " (fallback to mock)" 后缀, 仍泄露 provider 内部名)
       * 没有 cost 字段 (白名单只保留 tokens)
-      * 多个 entry 都按规则处理
+      * 多个 entry 合并到同一 category 时, tokens 求和
     """
     from backend.main import _build_search_response
 
@@ -153,27 +154,34 @@ def test_model_usage_summary_whitelist():
     resp = _build_search_response(state, elapsed=0.0)
     summary = resp.model_usage_summary
 
-    # 1) 验证 key 被白名单化 (切掉 " (fallback to mock)" 后缀)
-    assert "MiniMax-M3" in summary, (
-        f"M-4 期望 'MiniMax-M3' 在 summary 中, got keys: {list(summary.keys())}"
+    # 1) 验证 R6 M3: provider 内部名都被映射到公开白名单 (language_model)
+    #    不再泄露 "MiniMax-M3" / "kimi-k2.5" 等具体 provider / version
+    assert "language_model" in summary, (
+        f"M-3 期望 'language_model' 在 summary 中, got keys: {list(summary.keys())}"
+    )
+    assert "MiniMax-M3" not in summary, (
+        "M-3 失败: provider 内部名 'MiniMax-M3' 泄露到 summary"
     )
     assert "MiniMax-M3 (fallback to mock)" not in summary, (
-        "M-4 失败: provider 内部后缀没被剥掉"
+        "M-3 失败: provider 内部后缀没被剥掉"
     )
-    assert "kimi-k2.5" in summary, (
-        f"M-4 期望 'kimi-k2.5' 在 summary 中, got keys: {list(summary.keys())}"
+    assert "kimi-k2.5" not in summary, (
+        f"M-3 失败: provider 内部名 'kimi-k2.5' 泄露到 summary, "
+        f"got keys: {list(summary.keys())}"
     )
 
     # 2) 验证 value 只剩 tokens (无 cost_usd / provider 内部名)
     for model_name, usage in summary.items():
         assert set(usage.keys()) == {"tokens"}, (
-            f"M-4 失败: {model_name!r} 的字段应该是只 {{'tokens'}}, "
+            f"M-3 失败: {model_name!r} 的字段应该是只 {{'tokens'}}, "
             f"got {set(usage.keys())}. 完整 dict: {usage}"
         )
 
-    # 3) 验证 tokens 数值正确 (100 + 50 = 150)
-    assert summary["MiniMax-M3"]["tokens"] == 100
-    assert summary["kimi-k2.5"]["tokens"] == 50
+    # 3) 验证 tokens 数值: 100 + 50 = 150 (合并到同一 category)
+    assert summary["language_model"]["tokens"] == 150, (
+        f"M-3 失败: language_model tokens 应该是 100+50=150, "
+        f"got {summary['language_model']['tokens']}"
+    )
 
     # 4) 边界: model_usage 缺 / None / 空 dict → 优雅降级
     state_no_usage = dict(state)

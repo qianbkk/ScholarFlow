@@ -274,6 +274,15 @@ app = FastAPI(
 )
 
 
+# Round 6 S6: 生产环境用 EXPOSE_DOCS env 默认关 /docs + /openapi.json, 防 schema 枚举攻击
+# 默认 dev 仍开启 (EXPOSE_DOCS=true), 部署时设 EXPOSE_DOCS=false 即可关闭
+# 关闭后 /openapi.json /docs /redoc 三个端点全部 404, 但 /search /health 不受影响
+if os.getenv("EXPOSE_DOCS", "true").lower() != "true":
+    app.docs_url = None
+    app.redoc_url = None
+    app.openapi_url = None
+
+
 # Round 2 PERF-007: 全链路 request_id 追踪, middleware + contextvars 注入 logger, 端到端可观测性
 # Round 4 R1: X-Request-ID header 加长度 + charset 校验, 防止恶意 10MB header 撑爆日志
 _MAX_RID_LEN = 128
