@@ -611,6 +611,58 @@ class SearchResponse(BaseModel):
     fallback_paper_count: int = 0
 
 
+# Round 5 SIMPLIFY: 抽 _build_search_response helper 统一 /search + /search/stream 响应构造,
+# 消除 ~30 行重复 (DUP-001+002). 之前两处各 ~30 行复制, 改一处就要同步另一处, 容易漂移.
+def _build_search_response(
+    state_dict: dict,
+    elapsed: float,
+    from_cache: bool = False,
+    cached_payload: dict | None = None,
+) -> "SearchResponse":
+    """Round 5 SIMPLIFY: 抽 _build_search_response 统一 /search 和 /search/stream 的响应构造.
+
+    之前两处各 ~30 行重复, 改一处就要同步另一处 (DUP-001+002).
+
+    Args:
+        state_dict: LangGraph 累积的 state (含 ranked_papers/model_usage/...)
+        elapsed: 已用秒数 (从 t0 到现在的 wall-clock)
+        from_cache: True 表示用 cached_payload (跳过 model_usage 重新计算, 但仍补 is_degraded 派生)
+        cached_payload: from_cache=True 时, SQLite 缓存里的 dict (已含 ranked_papers)
+    """
+    if from_cache and cached_payload is not None:
+        # 缓存命中: 直接用 cached payload, 但补上 is_degraded 派生
+        ranked = cached_payload.get("ranked_papers", [])
+        fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
+        cached_payload["is_degraded_response"] = fallback_count > 0
+        cached_payload["fallback_paper_count"] = fallback_count
+        return SearchResponse(**cached_payload)
+
+    # 正常路径
+    ranked = state_dict.get("ranked_papers", []) or []
+    fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
+    is_degraded = fallback_count > 0
+
+    # model_usage 白名单 (M-4)
+    model_usage_summary = {
+        (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
+        for k, v in (state_dict.get("model_usage") or {}).items()
+    }
+
+    return SearchResponse(
+        report=state_dict.get("report", ""),
+        ranked_papers=[PaperResult(**p) for p in ranked[:25]],
+        citation_graph=state_dict.get("citation_graph", {}),
+        total_cost_usd=round(float(state_dict.get("total_cost_usd", 0.0)), 4),
+        total_tokens_used=state_dict.get("total_tokens_used", 0),
+        model_usage_summary=model_usage_summary,
+        iteration=state_dict.get("iteration", 0),
+        status=state_dict.get("status", "done"),
+        elapsed_seconds=round(elapsed, 2),
+        is_degraded_response=is_degraded,
+        fallback_paper_count=fallback_count,
+    )
+
+
 # ===== Routes =====
 
 @app.get("/health")
@@ -679,7 +731,10 @@ async def search(req: SearchRequest, request: Request):
                 f"cost=${cached_cost:.4f} tokens={cached_tokens}"
             )
             # 缓存命中: 本次未消耗 LLM, 全数归还 (return_amount 保持 = req.budget)
-            return SearchResponse(**cached_response)
+            # Round 5 SIMPLIFY: 走 _build_search_response helper, 自动补 is_degraded 派生
+            return _build_search_response(
+                state_dict={}, elapsed=0.0, from_cache=True, cached_payload=cached_response
+            )
 
         # 240s 上限：real 模式下 8 个 LLM 调用 + 双源检索 + 引文扩展通常需 100-180s,
         # 120s 在 query 复杂时会过早超时(Phase 3 验证: AlphaFold 查询实际 135s)
@@ -733,30 +788,8 @@ async def search(req: SearchRequest, request: Request):
         else:
             return_amount = 0.0
 
-        # Round 5 M-1: 计算顶层 is_degraded 信号 (闭环 Round 4 banner)
-        ranked = final.get("ranked_papers", [])
-        fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
-        is_degraded = fallback_count > 0
-        # Round 5 M-4: model_usage 白名单 — 去除 cost + provider 内部名
-        # 只保留 { model: { tokens } }, 去掉 " (fallback to mock)" 后缀
-        model_usage_raw = final.get("model_usage") or {}
-        model_usage_summary = {
-            (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
-            for k, v in model_usage_raw.items()
-        }
-        response_obj = SearchResponse(
-            report=final.get("report", ""),
-            ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:25]],
-            citation_graph=final.get("citation_graph", {}),
-            total_cost_usd=round(final.get("total_cost_usd", 0.0), 4),
-            total_tokens_used=final.get("total_tokens_used", 0),
-            model_usage_summary=model_usage_summary,
-            iteration=final.get("iteration", 0),
-            status=final.get("status", "done"),
-            elapsed_seconds=round(elapsed, 2),
-            is_degraded_response=is_degraded,
-            fallback_paper_count=fallback_count,
-        )
+        # Round 5 SIMPLIFY: 走 _build_search_response helper 统一构造 (DUP-001+002)
+        response_obj = _build_search_response(final, elapsed)
 
         # 写入缓存（供下次同 query 复用，TTL 默认 24h）
         # H4 修复：用 async 版本
@@ -1002,30 +1035,8 @@ async def search_stream(
                 return_amount = diff
             else:
                 return_amount = 0.0
-            # Round 5 M-1: 计算顶层 is_degraded 信号 (闭环 Round 4 banner)
-            ranked = accumulated.get("ranked_papers", [])
-            fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
-            is_degraded = fallback_count > 0
-            # Round 5 M-4: model_usage 白名单 — 去除 cost + provider 内部名
-            # 只保留 { model: { tokens } }, 去掉 " (fallback to mock)" 后缀
-            model_usage_raw = accumulated.get("model_usage") or {}
-            model_usage_summary = {
-                (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
-                for k, v in model_usage_raw.items()
-            }
-            response_obj = SearchResponse(
-                report=accumulated.get("report", ""),
-                ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:25]],
-                citation_graph=accumulated.get("citation_graph", {}),
-                total_cost_usd=round(accumulated.get("total_cost_usd", 0.0), 4),
-                total_tokens_used=accumulated.get("total_tokens_used", 0),
-                model_usage_summary=model_usage_summary,
-                iteration=accumulated.get("iteration", 0),
-                status=accumulated.get("status", "done"),
-                elapsed_seconds=round(elapsed, 2),
-                is_degraded_response=is_degraded,
-                fallback_paper_count=fallback_count,
-            )
+            # Round 5 SIMPLIFY: 走 _build_search_response helper 统一构造 (DUP-001+002)
+            response_obj = _build_search_response(accumulated, elapsed)
 
             # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
             # H4 修复：用 async 版本
