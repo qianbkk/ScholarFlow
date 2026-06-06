@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time as _time
 from contextlib import asynccontextmanager
@@ -272,6 +273,11 @@ app = FastAPI(
 
 
 # Round 2 PERF-007: 全链路 request_id 追踪, middleware + contextvars 注入 logger, 端到端可观测性
+# Round 4 R1: X-Request-ID header 加长度 + charset 校验, 防止恶意 10MB header 撑爆日志
+_MAX_RID_LEN = 128
+_RID_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
 @app.middleware("http")
 async def request_id_middleware(request, call_next):
     """为每个 HTTP 请求注入 request_id。
@@ -282,7 +288,11 @@ async def request_id_middleware(request, call_next):
       3. 写入 contextvar, 让 logger 自动 filter 拾取
       4. 写回响应 header, 方便客户端 / 上游日志关联
     """
-    rid = request.headers.get("X-Request-ID") or new_request_id()
+    client_rid = request.headers.get("X-Request-ID")
+    if client_rid and len(client_rid) <= _MAX_RID_LEN and _RID_PATTERN.match(client_rid):
+        rid = client_rid
+    else:
+        rid = new_request_id()  # 校验失败回退到服务端生成
     set_request_id(rid)
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
