@@ -27,7 +27,16 @@ _INJECTION_PATTERNS = re.compile(
     r"you\s+are\s+now\s+|"
     r"pretend\s+(to\s+be|you('re|are))|"
     r"role\s*:\s*(system|assistant)|"
-    r"</?\s*(system|prompt|context|instructions?)\s*>",
+    r"</?\s*(system|prompt|context|instructions?)\s*>|"
+    # ===== Round 5 S-2: CJK 注入词（中文/日文/韩文 ignore/forget 指令）=====
+    # 攻击者用 CJK 拼出 "忽略之前的指令" / "システムプロンプト" 等绕过英文 denylist。
+    # 这里覆盖常见 CJK 注入向量 — 用 `(?:...)` 非捕获组 + `.*?` 任意间隔字符容忍句中插入。
+    r"忽略.*?(指令|命令|提示|规则|设定)|"  # 中文: "忽略之前的指令"
+    r"忘记.*?(之前的|前面的|以上|系统).*?(指令|命令|提示|规则|设定)|"  # 中文: "忘记之前的指令"
+    r"系统提示词|system\s*prompt|role\s*play|"  # 角色扮演注入向量
+    r"假装.*?是|扮演.*?角色|你现在是|"  # 中文: "假装你是" / "扮演...角色"
+    r"指示を無視|前の指示を忘れて|"  # 日文: "指示を無視" / "前の指示を忘れて"
+    r"이전\s*지시.*?무시|이전\s*지시.*?잊어",  # 韩文: "이전 지시 무시" / "이전 지시 잊어"
     re.IGNORECASE,
 )
 
