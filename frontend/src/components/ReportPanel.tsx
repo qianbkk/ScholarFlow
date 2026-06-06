@@ -65,7 +65,8 @@ export function ReportPanel({ report, loading, query }: Props) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // 延迟撤销: a.click() 触发下载是异步的, 立即撤销会导致 Firefox/Safari 下载失败
+    setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
   return (
