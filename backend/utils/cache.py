@@ -15,6 +15,9 @@ utils.cache — 查询结果 SQLite 缓存（避免重复跑流水线）
 H4 修复：async 变体（get_cached_async / set_cached_async）：
 - 旧实现的 time.sleep(0.05 * 2**attempt) 在 async 调用栈中会阻塞事件循环
 - 新实现的 asyncio.sleep + asyncio.to_thread 把 SQLite I/O 和退避 sleep 都 offload
+
+P1 修复：cache_key 加 provider 维度（跨 provider 同 query 缓存隔离）。
+P1 修复：_init_db_once 标志位（避免每次 get_cached/set_cached 都做 schema 检查）。
 """
 from __future__ import annotations
 
@@ -35,6 +38,15 @@ _DB = _CACHE_DIR / "search_cache.sqlite"
 _BUSY_TIMEOUT_MS = 5000
 # OperationalError 重试上限（指数退避 50ms / 100ms / 200ms）
 _MAX_RETRIES = 3
+
+# P1 修复：_init_db_once 标志位，避免每个 cache 操作都跑一次 schema 检查。
+# 旧实现：get_cached / set_cached / get_cached_async / set_cached_async 都会调 _init_db()，
+# 每次都做 SELECT sqlite_master + PRAGMA table_info + CREATE TABLE 检查，浪费 ~2-5ms。
+# 新实现：进程内仅首次跑 _init_db()，后续直接跳过。
+# 同时记录上次 init 的 DB 路径：如果 monkeypatch / test fixture 切换了
+# _DB 到新路径（例如测试隔离用 tmp_path），下次访问会自动 re-init。
+_DB_INITIALIZED = False
+_DB_INITIALIZED_PATH: str | None = None
 
 
 def _connect_with_wal() -> sqlite3.Connection:
@@ -130,9 +142,53 @@ def _init_db() -> None:
         conn.close()
 
 
-def cache_key(query: str, max_iterations: int, budget: float) -> str:
+def _init_db_once() -> None:
+    """P1 优化：首次初始化后跳过 schema 检查。
+
+    旧实现：每次 get_cached/set_cached 都跑 _init_db() — 每次 ~2-5ms 的
+    SELECT sqlite_master + PRAGMA table_info 检查。在 /search 高频调用场景下
+    累积开销可观。新实现：进程内模块级标志 _DB_INITIALIZED 保证 _init_db()
+    只在首次调用时执行。
+
+    DB 路径变更自纠正：若测试 fixture / monkeypatch 切换了 _DB 到新路径
+    （典型场景：test_cache_no_query_text 用 tmp_path 隔离 DB），下次调用
+    会检测到 _DB 路径与上次 init 不同，自动 re-init。这样测试可以独立
+    切 DB 而不必关心 _DB_INITIALIZED 状态。
+
+    注意：
+      - 线程安全：CPython GIL 下 bool 赋值是原子的，单进程多线程场景无竞争。
+      - 进程隔离：每个 worker 进程独立维护 _DB_INITIALIZED，跨进程仍会
+        各跑一次（一次/进程 = 可接受）。
+      - schema migration 路径：仍由 _init_db() 自身处理（首次调用检测旧
+        schema 并就地迁移），所以保留幂等性。
+    """
+    global _DB_INITIALIZED, _DB_INITIALIZED_PATH
+    if _DB_INITIALIZED and _DB_INITIALIZED_PATH == str(_DB):
+        return
+    _init_db()
+    _DB_INITIALIZED = True
+    _DB_INITIALIZED_PATH = str(_DB)
+
+
+def cache_key(
+    query: str,
+    max_iterations: int,
+    budget: float,
+    provider: str | None = None,
+) -> str:
+    """P1 修复：cache_key 增加 provider 维度，跨 LLM provider 同 query 不再串。
+
+    旧实现：只 hash (query, max_iterations, budget)，导致用 kimi 搜的缓存结果
+    被 glm/anthropic 等 provider 误命中。修复后：相同 query 在不同 provider 下
+    生成不同 cache key，避免跨 provider 缓存污染。
+
+    向后兼容：provider 参数默认 None → 拼成 "default"，与旧 key 行为不同
+    （旧 key 字符串里没有 provider 段）。这是一个**有意的破坏** — 旧 cache
+    行（如果有）会被视为新 key 失效，触发一次重算。考虑到旧 key 没有 provider
+    信息，保留旧 key 反而会跨 provider 污染，所以这里接受一次失效。
+    """
     return hashlib.sha256(
-        f"{query.strip().lower()}|{max_iterations}|{budget}".encode()
+        f"{query.strip().lower()}|{max_iterations}|{budget}|{provider or 'default'}".encode()
     ).hexdigest()[:32]
 
 
@@ -140,7 +196,7 @@ def cache_key(query: str, max_iterations: int, budget: float) -> str:
 
 def _get_cached_sync(key: str, ttl_seconds: int):
     """同步 SQLite cache 读。被 get_cached_async 通过 asyncio.to_thread 调用。"""
-    _init_db()
+    _init_db_once()
     conn = _connect_with_wal()
     try:
         row = conn.execute(
@@ -162,7 +218,7 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
 
     H8 修复：不再接受 `query` 参数 — query 文本不落盘，cache 里只存 hash。
     """
-    _init_db()
+    _init_db_once()
     payload = (
         key,
         json.dumps(response, ensure_ascii=False),
@@ -186,8 +242,13 @@ def get_cached(
     max_iterations: int,
     budget: float,
     ttl_seconds: int | None = None,
+    provider: str | None = None,
 ):
     """读取缓存（同步版本 — 保留向后兼容，测试和遗留同步调用方使用）。
+
+    Args:
+        provider: LLM provider id（kimi/glm/minimax/anthropic/deepseek）— 跨 provider
+            同 query 隔离 cache，避免不同模型输出被错误命中。
 
     Returns:
         None — 未命中 / 已过期 / 缓存被禁用
@@ -198,8 +259,8 @@ def get_cached(
     if ttl_seconds is None:
         ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 
-    _init_db()
-    key = cache_key(query, max_iterations, budget)
+    _init_db_once()
+    key = cache_key(query, max_iterations, budget, provider)
     for attempt in range(_MAX_RETRIES):
         try:
             conn = _connect_with_wal()
@@ -237,6 +298,7 @@ def set_cached(
     response: dict,
     cost_usd: float,
     tokens: int,
+    provider: str | None = None,
 ) -> None:
     """写入缓存（同步版本 — 保留向后兼容）。
 
@@ -248,8 +310,8 @@ def set_cached(
     if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
         return
 
-    _init_db()
-    key = cache_key(query, max_iterations, budget)
+    _init_db_once()
+    key = cache_key(query, max_iterations, budget, provider)
     # H8 修复：payload 不再含 query 文本 — query_hash 已是不可逆 SHA-256。
     payload = (
         key,
@@ -289,6 +351,7 @@ async def get_cached_async(
     max_iterations: int,
     budget: float,
     ttl_seconds: int | None = None,
+    provider: str | None = None,
 ):
     """async 版本：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
@@ -300,7 +363,7 @@ async def get_cached_async(
     if ttl_seconds is None:
         ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 
-    key = cache_key(query, max_iterations, budget)
+    key = cache_key(query, max_iterations, budget, provider)
     for attempt in range(_MAX_RETRIES):
         try:
             return await asyncio.to_thread(_get_cached_sync, key, ttl_seconds)
@@ -324,6 +387,7 @@ async def set_cached_async(
     response: dict,
     cost_usd: float,
     tokens: int,
+    provider: str | None = None,
 ) -> None:
     """async 版本：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
@@ -333,7 +397,7 @@ async def set_cached_async(
     """
     if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
         return
-    key = cache_key(query, max_iterations, budget)
+    key = cache_key(query, max_iterations, budget, provider)
     for attempt in range(_MAX_RETRIES):
         try:
             await asyncio.to_thread(
