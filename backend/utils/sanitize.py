@@ -9,7 +9,7 @@ Layer 2: LLM 输出端的 denylist (synthesis_agent 已有)
   1. 不可信输入与系统指令严格分离（XML 标签）
   2. 控制字符剥除 + 长度限制
   3. 注入特征词检测（heuristic, 100% 召回需要 fuzz）
-  4. 同形字归一化（Cyrillic / Greek → Latin, NFKC 后再补一刀）
+  4. 同形字归一化（Cyrillic / Greek / 数学字母 → Latin, NFKC 后再补一刀）
 """
 from __future__ import annotations
 
@@ -64,6 +64,125 @@ def _normalize_homoglyphs(text: str) -> str:
     return "".join(_HOMOGLYPH_MAP.get(c, c) for c in text)
 
 
+# Round 2 MEDIUM-003: 数学字母表 (U+1D400-1D7FF) 同形字注入绕过, 规范化到 ASCII。
+# NFKC 不会折叠数学字母 (Mathematical Alphanumeric Symbols 块)
+# 攻击者可用 𝐢𝐠𝐧𝐨𝐫𝐞 (U+1D426 𝐢 + 拉丁 𝐠𝐧𝐨𝐫𝐞) 绕过 NFKC 后注入检测器
+# （只对纯拉丁字符做 deny-list 匹配时）。
+# 至少覆盖数学粗体/斜体/粗斜体 (3 个主要系列) + Sans-serif 系列 + 罗马数字。
+# 罗马数字 Ⅰ-Ⅻ (U+2170-217F) → I-XII；西里尔扩展 Ԛ-Ԝ (U+0500-052F) → Q-W。
+
+# 数学/装饰字母 → ASCII 的范围列表：
+#   每个条目是 (start, end, base_offset) — ord(ch) - base_offset 等于其 ASCII 编码
+#   base_offset = start - 0x41 (大写) 或 start - 0x61 (小写)
+#   数字变体单独处理 (U+1D7D8-1D7E1 等), 罗马数字单独处理
+_MATH_RANGES: list[tuple[int, int, int]] = [
+    # 数学粗体大写 A-Z (U+1D400-1D419)
+    (0x1D400, 0x1D419, 0x1D400 - 0x41),
+    # 数学粗体小写 a-z (U+1D41A-1D433)
+    (0x1D41A, 0x1D433, 0x1D41A - 0x61),
+    # 数学斜体大写 A-Z (U+1D434-1D44D) — 注意 U+1D455 = 拉丁 h 的数学斜体 (U+210E)
+    (0x1D434, 0x1D44D, 0x1D434 - 0x41),
+    # 数学斜体小写 a-z (U+1D44E-1D467)
+    (0x1D44E, 0x1D467, 0x1D44E - 0x61),
+    # 数学粗斜体大写 A-Z (U+1D468-1D481)
+    (0x1D468, 0x1D481, 0x1D468 - 0x41),
+    # 数学粗斜体小写 a-z (U+1D482-1D49B)
+    (0x1D482, 0x1D49B, 0x1D482 - 0x61),
+    # 数学 Script/Cursive 大写 A-Z (U+1D49C-1D4B5) — 仅大写, 小写走 U+1D4B6+ 段
+    (0x1D49C, 0x1D4B5, 0x1D49C - 0x41),
+    # 数学 Script 小写 a-z (U+1D4B6-1D4CF, 25 个字符, 缺 h)
+    (0x1D4B6, 0x1D4CF, 0x1D4B6 - 0x61),
+    # 数学 Bold Script 大写 A-Z (U+1D4D0-1D4E9)
+    (0x1D4D0, 0x1D4E9, 0x1D4D0 - 0x41),
+    # 数学 Bold Script 小写 a-z (U+1D4EA-1D503, 25 个字符, 缺 h)
+    (0x1D4EA, 0x1D503, 0x1D4EA - 0x61),
+    # 数学 Fraktur 大写 A-Z (U+1D504-1D51D) — 仅大写, 小写 U+1D51E+ 段
+    (0x1D504, 0x1D51D, 0x1D504 - 0x41),
+    # 数学 Fraktur 小写 a-z (U+1D51E-1D537)
+    (0x1D51E, 0x1D537, 0x1D51E - 0x61),
+    # 数学 Double-struck 大写 A-Z (U+1D538-1D551) — 仅大写
+    (0x1D538, 0x1D551, 0x1D538 - 0x41),
+    # 数学 Double-struck 小写 a-z (U+1D552-1D56B) — 注意 U+1D55A = 拉丁 h 的双线体 (U+210D)
+    (0x1D552, 0x1D56B, 0x1D552 - 0x61),
+    # 数学 Bold Fraktur 大写 A-Z (U+1D56C-1D585)
+    (0x1D56C, 0x1D585, 0x1D56C - 0x41),
+    # 数学 Bold Fraktur 小写 a-z (U+1D586-1D59F)
+    (0x1D586, 0x1D59F, 0x1D586 - 0x61),
+    # 数学 Sans-serif 大写 A-Z (U+1D5A0-1D5B9) — 仅大写
+    (0x1D5A0, 0x1D5B9, 0x1D5A0 - 0x41),
+    # 数学 Sans-serif 小写 a-z (U+1D5BA-1D5D3) — 注意 U+1D5C9 = 拉丁 h 的 sans (U+2101)
+    (0x1D5BA, 0x1D5D3, 0x1D5BA - 0x61),
+    # 数学 Sans-serif Bold 大写 A-Z (U+1D5D4-1D5ED)
+    (0x1D5D4, 0x1D5ED, 0x1D5D4 - 0x41),
+    # 数学 Sans-serif Bold 小写 a-z (U+1D5EE-1D607)
+    (0x1D5EE, 0x1D607, 0x1D5EE - 0x61),
+    # 数学 Sans-serif Italic 大写 A-Z (U+1D608-1D621)
+    (0x1D608, 0x1D621, 0x1D608 - 0x41),
+    # 数学 Sans-serif Italic 小写 a-z (U+1D622-1D63B)
+    (0x1D622, 0x1D63B, 0x1D622 - 0x61),
+    # 数学 Sans-serif Bold Italic 大写 A-Z (U+1D63C-1D655)
+    (0x1D63C, 0x1D655, 0x1D63C - 0x41),
+    # 数学 Sans-serif Bold Italic 小写 a-z (U+1D656-1D66F)
+    (0x1D656, 0x1D66F, 0x1D656 - 0x61),
+    # 数学 Monospace 大写 A-Z (U+1D670-1D689)
+    (0x1D670, 0x1D689, 0x1D670 - 0x41),
+    # 数学 Monospace 小写 a-z (U+1D68A-1D6A3)
+    (0x1D68A, 0x1D6A3, 0x1D68A - 0x61),
+    # 数字 0-9 数学体变体 (U+1D7D8-1D7E1) → 0-9
+    (0x1D7D8, 0x1D7E1, 0x1D7D8 - 0x30),
+    # 西里尔扩展 Ԛ-Ԝ (U+0500-0x052F) — U+0500=Ԑ(非Q); 单独处理 Ԛ-Ԝ → Q-W
+    # U+051A=Ԛ(0x051A), U+051C=Ԝ(0x051C); 间隔处理
+]
+
+# 西里尔扩展 Ԛ-Ԝ → Q, R, ..., W  (离散的 3 个字符)
+_CYRILLIC_EXTENDED_MAP: dict[str, str] = {
+    "Ԛ": "Q",  # U+051A
+    "Ԝ": "W",  # U+051C
+}
+
+# 罗马数字 Ⅰ-Ⅻ → I, II, ..., XII (U+2170-0x217F)
+_ROMAN_NUMERAL_MAP: dict[str, str] = {
+    "ⅰ": "i", "ⅱ": "ii", "ⅲ": "iii", "ⅳ": "iv",
+    "ⅴ": "v", "ⅵ": "vi", "ⅶ": "vii", "ⅷ": "viii",
+    "ⅸ": "ix", "ⅹ": "x", "ⅺ": "xi", "ⅻ": "xii",
+    # 小写 ⅻ (U+217F) 之后的 ⅼ-ⅿ 等不再覆盖, 极少用作注入向量
+}
+
+
+def _normalize_math_chars(text: str) -> str:
+    """将数学/装饰字母变体规范化为 ASCII, 防止同形字注入。
+
+    Round 2 MEDIUM-003: NFKC 不折叠 Mathematical Alphanumeric Symbols 块
+    (U+1D400-1D7FF), 攻击者可用 𝐢𝐠𝐧𝐨𝐫𝐞 绕过注入检测器。
+    此函数把数学粗体/斜体/粗斜体 + Sans-serif + 罗马数字 + 西里尔扩展
+    全部映射回 ASCII, 供后续 _INJECTION_PATTERNS 模式匹配。
+    """
+    if not text:
+        return text
+    out: list[str] = []
+    for ch in text:
+        cp = ord(ch)
+        mapped = False
+        # 1) 数学字母大写/小写/数字范围
+        for start, end, base_offset in _MATH_RANGES:
+            if start <= cp <= end:
+                out.append(chr(cp - base_offset))
+                mapped = True
+                break
+        if mapped:
+            continue
+        # 2) 西里尔扩展 Ԛ-Ԝ
+        if ch in _CYRILLIC_EXTENDED_MAP:
+            out.append(_CYRILLIC_EXTENDED_MAP[ch])
+            continue
+        # 3) 罗马数字 ⅰ-ⅻ
+        if ch in _ROMAN_NUMERAL_MAP:
+            out.append(_ROMAN_NUMERAL_MAP[ch])
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def sanitize_query(query: str, max_len: int = 500) -> str:
     """净化用户 query：去除控制字符 + 截断 + 注入特征词过滤。
 
@@ -75,7 +194,10 @@ def sanitize_query(query: str, max_len: int = 500) -> str:
 
     # 0a) NFKC 规范化：折叠西里尔/全角/零宽同形字符，阻断同形字注入
     query = unicodedata.normalize("NFKC", query)
-    # 0b) 同形字映射：Cyrillic / Greek 等同形字母 → Latin（NFKC 无法折叠这些）
+    # 0b) 数学字母归一化 (Round 2 MEDIUM-003)：折叠 Mathematical Alphanumeric Symbols
+    #     块 (U+1D400-1D7FF) 的同形字, 防止 𝐢𝐠𝐧𝐨𝐫𝐞 类绕过 NFKC
+    query = _normalize_math_chars(query)
+    # 0c) 同形字映射：Cyrillic / Greek 等同形字母 → Latin（NFKC 无法折叠这些）
     query = _normalize_homoglyphs(query)
     # 1) 剥除控制字符（保留 \n \t）
     query = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", query)
