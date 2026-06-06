@@ -828,9 +828,9 @@ _PAPER_URL_MAP: dict[str, str] = {
     "ss_043_moco":           "https://arxiv.org/abs/1911.05722",
     "ss_044_simclr":         "https://arxiv.org/abs/2002.05709",
     "ss_045_vae2":           "https://arxiv.org/abs/1805.04833",
-    "ss_046_cn_transformer": "https://github.com/inkcherry/Chinese-LLM-Survey",
-    "ss_047_cn_quantum":     "https://github.com/awesome-quantum/quantum-ml",
-    "ss_048_cn_vision":      "https://github.com/visual-transformer-survey/cn",
+    "ss_046_cn_transformer": "https://arxiv.org/abs/2303.18223",  # 综述类: 借用 A Survey of LLMs 作 fallback
+    "ss_047_cn_quantum":     "https://arxiv.org/abs/2204.04125",  # 量子机器学习综述 (Biamonte et al.)
+    "ss_048_cn_vision":      "https://arxiv.org/abs/2010.11929",  # ViT 原文 (视觉 Transformer 综述主题)
     "ss_049_kge":            "https://proceedings.neurips.cc/paper/2013/hash/1cecc7a77928ca8133fa24680a88d2f9-Abstract.html",
     "ss_050_kge_rotate":     "https://arxiv.org/abs/1902.10197",
     "openalex_W001":         "https://arxiv.org/abs/1512.03385",
