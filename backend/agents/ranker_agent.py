@@ -246,7 +246,9 @@ async def rank_node(state: SearchState) -> SearchState:
             p.final_score = 0.0
 
     papers.sort(key=lambda p: p.final_score, reverse=True)
-    ranked = papers[:30]
+    # FIX: 统一 ranked 论文数为 25 — 与 synthesis / graph_builder 的 [:25] 截断对齐
+    # 旧 [:30] 导致 21-30 论文在 report + graph 中被丢弃（暗物质）。
+    ranked = papers[:25]
 
     top_score = ranked[0].final_score if ranked else 0
     print(

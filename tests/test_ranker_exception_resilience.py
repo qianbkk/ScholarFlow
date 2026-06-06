@@ -9,9 +9,9 @@ _score_papers_combined_batch 内部兜底一致）填平，其他批次正常返
 测试要点：
   1) Mock _score_papers_combined_batch 在第 2 批（论文 p10-p19）抛 RuntimeError
   2) rank_node 应正常返回，不抛异常
-  3) 30 篇论文全在 ranked_papers 中
-  4) 失败的 10 篇论文（p10-p19）的 rel=5.0、cons=6.0
-  5) 成功的 20 篇论文（p0-p9, p20-p29）保留 LLM 返回的真实分数
+  3) 30 篇论文中前 25 篇全在 ranked_papers 中（ranker 上限已统一为 25，FIX: P0 暗物质）
+  4) 失败批次中前 5 名（p10-p14）有兜底分数，p15-p19 被 [:25] 截断
+  5) 成功的 20 篇论文（p0-p9 + p20-p29）保留 LLM 返回的真实分数
 """
 import asyncio
 import pytest
@@ -83,17 +83,21 @@ def test_rank_node_handles_batch_exception_gracefully(monkeypatch):
     # 不应抛异常
     new_state = asyncio.run(ranker_agent.rank_node(state))
 
-    # 30 篇论文全部进入 ranked_papers
+    # 30 篇论文中前 25 篇进入 ranked_papers（ranker 上限已统一为 25）
+    # 排序细节：成功批次 20 篇 final_score=6.95, 失败批次 10 篇 final_score=5.2。
+    # 稳定排序后：所有 20 篇 6.95 论文 (p00-p09 + p20-p29) 在前,然后是 5.2 论文 (p10-p19)。
+    # [:25] 切走前 25 = 全部 20 篇高分 + 失败批次的 p10-p14 (前 5)。
+    # 失败批次的 p15-p19 被截断，不在 ranked_papers 中。
     ranked_dicts = new_state.get("ranked_papers", [])
-    assert len(ranked_dicts) == 30, f"expected 30 papers, got {len(ranked_dicts)}"
+    assert len(ranked_dicts) == 25, f"expected 25 papers, got {len(ranked_dicts)}"
 
     # 按 paper_id 索引
     by_id = {p["paper_id"]: p for p in ranked_dicts}
 
-    # 失败批次（p10-p19）应有兜底分数
-    for i in range(10, 20):
+    # 失败批次中前 5 名（p10-p14）应有兜底分数（在 ranked_papers 内）
+    for i in range(10, 15):
         pid = f"p{i:02d}"
-        assert pid in by_id, f"missing failed-batch paper {pid}"
+        assert pid in by_id, f"missing failed-batch top-5 paper {pid}"
         assert by_id[pid]["relevance_score"] == 5.0, (
             f"{pid} relevance should be 5.0 (fallback), got {by_id[pid]['relevance_score']}"
         )
@@ -101,7 +105,14 @@ def test_rank_node_handles_batch_exception_gracefully(monkeypatch):
             f"{pid} consistency should be 6.0 (fallback), got {by_id[pid]['consistency_score']}"
         )
 
-    # 成功批次（p0-p9, p20-p29）应有 LLM 真实分数
+    # 失败批次中后 5 名（p15-p19）应被截断不在 ranked_papers 中
+    for i in range(15, 20):
+        pid = f"p{i:02d}"
+        assert pid not in by_id, (
+            f"{pid} should be truncated by [:25] cap, but found in ranked_papers"
+        )
+
+    # 成功批次（p00-p09 + p20-p29 共 20 篇）应有 LLM 真实分数
     for i in list(range(0, 10)) + list(range(20, 30)):
         pid = f"p{i:02d}"
         assert pid in by_id, f"missing ok-batch paper {pid}"

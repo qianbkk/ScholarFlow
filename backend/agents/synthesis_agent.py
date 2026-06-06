@@ -41,7 +41,9 @@ def _fallback_report(query: str, ranked: list[dict]) -> str:
 async def synthesize_node(state: SearchState) -> SearchState:
     """生成结构化 Markdown 综述报告。"""
 
-    ranked = (state.get("ranked_papers") or [])[:20]
+    # FIX: 统一 ranked 论文数为 25 — 与 ranker_agent / graph_builder 对齐
+    # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
+    ranked = (state.get("ranked_papers") or [])[:25]
     query = state["original_query"]
 
     if not ranked:

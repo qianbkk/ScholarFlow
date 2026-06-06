@@ -9,7 +9,9 @@ from backend.models.state import SearchState
 def build_graph_node(state: SearchState) -> SearchState:
     """构建 D3.js 可渲染的引文关系图数据（无 LLM 调用）。"""
 
-    ranked = (state.get("ranked_papers") or [])[:20]
+    # FIX: 统一 ranked 论文数为 25 — 与 ranker_agent / synthesis_agent 对齐
+    # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
+    ranked = (state.get("ranked_papers") or [])[:25]
     node_id_set = {p.get("paper_id", "") for p in ranked if p.get("paper_id")}
 
     nodes = []
