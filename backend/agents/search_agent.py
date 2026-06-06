@@ -1,6 +1,11 @@
 """
 节点 ② — 多源并行检索
 并发调用 Semantic Scholar + OpenAlex，合并去重。
+
+Round 2 PERF-004 修复：search_node 加 Semaphore(4)，与 citation_expander 配合控制 SS 限流。
+单次 refine 循环最多 5 迭代 × 5 子查询 = 25 次 SS 调用 (×2 OpenAlex = 50 总请求)，
+无 Semaphore 时单次 gather 即触发 10 并发 + 多轮 429 风险。
+Semaphore(4) 把单批并发峰值从 10 降到 4，对齐 citation_expander 的 _CITATION_SEMAPHORE 限额。
 """
 import asyncio
 import logging
@@ -12,6 +17,20 @@ from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
 
+# ===== SS API 限速：单次 gather 批次并发上限 =====
+# SS 免费 tier 100 req/5min。search_node 一次 gather 最多 5 子查询 × 2 源 = 10 并发。
+# 限到 4 与 citation_expander._CITATION_SEMAPHORE 对齐，确保
+#   - 单批内峰值不超 4
+#   - search + citation 两阶段总峰值不超 8 (4+4)
+#   - 5 次 refine 迭代累计安全在限流窗口内
+_SEARCH_SEMAPHORE = asyncio.Semaphore(4)
+
+
+async def _throttled_search(coro):
+    """包装 SS / OpenAlex 搜索调用，强制走 _SEARCH_SEMAPHORE。"""
+    async with _SEARCH_SEMAPHORE:
+        return await coro
+
 
 async def search_node(state: SearchState) -> SearchState:
     """并行调用双源 API，合并去重。"""
@@ -21,10 +40,11 @@ async def search_node(state: SearchState) -> SearchState:
         return {**state, "raw_papers": [], "status": "expanding"}
 
     # 并发搜索：每个子查询同时查两个数据库
+    # Round 2 PERF-004: 通过 _throttled_search 走 Semaphore(4) 限流，避免 429
     tasks = []
     for q in sub_queries:
-        tasks.append(semantic_scholar.search_papers(q, limit=30))
-        tasks.append(openalex.search_papers(q, limit=20))
+        tasks.append(_throttled_search(semantic_scholar.search_papers(q, limit=30)))
+        tasks.append(_throttled_search(openalex.search_papers(q, limit=20)))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
