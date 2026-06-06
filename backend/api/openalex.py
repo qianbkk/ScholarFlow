@@ -7,6 +7,7 @@ https://api.openalex.org
 import asyncio
 import logging
 import os
+import time as _time
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
@@ -15,6 +16,21 @@ from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
+
+# Round 6 S3: SS/OA 日志 throttle 5 分钟, 7 次搜索 317 条日志降到 < 50 条
+# 同一 key 5 分钟内只记第一次, 避免 MiniMax 401 反复触发刷屏。
+_LOG_THROTTLE: dict[str, float] = {}
+_LOG_THROTTLE_INTERVAL = 300.0  # 5 分钟
+
+
+def _should_log(key: str) -> bool:
+    """Round 6 S3: 简单 throttle, 同一 key 5 分钟内只记一次."""
+    now = _time.time()
+    last = _LOG_THROTTLE.get(key, 0.0)
+    if now - last >= _LOG_THROTTLE_INTERVAL:
+        _LOG_THROTTLE[key] = now
+        return True
+    return False
 
 BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
@@ -144,11 +160,13 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             },
         )
         if resp.status_code != 200:
-            logger.warning(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
+            if _should_log(f"oa_search_{resp.status_code}"):
+                logger.warning(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
             return _mock_fallback(query, limit)
         data = resp.json()
     except Exception as e:
-        logger.warning(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
+        if _should_log("oa_search_exception"):
+            logger.warning(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
     papers = []

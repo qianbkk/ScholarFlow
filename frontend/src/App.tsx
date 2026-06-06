@@ -58,7 +58,20 @@ export default function App() {
           isDegradedResponse={result?.is_degraded_response ?? false}
           fallbackPaperCount={result?.fallback_paper_count ?? 0}
         />
-        <ReportPanel report={result?.report ?? ''} loading={loading} query={lastQuery} />
+        {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
+            激活 R4 U4 死代码 (用户重试按钮生效).
+            ReportPanel 在 R4 U4 已加 errorMsg/lastQuery/onRetry 三个 optional prop,
+            App.tsx 之前未透传, 导致 ReportPanel 的"重试"按钮永远不显示.
+            现在从 useSearch 暴露的 error/lastQuery 透传,
+            onRetry 直接复用 useSearch.search 闭包, 预算/迭代/provider 走默认参数. */}
+        <ReportPanel
+          report={result?.report ?? ''}
+          loading={loading}
+          query={lastQuery}
+          errorMsg={error}
+          lastQuery={lastQuery}
+          onRetry={(q) => search(q)}
+        />
         <GraphPanel graph={result?.citation_graph ?? null} />
       </div>
     </div>
