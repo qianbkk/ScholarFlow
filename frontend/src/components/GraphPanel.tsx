@@ -168,7 +168,9 @@ export function GraphPanel({ graph }: Props) {
   }, [graph]);
 
   return (
-    <aside className="w-[30%] min-w-[320px] bg-white border-l border-slate-200 flex flex-col h-full">
+    {/* Round 6 S5: 移动端 w-full, lg+ 切回 30% 宽 + 320px 最小宽.
+        移动端 SVG 高度设 min-h-[400px] 保证图谱可拖拽; 桌面 h-full 跟随父容器. */}
+    <aside className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full bg-white border-r lg:border-r-0 lg:border-l border-slate-200 flex flex-col">
       <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-slate-700">引文关系图谱</h2>
         {graph && (
@@ -177,7 +179,8 @@ export function GraphPanel({ graph }: Props) {
           </span>
         )}
       </div>
-      <div className="flex-1 relative">
+      {/* Round 6 S5: 移动端 SVG 给固定 min-h-[400px], 桌面 h-full 跟随父容器. */}
+      <div className="flex-1 relative min-h-[400px] lg:min-h-0">
         <svg ref={svgRef} className="w-full h-full" />
 
         {hovered && (

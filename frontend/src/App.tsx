@@ -45,7 +45,12 @@ export default function App() {
         </div>
       )}
 
-      <div className="flex-1 flex min-h-0">
+      {/* Round 6 S5: 移动端响应式 — lg 以下三栏折叠为单栏纵排.
+          之前 flex 横排在 768px 以下挤, ReportPanel/GraphPanel 几乎不可见.
+          现在 flex-col 默认 + overflow-y-auto 让整个页面竖向滚动 (避免嵌套 scroll);
+          lg+ 切回 flex-row + overflow-hidden 让三栏独立内部滚动.
+          min-h-0 允许 flex 子项收缩到 0 (flex 默认 min-height: auto 会撑破父容器). */}
+      <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
         <QueryPanel
           loading={loading}
           onSearch={search}
