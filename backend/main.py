@@ -560,8 +560,16 @@ class SearchRequest(BaseModel):
 
 
 class SearchCancelRequest(BaseModel):
-    """用户主动取消 in-flight 搜索的请求 (Round 4 U2 配套)。"""
-    request_id: Optional[str] = None
+    """用户主动取消 in-flight 搜索的请求 (Round 4 U2 配套)。
+    Round 5 S-4: 加长度/charset 校验, 与 X-Request-ID 校验对齐, 防止恶意大
+    request_id 撑爆日志或注入控制字符。
+    """
+    request_id: Optional[str] = Field(
+        default=None,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_\-]+$",
+        description="请求 ID, 长度 ≤ 128 字符, 仅允许字母数字和 -_",
+    )
 
 
 class PaperResult(BaseModel):
@@ -800,13 +808,18 @@ async def root():
 
 
 @app.post("/search/cancel")
-async def cancel_search(req: SearchCancelRequest):
+@limiter.limit("10/minute")  # Round 5 S-4: 限流, 防恶意刷爆日志 + 占位 cancel 表
+async def cancel_search(req: SearchCancelRequest, request: Request):
     """用户主动取消进行中的搜索 (Round 4 U2 配套)。
+    Round 5 S-4: 加 10/minute 限流 + request_id 长度/charset 校验。
 
     当前实现: 仅记日志, 真正中断在 client disconnect 时已经走 SSE 的 try/finally。
     未来可在 in-flight task table 中查 request_id → task.cancel()。
     """
-    logger.info(f"[/search/cancel] request_id={req.request_id} received")
+    logger.info(
+        f"[/search/cancel] request_id={req.request_id} received "
+        f"(length={len(req.request_id) if req.request_id else 0})"
+    )
     return {"cancelled": True, "request_id": req.request_id}
 
 
