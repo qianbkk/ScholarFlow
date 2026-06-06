@@ -74,27 +74,130 @@ _PROVIDER_META = {
 }
 
 
+# ===== Provider 健康检查缓存（key 真实可用性，非仅 env 非空）=====
+# 用户在 .env 填了 Kimi/GLM key 但实际可能 401 失效。仅检查 env 非空会让
+# /providers 返回误导性的 has_key=true，前端选择后真实调用失败 → 静默
+# fallback 到 mock，用户看到"当前为 mock 模式"。这里在 lifespan + 定期
+# 用最小 API 调用 (max_tokens=1) 验证 key, 缓存结果。
+import asyncio
+import time as _time
+
+_PROVIDER_HEALTH_CACHE: dict[str, tuple[bool, float]] = {}
+_PROVIDER_HEALTH_TTL_SECONDS = 300.0  # 5 min — 比 startup 一次更可靠
+
+
+async def _verify_provider_key(provider_id: str) -> bool:
+    """对单个 provider 做最小 API 调用验证 key 真实有效。
+
+    Anthropic 协议: messages.create(max_tokens=1, 1 token prompt)
+    OpenAI 协议 (DeepSeek): chat.completions.create(max_tokens=1)
+
+    Returns:
+        True  if API 调用成功 (任意 content / finish_reason)
+        False if 401/403/网络错误/超时
+    """
+    if provider_id == "deepseek":
+        try:
+            from openai import AsyncOpenAI
+            from backend.config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL
+            if not DEEPSEEK_API_KEY:
+                return False
+            client = AsyncOpenAI(
+                api_key=DEEPSEEK_API_KEY,
+                base_url=DEEPSEEK_BASE_URL,
+                timeout=10.0,
+            )
+            resp = await client.chat.completions.create(
+                model="deepseek-chat",
+                max_tokens=1,
+                messages=[{"role": "user", "content": "ok"}],
+            )
+            return bool(resp.choices)
+        except Exception:
+            return False
+    else:
+        try:
+            import anthropic
+            from backend.utils.llm_client import _get_anthropic_client
+            client = _get_anthropic_client(provider_id)
+            if client is None:
+                return False
+            # Anthropic SDK 不暴露 ping, 用最小 messages.create 验证
+            # 选 fast_model (更快更便宜)
+            cfg = get_provider_config(provider_id)
+            fast_model = cfg.get("fast_model") or cfg.get("model", "")
+            if not fast_model:
+                return False
+            resp = await client.messages.create(
+                model=fast_model,
+                max_tokens=1,
+                messages=[{"role": "user", "content": "."}],
+            )
+            # 任意正常 stop_reason 都算通过 (包括 end_turn/max_tokens/refusal)
+            return getattr(resp, "stop_reason", None) is not None
+        except Exception:
+            return False
+
+
 def _get_providers_with_keys() -> list[dict]:
     """返回所有可用的 provider 列表（含 has_key 状态）。
 
-    Anthropic-compatible 走 get_provider_config(provider)['enabled']；
-    DeepSeek 走 OpenAI 协议，看 DEEPSEEK_API_KEY 是否非空。
+    has_key 语义:
+      * env var 非空 且 健康检查最近一次通过 → True
+      * env var 为空 或 健康检查失败 → False
+      * 健康检查尚未运行 (启动几秒内) → 用 env 非空作 optimistic 估计
+
+    健康检查在 lifespan 启动时跑一次，之后每 5 分钟刷新一次。
     """
     out: list[dict] = []
     for pid, meta in _PROVIDER_META.items():
+        # 1) 基础检查：env var 是否配置
         if pid == "deepseek":
-            has_key = bool(DEEPSEEK_API_KEY)
+            env_key_present = bool(DEEPSEEK_API_KEY)
         else:
             cfg = get_provider_config(pid)
-            has_key = bool(cfg.get("enabled", False))
+            env_key_present = bool(cfg.get("enabled", False))
+
+        # 2) 健康检查缓存（如果最新）
+        cached = _PROVIDER_HEALTH_CACHE.get(pid)
+        if cached and (_time.time() - cached[1]) < _PROVIDER_HEALTH_TTL_SECONDS:
+            verified = cached[0]
+        else:
+            verified = None  # 未检查 或 缓存过期
+
+        # 3) 决定 has_key:
+        #    - 缓存有效 → 用缓存
+        #    - 缓存无效/无 → 启动后用 env 估计；启动前 (lifespan 未跑完) 总是 None
+        if verified is not None:
+            has_key = env_key_present and verified
+        else:
+            # 启动乐观估计：env 非空就 True（但前端可加 has_verified 字段）
+            has_key = env_key_present
+
         out.append({
             "id": pid,
             "name": meta["name"],
             "flagship_model": meta["flagship_model"],
             "fast_model": meta["fast_model"],
             "has_key": has_key,
+            "verified": verified,  # True/False/None (None = 未检查)
         })
     return out
+
+
+async def _refresh_provider_health_cache() -> None:
+    """后台任务：刷新所有 provider 的真实 key 可用性。"""
+    import logging
+    logger = logging.getLogger(__name__)
+    pids = list(_PROVIDER_META.keys())
+    for pid in pids:
+        try:
+            ok = await _verify_provider_key(pid)
+            _PROVIDER_HEALTH_CACHE[pid] = (ok, _time.time())
+            logger.info(f"[providers] {pid} verified={ok}")
+        except Exception as e:
+            _PROVIDER_HEALTH_CACHE[pid] = (False, _time.time())
+            logger.warning(f"[providers] {pid} verify failed: {e}")
 
 
 def _resolve_provider(provider: Optional[str]) -> str:
@@ -126,6 +229,20 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_proxy)
     logger.info("[lifespan] proxy cache pre-warmed, HTTP pool ready")
+    # 启动：异步刷新 provider 健康检查 (background task)
+    # 不 await — 不阻塞 startup;首个 /providers 请求会等待结果返回
+    asyncio.create_task(_refresh_provider_health_cache())
+    # 启动：定期刷新 (每 5 分钟)
+    async def _periodic_health_refresh():
+        while True:
+            try:
+                await asyncio.sleep(_PROVIDER_HEALTH_TTL_SECONDS)
+                await _refresh_provider_health_cache()
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[lifespan] periodic health refresh error: {e}")
+    asyncio.create_task(_periodic_health_refresh())
     yield
     # 关闭：释放 httpx 连接池
     await _ss_mod.close_client()
