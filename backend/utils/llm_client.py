@@ -36,7 +36,9 @@ TASK_MODEL_TIER = {
     "fast_score":      "fast",
     "batch_filter":    "fast",
     "synthesis":       "flagship",
-    "refine_strategy": "flagship",
+    # FIX: refine_strategy 任务只生成 3 条查询词 (max_tokens=400), 用 fast tier 节省延迟和成本
+    # 旧 flagship (deepseek-reasoner) 会启动 thinking 模式，对 3-行 JSON 输出完全浪费。
+    "refine_strategy": "fast",
 }
 
 

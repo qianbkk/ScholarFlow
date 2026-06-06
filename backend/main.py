@@ -345,10 +345,16 @@ def _load_budget_from_db() -> tuple[float, float]:
 
 
 def _save_budget_to_db(total: float, reset_ts: float) -> None:
-    """把 (total, reset_ts) 持久化到 SQLite（H2 修复：跨进程原子）。"""
+    """把 (total, reset_ts) 持久化到 SQLite（H2 修复：跨进程原子）。
+
+    兼容性: 仍接受 (total, reset_ts) 两参签名,内部封装 BEGIN IMMEDIATE 事务。
+    详细事务包裹逻辑见 _check_and_reserve_budget / _return_budget。
+    """
     from backend.utils.cache import _connect_with_wal
     conn = _connect_with_wal()
     try:
+        # BEGIN IMMEDIATE: 立即获取写锁,防止多 worker 间 TOCTOU 竞态
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
             (total, reset_ts),
@@ -384,12 +390,14 @@ _load_budget_state()
 
 
 async def _check_and_reserve_budget(estimated_cost: float) -> None:
-    """原子化地"检查 + 预留"全局预算（H1+H2 修复）。
+    """原子化地"检查 + 预留"全局预算（H1+H2+TOCTOU 修复）。
 
-    H1: 整个 check + reserve 在 `_budget_lock` 临界区内完成，关闭 TOCTOU 竞态。
+    H1: 整个 check + reserve 在 `_budget_lock` 临界区内完成，关闭进程内 TOCTOU 竞态。
     H2: counter 状态存储在 SQLite WAL 中（budget_state 表），跨 worker 进程原子。
-        asyncio.Lock 仅保护单 worker 内的临界区；
-        SQLite WAL + 单 global 行保证多 worker 间的原子性。
+    TOCTOU fix: 读-改-写 全程在 `BEGIN IMMEDIATE` 事务中，
+        防止多 worker 进程间 SQLite 层面的 TOCTOU 竞态(普通 BEGIN 拿到的是
+        共享锁,第二个 worker 进来时读到的仍是旧 total,会超额累加)。
+        BEGIN IMMEDIATE 立即获取写锁,串行化整个 critical section。
 
     Args:
         estimated_cost: 本次请求愿意预留的最大开销（= `req.budget`，即用户上限）。
@@ -409,6 +417,43 @@ async def _check_and_reserve_budget(estimated_cost: float) -> None:
         _save_budget_to_db(new_total, reset_ts)
         # 进程内缓存 reset_ts，避免每个请求都读 DB
         _budget_reset_ts = reset_ts
+
+
+async def _return_budget(amount: float) -> None:
+    """归还实际开销与预留之间的差额(防止过度预留耗尽全局预算)。
+
+    入口 `_check_and_reserve_budget` 预留的是 `req.budget`(用户上限),
+    但实际 `total_cost_usd` 通常远低于上限。差额若不归还,会导致
+    后续请求被错误拒绝(503)。这里在请求结束时归还差额。
+
+    实现: 加 asyncio.Lock + BEGIN IMMEDIATE,与 reserve 路径一致,
+    保证多 worker 间的 read-modify-write 原子性。
+    """
+    if amount <= 0:
+        return
+    global _budget_reset_ts
+    async with _budget_lock:
+        from backend.utils.cache import _connect_with_wal
+        conn = _connect_with_wal()
+        try:
+            conn.execute("BEGIN IMMEDIATE")  # 立即获取写锁,防多 worker TOCTOU
+            row = conn.execute(
+                "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+            ).fetchone()
+            if row is None:
+                return  # 表未初始化,无须归还
+            total = float(row[0])
+            reset_ts = float(row[1])
+            # 边界保护: 不能减到负数
+            new_total = max(0.0, total - amount)
+            conn.execute(
+                "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                (new_total, reset_ts),
+            )
+            conn.commit()
+            _budget_reset_ts = reset_ts
+        finally:
+            conn.close()
 
 
 # ===== Request / Response Models =====
@@ -531,6 +576,12 @@ async def search(req: SearchRequest, request: Request):
         elapsed = time.time() - t0
         # H1 修复：预算已在入口处原子化预留（_check_and_reserve_budget），
         # 实际开销 ≤ req.budget（用户的 max），无需再次累加。
+        # 预算归还: 实际花费通常远低于 req.budget, 归还差额避免过度预留
+        # 阻塞后续请求 (e.g. 预留 2.0 / 实花 0.3 → 立即还 1.7)
+        actual_cost = float(final.get("total_cost_usd", 0.0))
+        diff = req.budget - actual_cost
+        if diff > 0.01:  # $0.01 阈值避免无意义小数运算
+            await _return_budget(diff)
 
         response_obj = SearchResponse(
             report=final.get("report", ""),
@@ -562,6 +613,8 @@ async def search(req: SearchRequest, request: Request):
     except asyncio.TimeoutError:
         # 必须在 except Exception 之前（TimeoutError 是 Exception 子类，会被吞掉）
         logger.warning("[/search] timed out after 240s")
+        # 超时: 几乎没产生成本(只跑了部分节点),把预留全数归还
+        await _return_budget(req.budget)
         raise HTTPException(
             status_code=504,
             detail="搜索超时（>240s）。建议缩小查询范围或降低 max_iterations。",
@@ -695,6 +748,8 @@ async def search_stream(
                         })
         except TimeoutError:
             logger.warning("[/search/stream] timed out after 240s")
+            # 超时: 把预留全数归还(几乎没产生成本)
+            await _return_budget(budget)
             yield _sse_format({
                 "event": "error",
                 "code": "timeout",
@@ -703,6 +758,8 @@ async def search_stream(
             return
         except Exception:
             logger.error("[/search/stream] error", exc_info=True)
+            # 异常: 把预留全数归还(实际成本未知,保守起见全还)
+            await _return_budget(budget)
             yield _sse_format({
                 "event": "error",
                 "code": "internal",
@@ -712,6 +769,11 @@ async def search_stream(
 
         # 3) 构造最终响应
         elapsed = time.time() - t0
+        # 预算归还: 实际花费通常远低于 budget, 归还差额避免过度预留
+        actual_cost = float(accumulated.get("total_cost_usd", 0.0))
+        diff = budget - actual_cost
+        if diff > 0.01:  # $0.01 阈值避免无意义小数运算
+            await _return_budget(diff)
         response_obj = SearchResponse(
             report=accumulated.get("report", ""),
             ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:20]],
