@@ -588,7 +588,9 @@ async def search(req: SearchRequest, request: Request):
 
     # 缓存命中：直接返回上次结果（避免重复跑付费流水线）
     # H4 修复：用 async 版本，SQLite I/O 走 to_thread、retry 退避走 asyncio.sleep
-    cached = await get_cached_async(safe_query, req.max_iterations, req.budget)
+    # Round 2 审计 (CRITICAL-001): cache_key 函数已加 provider 参数, 调用点必须传
+    # 以隔离跨 provider 的同 query 缓存,避免 kimi 缓存被 glm/anthropic 误命中
+    cached = await get_cached_async(safe_query, req.max_iterations, req.budget, provider=provider)
     if cached is not None:
         cached_response, cached_cost, cached_tokens = cached
         logger.info(
@@ -625,6 +627,7 @@ async def search(req: SearchRequest, request: Request):
 
         # 写入缓存（供下次同 query 复用，TTL 默认 24h）
         # H4 修复：用 async 版本
+        # Round 2 审计 (CRITICAL-001): set_cached_async 也必须传 provider 保持 read/write 对称
         try:
             await set_cached_async(
                 safe_query,
@@ -633,6 +636,7 @@ async def search(req: SearchRequest, request: Request):
                 response_obj.model_dump(),
                 float(final.get("total_cost_usd", 0.0)),
                 int(final.get("total_tokens_used", 0)),
+                provider=provider,
             )
         except Exception as cache_err:
             logger.warning(f"[/search] cache write failed (non-fatal): {cache_err}")
@@ -736,7 +740,8 @@ async def search_stream(
     async def event_generator():
         # 1) 缓存命中：直接复用 /search 的缓存结果（不发节点进度，瞬间 done）
         # H4 修复：用 async 版本
-        cached = await get_cached_async(safe_query, max_iter, budget)
+        # Round 2 审计 (CRITICAL-001): SSE 路径的 cache read 也必须传 provider
+        cached = await get_cached_async(safe_query, max_iter, budget, provider=resolved_provider)
         if cached is not None:
             cached_response, cached_cost, cached_tokens = cached
             logger.info(
@@ -817,6 +822,7 @@ async def search_stream(
 
         # 4) 写缓存（预算已在入口处原子化预留，与 /search 一致）
         # H4 修复：用 async 版本
+        # Round 2 审计 (CRITICAL-001): SSE 路径的 cache write 也必须传 provider
         try:
             await set_cached_async(
                 safe_query,
@@ -825,6 +831,7 @@ async def search_stream(
                 response_obj.model_dump(),
                 float(accumulated.get("total_cost_usd", 0.0)),
                 int(accumulated.get("total_tokens_used", 0)),
+                provider=resolved_provider,
             )
         except Exception as cache_err:
             logger.warning(f"[/search/stream] cache write failed (non-fatal): {cache_err}")
