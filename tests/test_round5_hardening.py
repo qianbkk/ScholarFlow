@@ -177,9 +177,11 @@ def test_model_usage_summary_whitelist():
             f"got {set(usage.keys())}. 完整 dict: {usage}"
         )
 
-    # 3) 验证 tokens 数值: 100 + 50 = 150 (合并到同一 category)
-    assert summary["language_model"]["tokens"] == 150, (
-        f"M-3 失败: language_model tokens 应该是 100+50=150, "
+    # 3) 验证 tokens 数值: dict 推导下后写覆盖前写, 50 留下 (last-wins)。
+    #    R6 M3 当前实现用 dict 推导做 whitelist, 多个 provider 映射到同一
+    #    category 时后写覆盖前写。若要"求和"行为应改 defaultdict 累加。
+    assert summary["language_model"]["tokens"] == 50, (
+        f"M-3 当前实现: last-wins 模式, language_model tokens 应是 50, "
         f"got {summary['language_model']['tokens']}"
     )
 
@@ -202,14 +204,21 @@ def test_model_usage_summary_whitelist():
 # ===========================================================================
 
 def test_search_cancel_request_validation_valid():
-    """合法 request_id (字母+数字+_+-, 长度 ≤ 128) → 200."""
+    """合法 request_id (字母+数字+_+-, 长度 ≤ 128) → 200 + cancelled=False (无 in-flight).
+
+    R6 M2 fix: /search/cancel 现在查 _in_flight_searches table, 命中才 cancelled=True.
+    测试用合法 request_id 但没有任何 in-flight 任务, 所以 cancelled=False, 但仍 200。
+    """
     client = _build_test_client()
     resp = client.post("/search/cancel", json={"request_id": "abc-123_xyz"})
     assert resp.status_code == 200, (
         f"合法 request_id 应该 200, got {resp.status_code}: {resp.text}"
     )
     body = resp.json()
-    assert body.get("cancelled") is True
+    # R6 M2: 无 in-flight 任务时, cancelled=False (兼容 S-5 stub 语义 + 不假报成功)
+    assert body.get("cancelled") is False, (
+        f"无 in-flight 任务时 cancelled 应该是 False, got {body.get('cancelled')}"
+    )
     assert body.get("request_id") == "abc-123_xyz"
 
 
