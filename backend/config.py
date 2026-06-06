@@ -45,8 +45,8 @@ KIMI_FAST_MODEL = os.getenv("KIMI_FAST_MODEL", "kimi-k2.5")
 # GLM / 智谱
 GLM_API_KEY = os.getenv("GLM_API_KEY", "")
 GLM_BASE_URL = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
-GLM_MODEL = os.getenv("GLM_MODEL", "glm-4.5")
-GLM_FAST_MODEL = os.getenv("GLM_FAST_MODEL", "glm-4.5-air")
+GLM_MODEL = os.getenv("GLM_MODEL", "glm-4.6")
+GLM_FAST_MODEL = os.getenv("GLM_FAST_MODEL", "glm-4.6-air")
 
 # MiniMax
 MiniMax_API_KEY = os.getenv("MiniMax_API_KEY", "")

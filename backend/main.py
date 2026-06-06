@@ -53,8 +53,8 @@ _PROVIDER_META = {
     },
     "glm": {
         "name": "GLM (智谱)",
-        "flagship_model": "glm-4.5",
-        "fast_model": "glm-4.5-air",
+        "flagship_model": "glm-4.6",
+        "fast_model": "glm-4.6-air",
     },
     "minimax": {
         "name": "MiniMax",
