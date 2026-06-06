@@ -1,0 +1,43 @@
+[
+  {
+    "query": "AlphaFold protein structure prediction",
+    "expected_papers": [
+      "Highly Accurate Protein Structure Prediction with AlphaFold",
+      "AlphaFold Protein Structure Database in 2024",
+      "RoseTTAFold: A Deep Learning Approach to Protein Structure Prediction"
+    ],
+    "budget": 0.5
+  },
+  {
+    "query": "transformer self-attention mechanism",
+    "expected_papers": [
+      "Attention Is All You Need",
+      "BERT: Pre-training of Deep Bidirectional Transformers"
+    ],
+    "budget": 0.5
+  },
+  {
+    "query": "graph neural network molecular property",
+    "expected_papers": [
+      "Graph Neural Networks: A Review of Methods and Applications",
+      "Molecular Graph Convolutions: Moving Beyond Fingerprints"
+    ],
+    "budget": 0.5
+  },
+  {
+    "query": "diffusion model image generation",
+    "expected_papers": [
+      "Denoising Diffusion Probabilistic Models",
+      "High-Resolution Image Synthesis with Latent Diffusion Models"
+    ],
+    "budget": 0.5
+  },
+  {
+    "query": "reinforcement learning game playing",
+    "expected_papers": [
+      "Mastering the Game of Go without Human Knowledge",
+      "Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm"
+    ],
+    "budget": 0.5
+  }
+]
