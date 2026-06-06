@@ -44,7 +44,7 @@ async def search_node(state: SearchState) -> SearchState:
     # 第二轮及以后：与已有论文合并
     iteration = state.get("iteration", 0)
     if iteration > 0:
-        existing_dicts = state.get("expanded_papers") or state.get("ranked_papers") or state.get("raw_papers") or []
+        existing_dicts = state.get("ranked_papers") or state.get("expanded_papers") or state.get("raw_papers") or []
         if existing_dicts:
             existing_papers = []
             for d in existing_dicts:
