@@ -18,7 +18,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -331,6 +332,24 @@ install_security(app)
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+# ===== Round 5 S-3: 自定义 422 异常处理器, 不回显用户 input =====
+# 默认 FastAPI 在 RequestValidationError 时把用户 input 全文回显到响应 body,
+# 攻击者可借此向日志注入 ANSI / 控制字符 / 大量冗长字段, 也泄露隐私 (query
+# 字符串中可能含 PII 或机构内部检索词)。这里只回显错误类型, 不回显 input。
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Round 5 S-3: 422 不回显用户 input, 防日志注入 + 隐私泄露."""
+    error_types = [e.get("type", "") for e in exc.errors()]
+    logger.warning(
+        f"RequestValidationError on {request.url.path}: "
+        f"{len(exc.errors())} errors, types={error_types}"
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": "Invalid request: 参数校验失败"},
+    )
 
 # 全局每小时预算计数器（H2 修复：迁移到 SQLite WAL — 多 worker 原子性）
 # 旧版用进程内 dict + .budget_state.json 文件，4-worker Gunicorn 部署下：
