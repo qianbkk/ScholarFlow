@@ -54,6 +54,7 @@ async def main():
         "model_usage": {},
         "status": "decomposing",
         "error": None,
+        "provider": None,  # 保持与 SearchState TypedDict 一致
     }
 
     t0 = time.time()
