@@ -657,9 +657,29 @@ def _build_search_response(
     fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
     is_degraded = fallback_count > 0
 
-    # model_usage 白名单 (M-4)
+    # Round 6 M3: model_usage_summary 改白名单, 去除 provider 内部名 + 内部 task 名泄露
+    # 之前 R5 M-4 只切了 " (fallback to mock)" 后缀, 仍然把 "MiniMax-M3" / "kimi-k2.5"
+    # / "fast_score_batch_3d" 这些内部 provider 内部实现细节直接透出到 API response。
+    # 这里把它们统一映射到 4 个公开 category: language_model / scoring / query_planning / other,
+    # 前端展示时不再泄露具体哪个 provider 哪个版本, 也不泄露内部 task 命名 (e.g. batch_3d)。
+    def _public_model_label(key: str) -> str:
+        """Map internal model/task name to public label (whitelist)."""
+        base = key.split(" (")[0]
+        if any(p in base for p in (
+            "MiniMax", "kimi", "k2", "M2.7", "M3",  # provider 内部名
+            "sonnet", "haiku", "opus",  # Anthropic 内部名
+            "deepseek", "chatgpt", "gpt-",  # 其他 provider 内部名
+            "glm",  # 智谱
+        )):
+            return "language_model"
+        if "score" in base or "batch" in base or "rank" in base:
+            return "scoring"
+        if "decompose" in base or "refine" in base:
+            return "query_planning"
+        return "other"
+
     model_usage_summary = {
-        (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
+        _public_model_label(k): {"tokens": int((v or {}).get("tokens", 0))}
         for k, v in (state_dict.get("model_usage") or {}).items()
     }
 

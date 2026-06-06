@@ -87,16 +87,19 @@ export function QueryPanel({
   };
 
   return (
-    {/* Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
-        高度也变 h-auto (移动端跟随内容) vs h-full (桌面 flex 子项填满). */}
+    // Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
+    // 高度也变 h-auto (移动端跟随内容) vs h-full (桌面 flex 子项填满).
     <aside className="w-full lg:w-1/4 lg:min-w-[280px] h-auto lg:h-full bg-white border-r border-slate-200 flex flex-col">
       <div className="p-3 border-b border-slate-100">
         <h2 className="text-sm font-semibold text-slate-700 mb-2">研究查询</h2>
         <form onSubmit={submit} className="space-y-2">
+          {/* Round 6 S4': 三个英文点 "..." → Unicode 省略号 "…", 符合中文排版规范.
+              R4 后 QueryPanel.tsx 残留 "（中英文均可）..." 等半角 ellipsis,
+              与 R5 新加的 "加载中…" 风格不一致. 统一改用 U+2026. */}
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="输入研究问题（中英文均可）..."
+            placeholder="输入研究问题（中英文均可）…"
             rows={2}
             maxLength={2000}
             className="w-full text-sm border border-slate-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
@@ -164,17 +167,19 @@ export function QueryPanel({
           <div className="flex items-center gap-2 text-xs">
             {/* Round 6 S1: loading 时 search 按钮变取消按钮, 闭环 Round 5 S-5 后端 cancel.
                 之前 loading 期间用户无法中断 8 节点流水线 (SSE + LLM 调用可能跑 30s+),
-                按钮文案 '搜索中...' 误导用户以为在排队, 实际无取消能力.
+                按钮文案 '搜索中…' 误导用户以为在排队, 实际无取消能力.
                 现在 loading 时:
                   - 按钮文案 '搜索中…' → '取消'
                   - 颜色 brand-600 → rose-600 (语义化危险动作)
                   - 行为 onClick(onReset) → 触发 useSearch.reset → POST /api/search/cancel
-                注意 type='button' (不是 'submit'), 避免点取消时误触发表单 submit. */}
+                注意 type='button' (不是 'submit'), 避免点取消时误触发表单 submit.
+                Round 6 S4': 加 title/aria-label 中文 hover 提示 + 加载中文文案统一化. */}
             {loading ? (
               <button
                 type="button"
                 onClick={onReset}
                 aria-label="取消当前搜索"
+                title="点击中断当前检索流水线"
                 className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-1.5 rounded-md transition"
               >
                 取消
@@ -183,6 +188,8 @@ export function QueryPanel({
               <button
                 type="submit"
                 disabled={!query.trim()}
+                aria-label="开始搜索"
+                title={!query.trim() ? '请先输入研究问题' : '开始检索'}
                 className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
               >
                 搜索
@@ -200,8 +207,14 @@ export function QueryPanel({
           </div>
         </form>
 
+        {/* Round 6 S4': 加载进度条加中文 aria-label, 屏幕阅读器友好. */}
         {loading && (
-          <div className="mt-2 p-2 bg-brand-50 border border-brand-200 rounded-md">
+          <div
+            className="mt-2 p-2 bg-brand-50 border border-brand-200 rounded-md"
+            role="status"
+            aria-live="polite"
+            aria-label="搜索进行中"
+          >
             <div className="flex items-center justify-between text-[10px] text-brand-700 mb-1.5">
               <span className="font-medium">
                 {pipelineSteps[currentStep]?.emoji} {pipelineSteps[currentStep]?.label}
