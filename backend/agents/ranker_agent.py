@@ -178,9 +178,30 @@ async def rank_node(state: SearchState) -> SearchState:
     if not papers_filtered:
         papers_filtered = papers  # 兜底：全空时不丢论文
 
-    # 分批（每批 10 篇）
+    # ===== Round 2 PERF-006: 跨迭代复用 relevance/consistency score =====
+    # Root cause: refine 迭代会重新调 LLM 给所有论文打分, 即使前一轮已评过
+    # (relevance/consistency 已写入 expanded_papers dict 跨迭代保留), 浪费 ~50% LLM token。
+    # Fix: 仅对 relevance_score == 0 或 consistency_score == 0 的论文调 LLM,
+    #      其余论文直接复用缓存的 final_score / authority / relevance / consistency。
+    # Verification: log 报告 scoring N new papers (skipped M already scored);
+    #               全部已评时 LLM 调用数为 0 (fast-path), total_cost=$0.0000。
+    papers_to_score = [p for p in papers_filtered if p.relevance_score == 0 or p.consistency_score == 0]
+    papers_already_scored = [p for p in papers_filtered if p.relevance_score > 0 and p.consistency_score > 0]
+
+    if not papers_to_score:
+        logger.info(
+            f"[rank_node] all {len(papers_filtered)} papers already scored, skip LLM "
+            f"(Round 2 PERF-006 cross-iteration cache hit)"
+        )
+    else:
+        logger.info(
+            f"[rank_node] scoring {len(papers_to_score)} new papers "
+            f"(skipped {len(papers_already_scored)} already scored, Round 2 PERF-006)"
+        )
+
+    # 分批（每批 10 篇）— 只对 papers_to_score 调 LLM; 空列表 = 0 token
     BATCH_SIZE = 10
-    batches = [papers_filtered[i:i+BATCH_SIZE] for i in range(0, len(papers_filtered), BATCH_SIZE)]
+    batches = [papers_to_score[i:i+BATCH_SIZE] for i in range(0, len(papers_to_score), BATCH_SIZE)]
 
     # ===== PERF: 合并相关性 + 一致性 单次 LLM 调用（节省 50% token）=====
     # 旧版：每篇论文 × 2 次调用 (relevance + consistency)
@@ -226,8 +247,11 @@ async def rank_node(state: SearchState) -> SearchState:
         total_cost += usage.get("cost_usd", 0.0)
         total_tokens += usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
 
-    # 给每篇论文写分
-    for paper, rel, cons in zip(papers_filtered, rel_results, cons_results):
+    # 给每篇"本轮新评分"的论文写分
+    # 已评过的论文 (papers_already_scored) 保留前一轮写入的
+    # relevance / consistency / authority / final_score, 不在本轮重算
+    # (Round 2 PERF-006 跨迭代缓存)。
+    for paper, rel, cons in zip(papers_to_score, rel_results, cons_results):
         paper.relevance_score = rel
         paper.authority_score = _authority_score(paper.citation_count, paper.venue)
         paper.consistency_score = cons
