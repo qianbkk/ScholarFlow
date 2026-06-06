@@ -54,6 +54,12 @@ from backend.middleware import install_security  # Round 5 M-3: HTTP 安全头 +
 logger = logging.getLogger(__name__)
 
 
+# Round 6 M2: in-flight search task table, 让 /search/cancel 真能停 in-flight pipeline
+# (闭环 Round 5 S-5 stub — 之前只记日志, 没有真取消路径)
+# key: request_id (string, FastAPI middleware 注入), value: asyncio.Task wrapping search_graph.ainvoke
+_in_flight_searches: dict[str, asyncio.Task] = {}
+
+
 # ===== Provider 路由元数据（用户可选 LLM）=====
 # 给前端 /providers 端点用的展示元数据。
 # has_key 来自对应 *_API_KEY 环境变量 — 没有 key 的 provider 不在选择列表里。
@@ -742,7 +748,19 @@ async def search(req: SearchRequest, request: Request):
         # (当前 graph 节点不会主动 raise, 但保留扩展点, 未来 cost_tracker
         # 节点可在 cost >= budget 时 raise 让主流程走 budget_exceeded 分支)
         try:
-            final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
+            # Round 6 M2: 注册 in-flight task, 让 /search/cancel 真能停 pipeline
+            # (闭环 Round 5 S-5 stub — 之前只记日志, 没有真取消路径)
+            # 关键: 把 search_graph.ainvoke(initial) 单独 create_task, 让 cancel_search
+            # 拿得到 task 句柄。req_id 用 middleware 注入的 request_id, 缺省 fallback 一个
+            # uuid hex (e.g. 当单元测试绕过 middleware 时也能注册成功)。
+            import uuid
+            req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
+            asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
+            _in_flight_searches[req_id] = asyncio_task
+            try:
+                final = await asyncio.wait_for(asyncio_task, timeout=240.0)
+            finally:
+                _in_flight_searches.pop(req_id, None)
         except BudgetExceededError as bee:
             elapsed = time.time() - t0
             logger.warning(
@@ -845,15 +863,28 @@ async def root():
 async def cancel_search(req: SearchCancelRequest, request: Request):
     """用户主动取消进行中的搜索 (Round 4 U2 配套)。
     Round 5 S-4: 加 10/minute 限流 + request_id 长度/charset 校验。
+    Round 6 M2: 真取消 in-flight pipeline (闭环 Round 5 S-5 stub) — 用 in-flight task
+    table + task.cancel()。
 
-    当前实现: 仅记日志, 真正中断在 client disconnect 时已经走 SSE 的 try/finally。
-    未来可在 in-flight task table 中查 request_id → task.cancel()。
+    行为:
+      * request_id 在 _in_flight_searches 表中 → task.cancel(), 返回 cancelled=True
+      * request_id 不在表中 (缓存命中/已完成/不存在) → 返回 cancelled=False, 不报错
     """
     logger.info(
         f"[/search/cancel] request_id={req.request_id} received "
         f"(length={len(req.request_id) if req.request_id else 0})"
     )
-    return {"cancelled": True, "request_id": req.request_id}
+    # Round 6 M2: 真取消 in-flight pipeline (闭环 Round 5 S-5 stub), 用 in-flight task table + task.cancel()
+    if req.request_id and req.request_id in _in_flight_searches:
+        _in_flight_searches[req.request_id].cancel()
+        logger.info(
+            f"[/search/cancel] task cancelled for request_id={req.request_id}"
+        )
+        return {"cancelled": True, "request_id": req.request_id}
+    logger.info(
+        f"[/search/cancel] no in-flight task for request_id={req.request_id}"
+    )
+    return {"cancelled": False, "request_id": req.request_id}
 
 
 # ===== SSE streaming endpoint (real-time progress) =====
