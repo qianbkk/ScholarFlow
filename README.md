@@ -22,7 +22,7 @@ ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 
 
 - **后端**: Python 3.11+ · LangGraph 0.2+ · FastAPI · httpx · Anthropic SDK · OpenAI SDK
 - **前端**: React 18 · TypeScript · Vite · D3.js v7 · Tailwind CSS · marked
-- **LLM**: Kimi K2.5 (Anthropic 协议) · GLM-4.5 · MiniMax-M3 · Claude (官方) · DeepSeek (OpenAI 协议)
+- **LLM**: Kimi K2.5 (Anthropic 协议, 可换 K2.6) · GLM-4.6 · MiniMax-M3 · Claude (官方) · DeepSeek (OpenAI 协议)
 - **数据源**: Semantic Scholar Graph API · OpenAlex API
 
 ---
