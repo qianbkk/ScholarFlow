@@ -614,6 +614,9 @@ _MOCK_PAPERS = [
 # 键为 paper_id，值为该 paper 引用的其他 mock 论文 ID。
 # 选取原则：跨方向、跨年代的标志性论文，模拟真实学术引用网络。
 _CURATED_REFERENCES: dict[str, list[str]] = {
+    # 奠基论文（最早 mock 论文，引用先前跨领域工作）
+    "ss_001_transformer":   ["ss_040_word2vec", "ss_042_vae", "openalex_W002"],
+    "ss_002_bert":          ["ss_001_transformer", "ss_040_word2vec"],
     # LLM 衍生链
     "ss_003_gpt3":          ["ss_001_transformer", "ss_002_bert", "ss_011_codex"],
     "ss_004_llama2":        ["ss_001_transformer", "ss_007_chain_of_thought", "ss_003_gpt3"],
