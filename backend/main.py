@@ -493,6 +493,39 @@ async def _return_budget(amount: float) -> None:
 
 # ===== Request / Response Models =====
 
+def _make_initial_state(
+    safe_query: str,
+    max_iterations: int,
+    budget: float,
+    provider: str,
+    status: str = "decomposing",
+) -> dict:
+    """构造 LangGraph SearchState 初始 dict.
+
+    Round 4 C2: 抽出来避免 /search 和 /search/stream 两处复制, 杜绝字段漂移。
+    """
+    return {
+        "original_query": safe_query,
+        "sub_queries": [],
+        "raw_papers": [],
+        "expanded_papers": [],
+        "expanded_paper_ids": [],
+        "ranked_papers": [],
+        "report": "",
+        "citation_graph": {},
+        "iteration": 0,
+        "max_iterations": max_iterations,
+        "total_tokens_used": 0,
+        "total_cost_usd": 0.0,
+        "budget_limit_usd": budget,
+        "model_usage": {},
+        "status": status,
+        "error": None,
+        "provider": provider,
+        "request_id": get_request_id(),
+    }
+
+
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1, max_length=2000, description="研究查询（中英文均可）")
     budget: float = Field(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0, description="单次预算上限 USD")
@@ -575,26 +608,9 @@ async def search(req: SearchRequest, request: Request):
     await _check_and_reserve_budget(req.budget)
     budget_reserved = True  # try/finally 兜底标志
 
-    initial = {
-        "original_query": safe_query,
-        "sub_queries": [],
-        "raw_papers": [],
-        "expanded_papers": [],
-        "expanded_paper_ids": [],
-        "ranked_papers": [],
-        "report": "",
-        "citation_graph": {},
-        "iteration": 0,
-        "max_iterations": req.max_iterations,
-        "total_tokens_used": 0,
-        "total_cost_usd": 0.0,
-        "budget_limit_usd": req.budget,
-        "model_usage": {},
-        "status": "decomposing",
-        "error": None,
-        "provider": provider,
-        "request_id": get_request_id(),
-    }
+    initial = _make_initial_state(
+        safe_query, req.max_iterations, req.budget, provider
+    )
 
     import time
     t0 = time.time()
@@ -780,26 +796,9 @@ async def search_stream(
     # 所有路径 (success/cache hit/timeout/exception/cancel/disconnect) 都归还预算
     await _check_and_reserve_budget(budget)
 
-    initial = {
-        "original_query": safe_query,
-        "sub_queries": [],
-        "raw_papers": [],
-        "expanded_papers": [],
-        "expanded_paper_ids": [],
-        "ranked_papers": [],
-        "report": "",
-        "citation_graph": {},
-        "iteration": 0,
-        "max_iterations": max_iter,
-        "total_tokens_used": 0,
-        "total_cost_usd": 0.0,
-        "budget_limit_usd": budget,
-        "model_usage": {},
-        "status": "decomposing",
-        "error": None,
-        "provider": resolved_provider,
-        "request_id": get_request_id(),
-    }
+    initial = _make_initial_state(
+        safe_query, max_iter, budget, resolved_provider
+    )
 
     import time
     t0 = time.time()
