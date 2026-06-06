@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { Paper } from '../types';
 import { fetchProviders, type ProviderInfo } from '../services/api';
 
@@ -39,6 +39,19 @@ export function QueryPanel({
   const [defaultProvider, setDefaultProvider] = useState<string>('');
   const [selectedProvider, setSelectedProvider] = useState<string>('');  // 空 = 用默认
   const [providersLoading, setProvidersLoading] = useState(false);
+
+  // P0-2 修复：degraded/fallback 聚合状态从 papers 派生
+  // 后端 is_degraded_response / fallback_paper_count 字段暂未发送（main.py SearchResponse 未声明），
+  // 但每篇 Paper.is_fallback 已有真实数据，从单篇标记聚合成顶部 banner 状态，
+  // 任何一篇来自 fallback 即视为 degraded，count 计数真实降级论文数。
+  // 这样不依赖后端新增字段，前端就能渲染醒目 banner，与 P0-2 目标一致。
+  const { fallbackPaperCount, isDegraded } = useMemo(() => {
+    let count = 0;
+    for (const p of papers) {
+      if (p.is_fallback) count += 1;
+    }
+    return { fallbackPaperCount: count, isDegraded: count > 0 };
+  }, [papers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -201,6 +214,26 @@ export function QueryPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
+        {/* P0-2 修复：degraded/fallback 路径明确 UI 标识
+            当任一论文来自 fallback 时，在论文列表顶部显示醒目（但非阻塞）banner，
+            告知用户本次有部分论文来自后备数据。从 papers 派生（不依赖后端聚合字段），
+            后端若后续发送 is_degraded_response / fallback_paper_count，可平滑切换到该字段。 */}
+        {isDegraded && (
+          <div
+            className="bg-amber-50 border-l-4 border-amber-400 text-amber-800 px-4 py-3 mx-3 mt-3 rounded-md flex items-start gap-3"
+            role="alert"
+            data-testid="degraded-banner"
+          >
+            <span className="text-amber-600 text-xl leading-none" role="img" aria-label="warning">⚠️</span>
+            <div className="flex-1">
+              <h4 className="font-semibold text-sm">部分结果来自后备数据</h4>
+              <p className="text-xs mt-1 text-amber-700">
+                本次搜索触发了 {fallbackPaperCount} 篇论文的后备 fallback
+                （可能因 LLM API 限流、key 失效或网络问题）。建议检查 provider 配置后重试。
+              </p>
+            </div>
+          </div>
+        )}
         <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 sticky top-0 flex items-center justify-between">
           <h3 className="text-xs font-semibold text-slate-600">
             论文列表 {papers.length > 0 && `(${papers.length})`}
@@ -230,9 +263,21 @@ export function QueryPanel({
                   {i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
-                  <p className="text-[11px] font-medium text-slate-800 line-clamp-2 leading-tight">
-                    {p.title}
-                  </p>
+                  <div className="flex items-start gap-1.5">
+                    <p className="text-[11px] font-medium text-slate-800 line-clamp-2 leading-tight flex-1">
+                      {p.title}
+                    </p>
+                    {/* P0-2 修复：单篇论文来自 fallback 时，title 旁加醒目标记 */}
+                    {p.is_fallback && (
+                      <span
+                        className="shrink-0 inline-block bg-amber-100 text-amber-700 text-[9px] px-1.5 py-0.5 rounded font-medium"
+                        title="此论文来自后备 fallback 数据（非真实 API 检索）"
+                        data-testid="paper-fallback-badge"
+                      >
+                        后备
+                      </span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-500">
                     <span>{p.year || '—'}</span>
                     <span>·</span>
