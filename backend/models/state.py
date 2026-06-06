@@ -58,3 +58,13 @@ class SearchState(TypedDict):
     #   透传到所有 LangGraph 节点, 用于端到端日志关联。
     #   排障时 `grep [<rid>]` 即可还原一次完整调用链。
     request_id: Optional[str]
+
+    # Round 6 M4: query_refiner 跨 retry 复用的 top5 字符串 (R5 S-1 引入, 之前未声明)
+    # query_refiner 在每次重试时, 都会用 refine_prompt 再调一次 LLM 把当前
+    # ranked_papers 摘要成 1 段 top5 文本, 注入到下一轮 query_decompose 的
+    # prompt 里, 让 LLM 知道"上次已经看过这些, 别再返回"。R5 S-1 加了这个
+    # 跨 retry cache 机制但没在 TypedDict 显式声明, query_refiner 是用
+    # state.get('top5_summary_cache', '') 这种'约定俗成'的弱契约读 — 任何
+    # 字段重命名/清理脚本都可能误删。这里显式声明 + Optional[str] 允许 None,
+    # 消除'约定俗成'漂移风险 (闭环 R5 S-1)。
+    top5_summary_cache: Optional[str]
