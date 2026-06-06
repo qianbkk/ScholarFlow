@@ -568,7 +568,12 @@ class SearchResponse(BaseModel):
     citation_graph: dict
     total_cost_usd: float
     total_tokens_used: int
-    model_usage: dict
+    # Round 5 M-4: model_usage 改名 + 白名单 — 去除 cost + provider 内部名泄露
+    # 旧字段名 model_usage 直接把 llm_client 的内部结构透出,含 "MiniMax-M3"、
+    # "(fallback to mock)" 后缀、cost_usd 等敏感内部信息。改为 model_usage_summary,
+    # 只保留 { model_name: { tokens: int } } 干净结构,既满足前端展示,又避免
+    # provider 内部实现细节 (provider name / cost) 泄露到 API 响应。
+    model_usage_summary: dict = Field(default_factory=dict)
     iteration: int
     status: str
     elapsed_seconds: float = 0.0
@@ -705,13 +710,20 @@ async def search(req: SearchRequest, request: Request):
         ranked = final.get("ranked_papers", [])
         fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
         is_degraded = fallback_count > 0
+        # Round 5 M-4: model_usage 白名单 — 去除 cost + provider 内部名
+        # 只保留 { model: { tokens } }, 去掉 " (fallback to mock)" 后缀
+        model_usage_raw = final.get("model_usage") or {}
+        model_usage_summary = {
+            (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
+            for k, v in model_usage_raw.items()
+        }
         response_obj = SearchResponse(
             report=final.get("report", ""),
             ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:25]],
             citation_graph=final.get("citation_graph", {}),
             total_cost_usd=round(final.get("total_cost_usd", 0.0), 4),
             total_tokens_used=final.get("total_tokens_used", 0),
-            model_usage=final.get("model_usage", {}),
+            model_usage_summary=model_usage_summary,
             iteration=final.get("iteration", 0),
             status=final.get("status", "done"),
             elapsed_seconds=round(elapsed, 2),
@@ -962,13 +974,20 @@ async def search_stream(
             ranked = accumulated.get("ranked_papers", [])
             fallback_count = sum(1 for p in ranked if p.get("is_fallback", False))
             is_degraded = fallback_count > 0
+            # Round 5 M-4: model_usage 白名单 — 去除 cost + provider 内部名
+            # 只保留 { model: { tokens } }, 去掉 " (fallback to mock)" 后缀
+            model_usage_raw = accumulated.get("model_usage") or {}
+            model_usage_summary = {
+                (k.split(" (")[0]): {"tokens": int((v or {}).get("tokens", 0))}
+                for k, v in model_usage_raw.items()
+            }
             response_obj = SearchResponse(
                 report=accumulated.get("report", ""),
                 ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:25]],
                 citation_graph=accumulated.get("citation_graph", {}),
                 total_cost_usd=round(accumulated.get("total_cost_usd", 0.0), 4),
                 total_tokens_used=accumulated.get("total_tokens_used", 0),
-                model_usage=accumulated.get("model_usage", {}),
+                model_usage_summary=model_usage_summary,
                 iteration=accumulated.get("iteration", 0),
                 status=accumulated.get("status", "done"),
                 elapsed_seconds=round(elapsed, 2),
