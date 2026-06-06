@@ -534,6 +534,11 @@ class SearchRequest(BaseModel):
     provider: Optional[str] = Field(default=None, max_length=64, description="LLM provider id (kimi/glm/minimax/anthropic/deepseek)")
 
 
+class SearchCancelRequest(BaseModel):
+    """用户主动取消 in-flight 搜索的请求 (Round 4 U2 配套)。"""
+    request_id: Optional[str] = None
+
+
 class PaperResult(BaseModel):
     paper_id: str = ""
     title: str = ""
@@ -744,6 +749,17 @@ async def root():
         "docs": "/docs",
         "endpoints": ["GET /health", "GET /providers", "POST /search", "GET /search/stream"],
     }
+
+
+@app.post("/search/cancel")
+async def cancel_search(req: SearchCancelRequest):
+    """用户主动取消进行中的搜索 (Round 4 U2 配套)。
+
+    当前实现: 仅记日志, 真正中断在 client disconnect 时已经走 SSE 的 try/finally。
+    未来可在 in-flight task table 中查 request_id → task.cancel()。
+    """
+    logger.info(f"[/search/cancel] request_id={req.request_id} received")
+    return {"cancelled": True, "request_id": req.request_id}
 
 
 # ===== SSE streaming endpoint (real-time progress) =====
