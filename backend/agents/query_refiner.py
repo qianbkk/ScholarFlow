@@ -2,10 +2,13 @@
 节点 ⑤ — 自适应查询优化
 分析当前结果不足，生成补充查询词。
 """
+import logging
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
+
+logger = logging.getLogger(__name__)
 
 
 async def query_refine_node(state: SearchState) -> SearchState:
@@ -70,7 +73,7 @@ JSON output:
 
     cost_update = merge_usage_into_state(state, usage)
 
-    print(f"[QueryRefiner] iter={iteration+1} | new_queries={len(new_queries)}")
+    logger.info(f"[QueryRefiner] iter={iteration+1} | new_queries={len(new_queries)}")
 
     return {
         **state,

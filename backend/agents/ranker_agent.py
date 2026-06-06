@@ -275,7 +275,7 @@ async def rank_node(state: SearchState) -> SearchState:
     ranked = papers[:25]
 
     top_score = ranked[0].final_score if ranked else 0
-    print(
+    logger.info(
         f"[RankerAgent] Ranked {len(ranked)} papers, top_score={top_score:.2f}, "
         f"cost=${total_cost:.4f}, n_batches_combined={len(combined_batches)}"
     )

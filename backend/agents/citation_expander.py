@@ -100,14 +100,14 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     n_forward = 0
     for result in backward_results:
         if isinstance(result, Exception):
-            print(f"[CitationExpander] backward exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
+            logger.warning(f"[CitationExpander] backward exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
             continue
         if isinstance(result, list):
             n_backward += len(result)
             all_papers.extend(result)
     for result in forward_results:
         if isinstance(result, Exception):
-            print(f"[CitationExpander] forward exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
+            logger.warning(f"[CitationExpander] forward exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
             continue
         if isinstance(result, list):
             n_forward += len(result)
@@ -137,7 +137,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
 
     # 统计实际有引文边的论文数
     n_with_edges = sum(1 for p in unique if p.references)
-    print(
+    logger.info(
         f"[CitationExpander] {len(raw)} -> {len(unique)} papers "
         f"(+{n_backward} backward refs, +{n_forward} forward citers from top {len(top)} seeds, "
         f"{n_with_edges} papers have outgoing edges)"

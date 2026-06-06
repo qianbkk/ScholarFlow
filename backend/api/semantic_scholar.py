@@ -5,6 +5,7 @@ https://api.semanticscholar.org/graph/v1
 当 API_MOCK=true 时返回内置 mock 数据（无网络也能跑通）。
 """
 import asyncio
+import logging
 import os
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
@@ -12,6 +13,8 @@ from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
@@ -76,7 +79,7 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
     """
     papers = get_mock_papers(query, limit=limit)
     if papers:
-        print(f"[SemanticScholar] fallback to mock for {query[:40]!r}: {len(papers)} papers")
+        logger.warning(f"[SemanticScholar] fallback to mock for {query[:40]!r}: {len(papers)} papers")
     for p in papers:
         p.is_fallback = True
     return papers
@@ -121,12 +124,12 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            print(f"[SemanticScholar] search error {resp.status_code}: {query[:60]}")
+            logger.warning(f"[SemanticScholar] search error {resp.status_code}: {query[:60]}")
             # 失败降级：仍返回 mock 数据，避免 8 节点流水线空跑
             return _mock_fallback(query, limit)
         data = resp.json()
     except Exception as e:
-        print(f"[SemanticScholar] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
+        logger.warning(f"[SemanticScholar] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
     papers = []
@@ -187,11 +190,11 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            print(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
+            logger.warning(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
             return []
         data = resp.json()
     except Exception as e:
-        print(f"[SemanticScholar] refs exception: {scrub_sensitive(str(e))}")
+        logger.warning(f"[SemanticScholar] refs exception: {scrub_sensitive(str(e))}")
         return []
 
     papers = []
@@ -252,11 +255,11 @@ async def get_citations(paper_id: str, limit: int = 20) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            print(f"[SemanticScholar] citations {paper_id} status {resp.status_code}")
+            logger.warning(f"[SemanticScholar] citations {paper_id} status {resp.status_code}")
             return []
         data = resp.json()
     except Exception as e:
-        print(f"[SemanticScholar] citations exception: {scrub_sensitive(str(e))}")
+        logger.warning(f"[SemanticScholar] citations exception: {scrub_sensitive(str(e))}")
         return []
 
     papers = []

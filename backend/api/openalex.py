@@ -5,6 +5,7 @@ https://api.openalex.org
 当 API_MOCK=true 时返回内置 mock 数据。
 """
 import asyncio
+import logging
 import os
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
@@ -12,6 +13,8 @@ from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+
+logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
@@ -141,11 +144,11 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             },
         )
         if resp.status_code != 200:
-            print(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
+            logger.warning(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
             return _mock_fallback(query, limit)
         data = resp.json()
     except Exception as e:
-        print(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
+        logger.warning(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
     papers = []
