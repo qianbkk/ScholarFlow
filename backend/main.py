@@ -550,17 +550,22 @@ async def list_providers():
 @limiter.limit("5/minute;20/hour")
 async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。"""
-    # VULN-002: 全局每小时预算闸门（H1 修复：原子化 check-and-reserve）
-    await _check_and_reserve_budget(req.budget)
-    # 校验 provider（如有）；无效或无 key → 400
-    provider = _resolve_provider(req.provider)
-    # VULN-001 Layer 0: 入口处净化用户 query
+    # VULN-001 Layer 0: 入口处净化用户 query (Round 2 CRITICAL-002+PERF-002: 移到
+    # 预算预留之前, 避免输入校验失败时白白消耗预算配额 — 失败请求不消耗预算)
     try:
         safe_query = sanitize_query(req.query)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=f"查询无效: {e}")
     if not safe_query:
         raise HTTPException(status_code=400, detail="查询内容不能为空")
+    # 校验 provider（如有）；无效或无 key → 400 (同样在预算预留前, 失败不消耗预算)
+    provider = _resolve_provider(req.provider)
+
+    # VULN-002: 全局每小时预算闸门（H1 修复：原子化 check-and-reserve）
+    # Round 2 CRITICAL-002+PERF-002: reserve 在 sanitize/provider 之后, 然后
+    # try/finally 兜底, 任何异常/超时/取消/缓存命中路径都确保预算归还
+    await _check_and_reserve_budget(req.budget)
+    budget_reserved = True  # try/finally 兜底标志
 
     initial = {
         "original_query": safe_query,
@@ -585,21 +590,25 @@ async def search(req: SearchRequest, request: Request):
 
     import time
     t0 = time.time()
-
-    # 缓存命中：直接返回上次结果（避免重复跑付费流水线）
-    # H4 修复：用 async 版本，SQLite I/O 走 to_thread、retry 退避走 asyncio.sleep
-    # Round 2 审计 (CRITICAL-001): cache_key 函数已加 provider 参数, 调用点必须传
-    # 以隔离跨 provider 的同 query 缓存,避免 kimi 缓存被 glm/anthropic 误命中
-    cached = await get_cached_async(safe_query, req.max_iterations, req.budget, provider=provider)
-    if cached is not None:
-        cached_response, cached_cost, cached_tokens = cached
-        logger.info(
-            f"[/search] cache hit q='{safe_query[:40]}' "
-            f"cost=${cached_cost:.4f} tokens={cached_tokens}"
-        )
-        return SearchResponse(**cached_response)
+    # Round 2 CRITICAL-002+PERF-002: finally 用 return_amount 决定归还额度
+    # 默认 req.budget (异常/超时/缓存命中); 成功路径更新为 (budget - actual_cost)
+    return_amount = req.budget
 
     try:
+        # 缓存命中：直接返回上次结果（避免重复跑付费流水线）
+        # H4 修复：用 async 版本，SQLite I/O 走 to_thread、retry 退避走 asyncio.sleep
+        # Round 2 审计 (CRITICAL-001): cache_key 函数已加 provider 参数, 调用点必须传
+        # 以隔离跨 provider 的同 query 缓存,避免 kimi 缓存被 glm/anthropic 误命中
+        cached = await get_cached_async(safe_query, req.max_iterations, req.budget, provider=provider)
+        if cached is not None:
+            cached_response, cached_cost, cached_tokens = cached
+            logger.info(
+                f"[/search] cache hit q='{safe_query[:40]}' "
+                f"cost=${cached_cost:.4f} tokens={cached_tokens}"
+            )
+            # 缓存命中: 本次未消耗 LLM, 全数归还 (return_amount 保持 = req.budget)
+            return SearchResponse(**cached_response)
+
         # 240s 上限：real 模式下 8 个 LLM 调用 + 双源检索 + 引文扩展通常需 100-180s,
         # 120s 在 query 复杂时会过早超时(Phase 3 验证: AlphaFold 查询实际 135s)
         final = await asyncio.wait_for(search_graph.ainvoke(initial), timeout=240.0)
@@ -611,7 +620,9 @@ async def search(req: SearchRequest, request: Request):
         actual_cost = float(final.get("total_cost_usd", 0.0))
         diff = req.budget - actual_cost
         if diff > 0.01:  # $0.01 阈值避免无意义小数运算
-            await _return_budget(diff)
+            return_amount = diff
+        else:
+            return_amount = 0.0
 
         response_obj = SearchResponse(
             report=final.get("report", ""),
@@ -645,8 +656,7 @@ async def search(req: SearchRequest, request: Request):
     except asyncio.TimeoutError:
         # 必须在 except Exception 之前（TimeoutError 是 Exception 子类，会被吞掉）
         logger.warning("[/search] timed out after 240s")
-        # 超时: 几乎没产生成本(只跑了部分节点),把预留全数归还
-        await _return_budget(req.budget)
+        # 超时: 几乎没产生成本(只跑了部分节点), 全数归还 (return_amount 保持 = req.budget)
         raise HTTPException(
             status_code=504,
             detail="搜索超时（>240s）。建议缩小查询范围或降低 max_iterations。",
@@ -654,7 +664,15 @@ async def search(req: SearchRequest, request: Request):
     except Exception as e:
         # 仅服务端日志记详情，HTTP body 不暴露内部信息（VULN-002 修复）
         logger.error("[/search] error", exc_info=True)
+        # 异常: return_amount 保持 = req.budget (全还)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+    finally:
+        # Round 2 CRITICAL-002+PERF-002: 兜底归还, 确保任何未显式 return budget 的路径都归还
+        if budget_reserved and return_amount > 0.01:
+            try:
+                await _return_budget(return_amount)
+            except Exception as return_err:
+                logger.warning(f"[/search] budget return failed (non-fatal): {return_err}")
 
 
 @app.get("/")
