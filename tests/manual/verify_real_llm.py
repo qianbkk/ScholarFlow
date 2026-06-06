@@ -13,7 +13,8 @@ import sys
 import time
 
 os.environ['PYTHONIOENCODING'] = 'utf-8'
-sys.path.insert(0, r'D:/AI/Claude code workspace/Atest')
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, PROJECT_ROOT)
 
 # ===== TEST A: Mock synthesis 独立验证 =====
 def test_mock_synthesis_function():
@@ -183,8 +184,9 @@ async def test_real_llm_inprocess():
         print("  [OK]   报告不是硬编码 Transformer 模板")
 
     # 保存供 Playwright 验证
-    out = "D:/AI/Claude code workspace/Atest/playwright_runs/e2e_real_llm_response.json"
-    os.makedirs(os.path.dirname(out), exist_ok=True)
+    OUT_DIR = os.path.join(PROJECT_ROOT, "playwright_runs")
+    os.makedirs(OUT_DIR, exist_ok=True)
+    out = os.path.join(OUT_DIR, "e2e_real_llm_response.json")
     with open(out, "w", encoding="utf-8") as f:
         json.dump({
             "query": initial["original_query"],
