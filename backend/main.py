@@ -29,6 +29,12 @@ from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.utils.cache import get_cached_async, set_cached_async  # H4: result cache (async, non-blocking)
+from backend.utils.observability import (  # Round 2 PERF-007: 全链路 request_id
+    new_request_id,
+    set_request_id,
+    get_request_id,
+    setup_logging,
+)
 from backend.config import (
     BUDGET_LIMIT_USD,
     MAX_SEARCH_ITERATIONS,
@@ -224,6 +230,9 @@ def _resolve_provider(provider: Optional[str]) -> str:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动期预热代理缓存，关闭期释放连接池。"""
+    # Round 2 PERF-007: 启动时绑定 RequestIdFilter 到根 logger,
+    # 让所有子 logger 都自动带上 request_id 字段。
+    setup_logging()
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
     import asyncio
     loop = asyncio.get_event_loop()
@@ -256,6 +265,24 @@ app = FastAPI(
     description="科研文献智能搜索系统 — 多 Agent 学术情报 API",
     lifespan=lifespan,
 )
+
+
+# Round 2 PERF-007: 全链路 request_id 追踪, middleware + contextvars 注入 logger, 端到端可观测性
+@app.middleware("http")
+async def request_id_middleware(request, call_next):
+    """为每个 HTTP 请求注入 request_id。
+
+    行为:
+      1. 优先读上游 `X-Request-ID` header (支持反向代理 / API gateway 透传)
+      2. 没有则生成新 ID (UUID4 hex 前 12 字符, 短而足够)
+      3. 写入 contextvar, 让 logger 自动 filter 拾取
+      4. 写回响应 header, 方便客户端 / 上游日志关联
+    """
+    rid = request.headers.get("X-Request-ID") or new_request_id()
+    set_request_id(rid)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = rid
+    return response
 
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv(
@@ -553,6 +580,7 @@ async def search(req: SearchRequest, request: Request):
         "status": "decomposing",
         "error": None,
         "provider": provider,
+        "request_id": get_request_id(),
     }
 
     import time
@@ -699,6 +727,7 @@ async def search_stream(
         "status": "decomposing",
         "error": None,
         "provider": resolved_provider,
+        "request_id": get_request_id(),
     }
 
     import time

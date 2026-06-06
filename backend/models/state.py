@@ -51,3 +51,10 @@ class SearchState(TypedDict):
     # LLM provider（用户可选；None → 用 LLM_PROVIDER env 兜底）
     # 由 main.py 在 /search 与 /search/stream 入口解析后注入，agent 节点透传给 call_llm
     provider: Optional[str]
+
+    # 全链路追踪 ID (Round 2 PERF-007):
+    #   由 FastAPI middleware 在 HTTP 入口处设置到 contextvars,
+    #   在 /search / /search/stream 构造 initial state 时拷贝到 state 字段,
+    #   透传到所有 LangGraph 节点, 用于端到端日志关联。
+    #   排障时 `grep [<rid>]` 即可还原一次完整调用链。
+    request_id: Optional[str]
