@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { Paper } from '../types';
 import { fetchProviders, type ProviderInfo } from '../services/api';
 
@@ -17,6 +17,10 @@ interface Props {
   currentStep?: number;
   elapsedSec?: number;
   pipelineSteps?: PipelineStep[];
+  // Round 5 SIMPLIFY (API-001): 后端 M-1 已发 is_degraded_response + fallback_paper_count
+  // 顶层字段, 前端直接用, 替代之前从 papers[].is_fallback 单篇聚合的 useMemo 派生.
+  isDegradedResponse?: boolean;
+  fallbackPaperCount?: number;
 }
 
 const SUGGESTIONS = [
@@ -30,6 +34,7 @@ const SUGGESTIONS = [
 export function QueryPanel({
   loading, onSearch, onReset, papers, lastQuery,
   currentStep = 0, elapsedSec = 0, pipelineSteps = [],
+  isDegradedResponse = false, fallbackPaperCount = 0,
 }: Props) {
   const [query, setQuery] = useState('');
   const [budget, setBudget] = useState(2.0);
@@ -39,19 +44,6 @@ export function QueryPanel({
   const [defaultProvider, setDefaultProvider] = useState<string>('');
   const [selectedProvider, setSelectedProvider] = useState<string>('');  // 空 = 用默认
   const [providersLoading, setProvidersLoading] = useState(false);
-
-  // P0-2 修复：degraded/fallback 聚合状态从 papers 派生
-  // 后端 is_degraded_response / fallback_paper_count 字段暂未发送（main.py SearchResponse 未声明），
-  // 但每篇 Paper.is_fallback 已有真实数据，从单篇标记聚合成顶部 banner 状态，
-  // 任何一篇来自 fallback 即视为 degraded，count 计数真实降级论文数。
-  // 这样不依赖后端新增字段，前端就能渲染醒目 banner，与 P0-2 目标一致。
-  const { fallbackPaperCount, isDegraded } = useMemo(() => {
-    let count = 0;
-    for (const p of papers) {
-      if (p.is_fallback) count += 1;
-    }
-    return { fallbackPaperCount: count, isDegraded: count > 0 };
-  }, [papers]);
 
   useEffect(() => {
     let cancelled = false;
@@ -229,11 +221,11 @@ export function QueryPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
-        {/* P0-2 修复：degraded/fallback 路径明确 UI 标识
-            当任一论文来自 fallback 时，在论文列表顶部显示醒目（但非阻塞）banner，
-            告知用户本次有部分论文来自后备数据。从 papers 派生（不依赖后端聚合字段），
-            后端若后续发送 is_degraded_response / fallback_paper_count，可平滑切换到该字段。 */}
-        {isDegraded && (
+        {/* Round 5 SIMPLIFY (API-001): 切到 M-1 顶层字段
+            is_degraded_response / fallback_paper_count 直接来自后端 SearchResponse
+            (Round 5 M-1, commit 0754fa1), 替代之前从 papers[].is_fallback 单篇聚合的 useMemo 派生.
+            闭环后端 API + 减 1 个 useMemo. */}
+        {isDegradedResponse && (
           <div
             className="bg-amber-50 border-l-4 border-amber-400 text-amber-800 px-4 py-3 mx-3 mt-3 rounded-md flex items-start gap-3"
             role="alert"
