@@ -55,6 +55,8 @@ export default function App() {
           currentStep={currentStep}
           elapsedSec={elapsedSec}
           pipelineSteps={pipelineSteps}
+          isDegradedResponse={result?.is_degraded_response ?? false}
+          fallbackPaperCount={result?.fallback_paper_count ?? 0}
         />
         <ReportPanel report={result?.report ?? ''} loading={loading} query={lastQuery} />
         <GraphPanel graph={result?.citation_graph ?? null} />
