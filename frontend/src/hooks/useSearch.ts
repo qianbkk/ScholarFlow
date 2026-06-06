@@ -54,7 +54,20 @@ interface SSENodeEvent {
   iteration?: number;
 }
 
-type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent;
+// Round 4 U1: 节点级预算硬停止事件 (P0-1)
+// 后端 budget_service 在 cost >= budget 时推 event='budget_exceeded'，
+// 携带当前 cost_usd 和预算上限 budget_usd 用于 UI 提示。
+// 前端若不显式处理，会落进未匹配分支被静默丢弃，
+// 用户在预算耗尽时看不到明确提示反而以为是网络问题重试，触发再次 budget_exceeded。
+interface SSEBudgetExceededEvent {
+  event: 'budget_exceeded';
+  cost_usd?: number;
+  budget_usd?: number;
+  node?: string;
+  message?: string;
+}
+
+type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent;
 
 export function useSearch() {
   const [loading, setLoading] = useState(false);
@@ -239,6 +252,26 @@ export function useSearch() {
           setError(payload.message || '搜索失败');
           cleanup();
           setLoading(false);
+        } else if (payload.event === 'budget_exceeded') {
+          // Round 4 U1: 节点级预算硬停止触发 — 闭环 P0-1
+          // 之前该事件未在 frontend SSE onmessage 中显式处理，
+          // 会落进未匹配分支被静默丢弃，用户在预算耗尽时看不到明确提示
+          // 反而会以为是网络问题重试，再次触发 budget_exceeded。
+          // 修复：给用户明确文案，并显式 cleanup() 关掉 SSE 连接。
+          const costStr =
+            typeof payload.cost_usd === 'number'
+              ? payload.cost_usd.toFixed(4)
+              : '?';
+          const budgetStr =
+            typeof payload.budget_usd === 'number'
+              ? payload.budget_usd.toFixed(2)
+              : '?';
+          setError(
+            `成本已达 $${costStr} >= 预算 $${budgetStr}。请降低 max_iterations 或 budget 后重试。`
+          );
+          cleanup();
+          setLoading(false);
+          return;
         }
       };
 
