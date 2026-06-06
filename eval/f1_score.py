@@ -16,6 +16,7 @@ Usage:
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 from typing import Iterable
@@ -25,6 +26,12 @@ sys.path.insert(0, PROJECT_ROOT)
 
 from backend.workflow.graph import search_graph
 from backend.config import LLM_PROVIDER, LLM_MOCK, API_MOCK
+from backend.utils.sanitize import sanitize_query  # Round 2 MEDIUM-005: eval 入口必须 sanitize
+
+# Round 2 MEDIUM-005: eval 走完整 LLM 链路, 必须限 budget 防止 1 次 eval 耗光全局预算
+MAX_EVAL_BUDGET = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 def compute_f1(retrieved: list[str], relevant: list[str]) -> dict:
@@ -51,8 +58,18 @@ def compute_f1(retrieved: list[str], relevant: list[str]) -> dict:
 
 async def run_eval(query: str, expected_titles: list[str], budget: float = 1.0) -> dict:
     """Run a single retrieval evaluation: query -> top papers -> F1 vs expected."""
+    # Round 2 MEDIUM-005: 入口处 sanitize (与 main.py 一致), 防止 prompt injection 评估污染
+    sanitized = sanitize_query(query)
+    if not sanitized:
+        logger.warning(f"eval query sanitized to empty, skip: {query[:60]!r}")
+        return {
+            "precision": 0.0, "recall": 0.0, "f1": 0.0,
+            "true_positives": 0, "retrieved_count": 0, "relevant_count": len(expected_titles),
+        }
+    # Round 2 MEDIUM-005: budget 上限, 防止单次 eval 预留过多预算
+    effective_budget = min(MAX_EVAL_BUDGET, max(0.1, float(budget)))
     initial = {
-        "original_query": query,
+        "original_query": sanitized,
         "sub_queries": [],
         "raw_papers": [],
         "expanded_papers": [],
@@ -64,7 +81,7 @@ async def run_eval(query: str, expected_titles: list[str], budget: float = 1.0) 
         "max_iterations": 2,
         "total_tokens_used": 0,
         "total_cost_usd": 0.0,
-        "budget_limit_usd": budget,
+        "budget_limit_usd": effective_budget,
         "model_usage": {},
         "status": "decomposing",
         "error": None,
@@ -76,7 +93,7 @@ async def run_eval(query: str, expected_titles: list[str], budget: float = 1.0) 
 
     print("=" * 60)
     print(f"Provider : {LLM_PROVIDER}  (LLM_MOCK={LLM_MOCK}, API_MOCK={API_MOCK})")
-    print(f"Query    : {query}")
+    print(f"Query    : {sanitized}")
     print(f"Expected : {len(expected_titles)} papers")
     print(f"Retrieved: {len(retrieved)} papers")
     print(f"Precision: {metrics['precision']:.3f}")
