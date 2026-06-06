@@ -73,14 +73,29 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
 
 
 def _reconstruct_abstract(inverted_index: dict | None) -> str:
-    """OpenAlex 摘要以倒排索引存储，需重建为原文。"""
+    """OpenAlex 摘要以倒排索引存储，需重建为原文。
+
+    P1 bug 修复：旧实现用 `positions[i] for i in sorted(positions)`，遇到位置间隙
+    (e.g. inverted_index={"AI":[0,2],"model":[1]} —— pos 0,2 有、pos 1 跳了)
+    会 KeyError 抛异常。空 `inverted_index` 或 `inverted_index=None` 已被前置检查
+    拦截，但位置稀疏的索引会直接 500 整个 /search 流程。
+
+    修复：取 max position 后按 range 顺序 join，间隙用空字符串占位。这样：
+      - 不会 KeyError（任何稀疏索引都能跑通）
+      - 语义"尽量完整" —— OpenAlex 数据通常无间隙，占位串在 gap 处会被
+        上游 search 过滤（len(abstract) > 0 仍成立）
+      - 多次出现的 word 仍按 positions 分散到对应位置
+    """
     if not inverted_index:
         return ""
     positions: dict[int, str] = {}
     for word, pos_list in inverted_index.items():
         for pos in pos_list:
             positions[pos] = word
-    return " ".join(positions[i] for i in sorted(positions))
+    if not positions:
+        return ""
+    max_pos = max(positions.keys())
+    return " ".join(positions.get(i, "") for i in range(max_pos + 1))
 
 
 async def _get_with_retry(client: httpx.AsyncClient, url: str, params: dict) -> httpx.Response:
