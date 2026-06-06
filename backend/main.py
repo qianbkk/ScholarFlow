@@ -667,7 +667,7 @@ async def search(req: SearchRequest, request: Request):
 
         response_obj = SearchResponse(
             report=final.get("report", ""),
-            ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:20]],
+            ranked_papers=[PaperResult(**p) for p in final.get("ranked_papers", [])[:25]],
             citation_graph=final.get("citation_graph", {}),
             total_cost_usd=round(final.get("total_cost_usd", 0.0), 4),
             total_tokens_used=final.get("total_tokens_used", 0),
@@ -924,7 +924,7 @@ async def search_stream(
                 return_amount = 0.0
             response_obj = SearchResponse(
                 report=accumulated.get("report", ""),
-                ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:20]],
+                ranked_papers=[PaperResult(**p) for p in accumulated.get("ranked_papers", [])[:25]],
                 citation_graph=accumulated.get("citation_graph", {}),
                 total_cost_usd=round(accumulated.get("total_cost_usd", 0.0), 4),
                 total_tokens_used=accumulated.get("total_tokens_used", 0),
