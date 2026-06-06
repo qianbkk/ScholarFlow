@@ -23,6 +23,13 @@ ROUTER_BUDGET_SAFETY_MARGIN_RATIO = float(
     os.getenv("ROUTER_BUDGET_SAFETY_MARGIN_RATIO", "0.15")
 )
 
+# Round 6 S8: router per-iter cost cap $0.3, 防止单次 LLM 异常烧光全部 budget
+# 老的 ratio margin (剩余 < 15% 停) 在 budget=2 时剩余阈值 = $0.3 — 看似够用,
+# 但单次 refine 调用异常 (e.g. provider 返回异常大的 max_tokens) 可能一次就烧
+# $0.5+, 把 ratio margin 直接绕过。这里加硬上限, 在 ratio 检查之前先拦一道。
+# 0 是关闭。生产环境建议 0.3 (默认), dev/probe 可设 0 关闭。
+PER_ITER_BUDGET_CAP_USD = float(os.getenv("PER_ITER_BUDGET_CAP_USD", "0.3"))
+
 
 def should_refine(state: SearchState) -> str:
     """
@@ -34,6 +41,8 @@ def should_refine(state: SearchState) -> str:
         (refine 必然再花更多 token, 必超预算)。这是与 SSE 节点级
         硬停止的双重保险: SSE 在 chunk 边界实时停止; router 在 refine
         决策前拦截, 避免下一次 refine 调用白白启动 LLM。
+
+    Round 6 S8: per-iter cost cap, 单次迭代 LLM 异常烧光全部 budget 时强制停。
     """
     iteration = state.get("iteration", 0) or 0
     max_iter = state.get("max_iterations", 3) or 3
@@ -52,6 +61,16 @@ def should_refine(state: SearchState) -> str:
         logger.warning(
             f"[Router] P0-1 hard cap reached: cost=${cost:.3f} >= "
             f"budget=${budget:.2f} -> synthesize (skip refine)"
+        )
+        return "synthesize"
+
+    # Round 6 S8: per-iter cost cap, 单 iter 超过 $0.3 强制 synthesize
+    # 在 ratio margin 之前 — per-iter cap 更严格, 先拦; 避免异常 LLM 调用
+    # (e.g. 异常 max_tokens / 循环 retry) 一次烧光 $0.3+ 直接绕过 ratio 检查
+    if PER_ITER_BUDGET_CAP_USD > 0 and cost >= PER_ITER_BUDGET_CAP_USD:
+        logger.info(
+            f"[router] single iter cost ${cost:.4f} >= cap ${PER_ITER_BUDGET_CAP_USD:.2f}, "
+            f"强制 synthesize (round 6 S8 per-iter cap)"
         )
         return "synthesize"
 
