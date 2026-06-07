@@ -53,3 +53,17 @@ playwright_runs/
 # Claude memory: local-only (AI collaboration meta, not for public repo)
 .claude/memory/
 
+# ===== R10.5: 开发过程产生的辅助文件不入仓 (本地保留) =====
+# docs/ 是开发时写的笔记 / 架构 / 未来任务列表, 用户使用项目不需要
+docs/
+# tests/ 全部是开发用的测试代码, 不是使用项目必须的
+tests/
+# .github/ 模板和 CI 流程 — 仓库维护者用, 不是使用项目必须
+.github/
+# pytest.ini 是测试配置, 跟 tests/ 一起本地保留
+pytest.ini
+
+# ===== 保留 (开源项目标配) =====
+# README.md / LICENSE / VERSION / CHANGELOG.md / CONTRIBUTING.md
+# / CODE_OF_CONDUCT.md / SECURITY.md / .env.example 全部保留入仓
+
