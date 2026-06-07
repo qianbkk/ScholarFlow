@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+node_modules
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+backend/.cache
+playwright_runs
+.claude
+docs/internal
+docs/notes
+docs/audit-logs
+*.md
+!README.md

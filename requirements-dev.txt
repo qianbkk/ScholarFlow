@@ -1,0 +1,14 @@
+# 测试
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# 安全
+pip-audit>=2.6.0
+
+# 类型检查 (R10 可选)
+mypy>=1.0.0
+
+# 代码风格 (R10 可选)
+ruff>=0.1.0
+black>=23.0.0
