@@ -3,6 +3,9 @@
 merged from test_cache_key_provider.py, test_cache_key_provider_passed.py,
 test_cache_provider_and_init_flag.py on 2026-06-07.
 
+R9 清理: 同步版 get_cached / set_cached 已删(R8 审计报告 — 死代码),
+本文件 sync 路径改用 asyncio.run() 包裹 get_cached_async / set_cached_async。
+
 Sections:
   1) cache_key dimensions (key_provider + provider_and_init_flag)
   2) main.py must pass provider= to cache (key_provider_passed)
@@ -416,7 +419,7 @@ def test_init_db_once_actually_creates_table(temp_cache_db):
 
 
 def test_get_cached_uses_init_db_once(temp_cache_db, monkeypatch):
-    """get_cached 必须走 _init_db_once（不再每次调 _init_db）。"""
+    """get_cached_async 必须走 _init_db_once（不再每次调 _init_db）。"""
     call_count = [0]
     original = cache_mod._init_db
 
@@ -426,14 +429,14 @@ def test_get_cached_uses_init_db_once(temp_cache_db, monkeypatch):
 
     monkeypatch.setattr(cache_mod, "_init_db", counting)
 
-    cache_mod.get_cached("q", 3, 1.0)
-    cache_mod.get_cached("q", 3, 1.0)
-    cache_mod.get_cached("q", 3, 1.0)
+    asyncio.run(cache_mod.get_cached_async("q", 3, 1.0))
+    asyncio.run(cache_mod.get_cached_async("q", 3, 1.0))
+    asyncio.run(cache_mod.get_cached_async("q", 3, 1.0))
     assert call_count[0] == 1, f"_init_db 被调用 {call_count[0]} 次（应仅 1 次）"
 
 
 def test_set_cached_uses_init_db_once(temp_cache_db, monkeypatch):
-    """set_cached 必须走 _init_db_once。"""
+    """set_cached_async 必须走 _init_db_once。"""
     call_count = [0]
     original = cache_mod._init_db
 
@@ -443,20 +446,24 @@ def test_set_cached_uses_init_db_once(temp_cache_db, monkeypatch):
 
     monkeypatch.setattr(cache_mod, "_init_db", counting)
 
-    cache_mod.set_cached("q", 3, 1.0, {"k": "v"}, 0.01, 10)
-    cache_mod.set_cached("q", 3, 1.0, {"k": "v"}, 0.01, 10)
+    asyncio.run(cache_mod.set_cached_async("q", 3, 1.0, {"k": "v"}, 0.01, 10))
+    asyncio.run(cache_mod.set_cached_async("q", 3, 1.0, {"k": "v"}, 0.01, 10))
     assert call_count[0] == 1
 
 
 # ============================================================
-# 4) provider 端到端 (sync)
+# 4) provider 端到端 (async)
 # ============================================================
 
 def test_round_trip_with_provider(temp_cache_db):
-    """带 provider 的 set_cached / get_cached round-trip。"""
+    """带 provider 的 set_cached_async / get_cached_async round-trip。"""
     response = {"report": "## result", "ranked_papers": []}
-    cache_mod.set_cached("transformer", 3, 1.0, response, 0.5, 100, provider="kimi")
-    result = cache_mod.get_cached("transformer", 3, 1.0, provider="kimi")
+    asyncio.run(cache_mod.set_cached_async(
+        "transformer", 3, 1.0, response, 0.5, 100, provider="kimi"
+    ))
+    result = asyncio.run(cache_mod.get_cached_async(
+        "transformer", 3, 1.0, provider="kimi"
+    ))
     assert result is not None
     assert result[0] == response
 
@@ -466,14 +473,18 @@ def test_provider_isolation_no_cross_hit(temp_cache_db):
     response_kimi = {"report": "kimi result", "ranked_papers": []}
     response_glm = {"report": "glm result", "ranked_papers": []}
 
-    cache_mod.set_cached("q", 3, 1.0, response_kimi, 0.1, 10, provider="kimi")
-    cache_mod.set_cached("q", 3, 1.0, response_glm, 0.1, 10, provider="glm")
+    asyncio.run(cache_mod.set_cached_async(
+        "q", 3, 1.0, response_kimi, 0.1, 10, provider="kimi"
+    ))
+    asyncio.run(cache_mod.set_cached_async(
+        "q", 3, 1.0, response_glm, 0.1, 10, provider="glm"
+    ))
 
-    got_kimi = cache_mod.get_cached("q", 3, 1.0, provider="kimi")
+    got_kimi = asyncio.run(cache_mod.get_cached_async("q", 3, 1.0, provider="kimi"))
     assert got_kimi is not None
     assert got_kimi[0] == response_kimi
 
-    got_glm = cache_mod.get_cached("q", 3, 1.0, provider="glm")
+    got_glm = asyncio.run(cache_mod.get_cached_async("q", 3, 1.0, provider="glm"))
     assert got_glm is not None
     assert got_glm[0] == response_glm
 
@@ -483,9 +494,11 @@ def test_provider_isolation_no_cross_hit(temp_cache_db):
 def test_provider_none_does_not_hit_provider_specific(temp_cache_db):
     """provider=None 应与 provider="kimi" 视为不同 key（避免污染）。"""
     response = {"report": "kimi", "ranked_papers": []}
-    cache_mod.set_cached("q", 3, 1.0, response, 0.1, 10, provider="kimi")
+    asyncio.run(cache_mod.set_cached_async(
+        "q", 3, 1.0, response, 0.1, 10, provider="kimi"
+    ))
 
-    got = cache_mod.get_cached("q", 3, 1.0, provider=None)
+    got = asyncio.run(cache_mod.get_cached_async("q", 3, 1.0, provider=None))
     assert got is None
 
 

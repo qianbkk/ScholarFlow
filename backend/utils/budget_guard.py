@@ -11,9 +11,11 @@ build_graph → track_cost)每一节点都累加 cost。整个流水线可能要
 消耗更多 token 后才退出。
 
 本模块提供轻量辅助:
-  * `BudgetExceededError` — 节点 / 流水线层在 cost 超预算时抛出的异常。
   * `check_budget(cost, limit, hard_cap_ratio)` — 纯函数判断是否触发硬停。
   * `BUDGET_GUARD_HARD_CAP_RATIO` — 全局可调的硬停比例 (默认 1.0)。
+
+R9 清理: 删除 BudgetExceededError 异常类 (R8 审计报告 — 8 个 LangGraph 节点
+全用 check_budget() bool 判断,异常类从未被 raise,3 处 except 是空防御)。
 
 Usage
 -----
@@ -38,38 +40,6 @@ from typing import Optional
 BUDGET_GUARD_HARD_CAP_RATIO: float = float(
     os.getenv("BUDGET_GUARD_HARD_CAP_RATIO", "1.0")
 )
-
-
-class BudgetExceededError(Exception):
-    """当累计成本超过 `budget_limit_usd` 时抛出。
-
-    用于:
-      * LangGraph 节点内部 (e.g. cost_tracker) 在超预算时主动中断;
-      * 主入口包装层做 try/except 兜底,返回 budget_exceeded 状态。
-
-    Attributes:
-        cost: 触发时的累计成本 (USD)。
-        limit: 该请求的预算上限 (USD)。
-        node: 可选 — 触发异常的节点名,便于日志/SSE 事件定位。
-    """
-
-    def __init__(
-        self,
-        cost: float,
-        limit: float,
-        node: Optional[str] = None,
-        message: Optional[str] = None,
-    ) -> None:
-        self.cost = float(cost)
-        self.limit = float(limit)
-        self.node = node
-        if message is None:
-            tag = f" after node {node!r}" if node else ""
-            message = (
-                f"Budget exceeded{tag}: cost=${self.cost:.4f} "
-                f">= limit=${self.limit:.2f}"
-            )
-        super().__init__(message)
 
 
 def check_budget(
@@ -103,7 +73,6 @@ def check_budget(
 
 
 __all__ = [
-    "BudgetExceededError",
     "check_budget",
     "BUDGET_GUARD_HARD_CAP_RATIO",
 ]

@@ -5,6 +5,9 @@ Patterns covered:
 - Anthropic API keys: sk-ant-...
 - OpenAI API keys: sk-... (with project form: sk-proj-...)
 - DeepSeek API keys: sk-...
+- GitHub PAT: ghp_... / github_pat_... (R9 新增)
+- xAI API keys: xai-... (R9 新增)
+- AWS access keys: AKIA... (R9 新增)
 - Generic Bearer tokens in Authorization headers
 - MiniMax API keys: eyJ... (JWT) longer than 80 chars
 """
@@ -15,6 +18,12 @@ _PATTERNS = [
     (re.compile(r'sk-(?:ant-|proj-)?[A-Za-z0-9_\-]{16,}'), 'sk-***'),
     # JWT-style tokens (e.g., MiniMax uses eyJhbGci... format)
     (re.compile(r'eyJ[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}'), 'eyJ***.***'),
+    # GitHub personal access tokens (ghp_...) and fine-grained (github_pat_...) - R9 新增
+    (re.compile(r'(ghp_|github_pat_)[A-Za-z0-9_\-]{16,}'), 'ghp_***'),
+    # xAI (Grok) API keys - R9 新增
+    (re.compile(r'(xai-)[A-Za-z0-9_\-]{16,}'), 'xai-***'),
+    # AWS access key IDs (always start with AKIA, 20 chars total) - R9 新增
+    (re.compile(r'(AKIA)[A-Z0-9]{16,}'), 'AKIA***'),
     # Bearer <token>
     (re.compile(r'(?i)(Bearer\s+)[A-Za-z0-9_\-\.]{16,}'), r'\1***'),
     # x-api-key: <value> (header form)

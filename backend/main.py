@@ -59,7 +59,6 @@ from backend.utils.observability import (
 )
 # P0-1: 节点级预算硬停止 — 必须在 main.py 出现 (静态测试要求字面量)
 from backend.utils.budget_guard import (
-    BudgetExceededError,
     check_budget,
 )
 from backend.config import (
@@ -337,36 +336,19 @@ async def search(req: SearchRequest, request: Request):
                 state_dict={}, elapsed=0.0, from_cache=True, cached_payload=cached_response
             )
 
+        # R9 清理: 删 BudgetExceededError 死代码后,这里原本的 try/except
+        # (用来在 graph 抛 BudgetExceededError 时返回 budget_exceeded 状态)
+        # 已无意义,改为无 try 直接 await — 异常由外层 except Exception 兜底
+        # 返回 500 (跟 R8 审计员建议一致: 走统一错误处理)
+        req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
+        asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
+        _in_flight_searches[req_id] = asyncio_task
         try:
-            req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
-            asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
-            _in_flight_searches[req_id] = asyncio_task
-            try:
-                final = await asyncio.wait_for(asyncio_task, timeout=240.0)
-            finally:
-                _in_flight_searches.pop(req_id, None)
-        except BudgetExceededError as bee:
-            elapsed = _time.time() - t0
-            logger.warning(
-                f"[/search] BudgetExceededError from graph: cost=${bee.cost:.4f} "
-                f">= limit=${bee.limit:.2f} node={bee.node}"
-            )
-            return_amount = max(0.0, req.budget - bee.cost)
-            return SearchResponse(
-                report=(
-                    f"搜索因预算超限中止: 累计开销 ${bee.cost:.4f} 已达/超过 "
-                    f"单次预算 ${bee.limit:.2f}。"
-                ),
-                ranked_papers=[],
-                citation_graph={},
-                total_cost_usd=round(bee.cost, 4),
-                total_tokens_used=0,
-                model_usage={},
-                iteration=0,
-                status="budget_exceeded",
-                elapsed_seconds=round(elapsed, 2),
-            )
+            final = await asyncio.wait_for(asyncio_task, timeout=240.0)
+        finally:
+            _in_flight_searches.pop(req_id, None)
         elapsed = _time.time() - t0
+
         actual_cost = float(final.get("total_cost_usd", 0.0))
         budget_limit_state = float(final.get("budget_limit_usd", req.budget))
         if check_budget(actual_cost, budget_limit_state):

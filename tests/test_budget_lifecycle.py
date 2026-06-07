@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 import backend.main as main_mod
 from backend.utils import cache as cache_mod
-from backend.utils.budget_guard import BudgetExceededError, check_budget
+from backend.utils.budget_guard import check_budget  # R9: BudgetExceededError 已删(R8 审计 — 死代码)
 from backend.workflow import router as router_mod
 
 

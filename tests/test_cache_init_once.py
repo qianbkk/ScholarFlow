@@ -1,6 +1,6 @@
 """cache._init_db_once (P1) 修复测试。
 
-旧 bug：每次 get_cached / set_cached / get_cached_async / set_cached_async
+旧 bug：每次 get_cached_async / set_cached_async
 都跑一次 _init_db()，重复做 SELECT sqlite_master + PRAGMA table_info
 schema 检查，浪费 ~2-5ms 每次调用。
 
@@ -8,8 +8,11 @@ schema 检查，浪费 ~2-5ms 每次调用。
 旧：每个 cache 操作都 SELECT schema → 浪费
 新：首次 init 后置 _DB_INITIALIZED=True → 后续跳过
 
+R9 清理：同步版 get_cached / set_cached 已删(R8 审计报告 — 死代码),
+本文件改用 asyncio.run() 包裹 get_cached_async / set_cached_async。
+
 测试覆盖：
-  1) test_init_db_once_runs_only_once_per_process: 100 次 get_cached 后
+  1) test_init_db_once_runs_only_once_per_process: 100 次 get_cached_async 后
      _init_db 仅被调用 1 次（或 0 次，如果 cache 已被模块加载时初始化）
   2) test_db_initialized_flag_starts_false_and_flips: 标志初始为 False，
      第一次 cache 操作后变 True
@@ -59,10 +62,10 @@ def test_init_db_once_flips_flag_on_first_call(reset_init_flag, tmp_path, monkey
     assert db_path.exists(), "_init_db_once 应在 DB 文件中建表"
 
 
-# ===== 3) 多次 get_cached 不重跑 _init_db =====
+# ===== 3) 多次 get_cached_async 不重跑 _init_db =====
 
 def test_init_db_runs_only_once_across_many_get_cached(reset_init_flag, tmp_path, monkeypatch):
-    """100 次 get_cached 后 _init_db 实际只跑 1 次。"""
+    """100 次 get_cached_async 后 _init_db 实际只跑 1 次。"""
     db_path = tmp_path / "test_init_once.sqlite"
     monkeypatch.setattr(cache_mod, "_DB", db_path)
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED", False)
@@ -77,9 +80,9 @@ def test_init_db_runs_only_once_across_many_get_cached(reset_init_flag, tmp_path
 
     monkeypatch.setattr(cache_mod, "_init_db", counting_init_db)
 
-    # 调 100 次 get_cached（key 都不命中,但会触发 _init_db 路径）
+    # 调 100 次 get_cached_async（key 都不命中,但会触发 _init_db 路径）
     for i in range(100):
-        cache_mod.get_cached(f"q_{i}", max_iterations=3, budget=1.0)
+        asyncio.run(cache_mod.get_cached_async(f"q_{i}", max_iterations=3, budget=1.0))
 
     # 验证: _init_db 实际只跑 1 次 (首次)
     assert call_count["n"] <= 1, (

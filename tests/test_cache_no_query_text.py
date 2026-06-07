@@ -9,7 +9,10 @@ report. The fix:
   1. Drop the ``query`` column.
   2. Migrate the existing schema in place (idempotent — runs at every
      ``_init_db()`` call).
-  3. ``set_cached`` no longer writes the query.
+  3. ``set_cached_async`` no longer writes the query.
+
+R9 清理：同步版 get_cached / set_cached 已删(R8 审计报告 — 死代码),
+本文件改用 asyncio.run() 包裹 get_cached_async / set_cached_async。
 
 These tests verify:
   * Schema no longer has the ``query`` column after first ``_init_db()``.
@@ -22,6 +25,7 @@ These tests verify:
     column, ``_init_db()`` must drop that column while preserving all
     other data.
 """
+import asyncio
 import os
 import sqlite3
 import sys
@@ -86,7 +90,7 @@ def test_new_schema_has_no_query_column(temp_cache_db: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def test_roundtrip_works_without_query(temp_cache_db: Path) -> None:
-    """set_cached + get_cached round-trip the response correctly."""
+    """set_cached_async + get_cached_async round-trip the response correctly."""
     from backend.utils import cache as cache_mod
 
     response = {
@@ -94,10 +98,14 @@ def test_roundtrip_works_without_query(temp_cache_db: Path) -> None:
         "ranked_papers": [{"title": "P1"}],
         "total_cost_usd": 0.12,
     }
-    cache_mod.set_cached("transformer attention is all you need", 2, 1.0, response, 0.12, 200)
-    result = cache_mod.get_cached("transformer attention is all you need", 2, 1.0)
+    asyncio.run(cache_mod.set_cached_async(
+        "transformer attention is all you need", 2, 1.0, response, 0.12, 200
+    ))
+    result = asyncio.run(cache_mod.get_cached_async(
+        "transformer attention is all you need", 2, 1.0
+    ))
 
-    assert result is not None, "cache miss after set_cached"
+    assert result is not None, "cache miss after set_cached_async"
     cached_response, cost, tokens = result
     assert cached_response == response
     assert cost == 0.12
@@ -120,7 +128,7 @@ def test_raw_sqlite_payload_does_not_contain_query(temp_cache_db: Path) -> None:
 
     secret_query = "patient_genome_sequence_HLAB*15:02_alert(1)"
     response = {"report": "ok", "ranked_papers": []}
-    cache_mod.set_cached(secret_query, 2, 1.0, response, 0.01, 10)
+    asyncio.run(cache_mod.set_cached_async(secret_query, 2, 1.0, response, 0.01, 10))
 
     # Read the raw file bytes — both header and rows
     raw_bytes = temp_cache_db.read_bytes()

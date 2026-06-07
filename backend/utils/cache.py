@@ -17,7 +17,7 @@ H4 修复：async 变体（get_cached_async / set_cached_async）：
 - 新实现的 asyncio.sleep + asyncio.to_thread 把 SQLite I/O 和退避 sleep 都 offload
 
 P1 修复：cache_key 加 provider 维度（跨 provider 同 query 缓存隔离）。
-P1 修复：_init_db_once 标志位（避免每次 get_cached/set_cached 都做 schema 检查）。
+P1 修复：_init_db_once 标志位（避免每次 get_cached_async/set_cached_async 都做 schema 检查）。
 
 R7 评估 (reviewer feedback: "为何不用 aiosqlite"):
 - 当前实现线程安全: 每次 op 都 _connect_with_wal() 新建连接 + 操作完 conn.close(),
@@ -26,11 +26,15 @@ R7 评估 (reviewer feedback: "为何不用 aiosqlite"):
 - 但 aiosqlite 确实是 Python 生态共识: 1) 真正的 async 路径, 不用 to_thread; 2) 避免
   任何"看似 OK 实则边界 case 会炸"的隐患; 3) Gunicorn 多 worker + 多 host 部署时更稳。
 - 本轮 R7 不改: aiosqlite 重构涉及 4 个函数签名 + 5 个测试 fixture + 5 个 commit 依赖,
-  风险/收益比不划算。R8 计划: 替换 sync/async 双栈为 aiosqlite 单栈, 配合 SQLAlchemy 2.0
+  风险/收益比不划算。R8 计划: 替换 async 栈为 aiosqlite 单栈, 配合 SQLAlchemy 2.0
   async session (跟未来 R5 ARCH-008 cache_key mode 维度 + K8s 多 worker 一并上)。
 - 当前已知限制: to_thread 把 SQLite I/O 扔到默认 ThreadPoolExecutor, 高并发下
   线程池排队会抵消部分 offload 收益。生产环境建议显式设 loop.default_executor =
   ThreadPoolExecutor(max_workers=32) (FastAPI lifespan 阶段)。
+
+R9 清理: 删除同步版 get_cached / set_cached (R8 审计报告 — 死代码,生产从未调用)
+和同步 retry helper _retry_sqlite_op (async 版 _retry_sqlite_op_async 仍保留)。
+只剩 async 公共 API: get_cached_async / set_cached_async。
 """
 from __future__ import annotations
 
@@ -56,7 +60,7 @@ _BUSY_TIMEOUT_MS = 5000
 _MAX_RETRIES = 3
 
 # P1 修复：_init_db_once 标志位，避免每个 cache 操作都跑一次 schema 检查。
-# 旧实现：get_cached / set_cached / get_cached_async / set_cached_async 都会调 _init_db()，
+# 旧实现：get_cached_async / set_cached_async 都会调 _init_db()，
 # 每次都做 SELECT sqlite_master + PRAGMA table_info + CREATE TABLE 检查，浪费 ~2-5ms。
 # 新实现：进程内仅首次跑 _init_db()，后续直接跳过。
 # 同时记录上次 init 的 DB 路径：如果 monkeypatch / test fixture 切换了
@@ -161,7 +165,7 @@ def _init_db() -> None:
 def _init_db_once() -> None:
     """P1 优化：首次初始化后跳过 schema 检查。
 
-    旧实现：每次 get_cached/set_cached 都跑 _init_db() — 每次 ~2-5ms 的
+    旧实现：每次 get_cached_async/set_cached_async 都跑 _init_db() — 每次 ~2-5ms 的
     SELECT sqlite_master + PRAGMA table_info 检查。在 /search 高频调用场景下
     累积开销可观。新实现：进程内模块级标志 _DB_INITIALIZED 保证 _init_db()
     只在首次调用时执行。
@@ -209,30 +213,6 @@ def cache_key(
 
 
 # ===== H4 修复：async 同步辅助函数（offload 阻塞 I/O 到线程） =====
-
-def _retry_sqlite_op(sync_fn, *args, **kwargs):
-    """同步版 sqlite3.OperationalError 指数退避重试。
-
-    3 次尝试，退避 50ms / 100ms / 200ms。失败时 log warning 并返回 None
-    （cache miss / no-op 语义，便于 caller 优雅降级）。
-
-    曾 4 处重复（get_cached / set_cached / get_cached_async / set_cached_async），
-    合并到本 helper。async 变体见 _retry_sqlite_op_async（无法在 sync 函数中
-    await asyncio.sleep，所以拆两个）。
-    """
-    for attempt in range(_MAX_RETRIES):
-        try:
-            return sync_fn(*args, **kwargs)
-        except sqlite3.OperationalError as e:
-            if attempt < _MAX_RETRIES - 1:
-                time.sleep(0.05 * (2 ** attempt))
-                continue
-            _cache_logger.warning(
-                f"[cache] {sync_fn.__name__} failed after {_MAX_RETRIES} retries: {e}"
-            )
-            return None
-    return None
-
 
 async def _retry_sqlite_op_async(sync_fn, *args, **kwargs):
     """async 版：把 sync_fn 放到线程池跑，退避用 asyncio.sleep（不阻塞事件循环）。
@@ -298,59 +278,6 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
         conn.close()
 
 
-def get_cached(
-    query: str,
-    max_iterations: int,
-    budget: float,
-    ttl_seconds: int | None = None,
-    provider: str | None = None,
-):
-    """读取缓存（同步版本 — 保留向后兼容，测试和遗留同步调用方使用）。
-
-    Args:
-        provider: LLM provider id（kimi/glm/minimax/anthropic/deepseek）— 跨 provider
-            同 query 隔离 cache，避免不同模型输出被错误命中。
-
-    Returns:
-        None — 未命中 / 已过期 / 缓存被禁用
-        (response_dict, cost_usd, tokens) — 命中
-    """
-    if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
-        return None
-    if ttl_seconds is None:
-        ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
-
-    _init_db_once()
-    key = cache_key(query, max_iterations, budget, provider)
-    # 退避重试逻辑抽到 _retry_sqlite_op (Round N SIMPLIFY)
-    return _retry_sqlite_op(_get_cached_sync, key, ttl_seconds)
-
-
-def set_cached(
-    query: str,
-    max_iterations: int,
-    budget: float,
-    response: dict,
-    cost_usd: float,
-    tokens: int,
-    provider: str | None = None,
-) -> None:
-    """写入缓存（同步版本 — 保留向后兼容）。
-
-    并发安全：
-    - WAL 模式允许多 reader + 1 writer 并发
-    - busy_timeout 等待锁释放
-    - OperationalError 时指数退避重试
-    """
-    if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
-        return
-
-    _init_db_once()
-    key = cache_key(query, max_iterations, budget, provider)
-    # 退避重试逻辑抽到 _retry_sqlite_op (Round N SIMPLIFY)
-    _retry_sqlite_op(_set_cached_sync, key, response, cost_usd, tokens)
-
-
 # ===== H4 修复：async 变体 — 不阻塞事件循环 =====
 
 async def get_cached_async(
@@ -360,9 +287,9 @@ async def get_cached_async(
     ttl_seconds: int | None = None,
     provider: str | None = None,
 ):
-    """async 版本：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
+    """async 公共 API：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
-    旧版 get_cached 在 async 调用栈中会因 time.sleep 阻塞事件循环，最长 350ms。
+    R9 清理后唯一保留的 cache 读 API（同步版 get_cached 已删）。
     改用 asyncio.to_thread + asyncio.sleep 后，重试期间事件循环可继续处理其他请求。
     """
     if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
@@ -384,9 +311,9 @@ async def set_cached_async(
     tokens: int,
     provider: str | None = None,
 ) -> None:
-    """async 版本：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
+    """async 公共 API：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
-    旧版 set_cached 在 async 调用栈中会因 time.sleep 阻塞事件循环，最长 350ms。
+    R9 清理后唯一保留的 cache 写 API（同步版 set_cached 已删）。
 
     H8 修复：query 文本不再传递给 _set_cached_sync（只 cache_key 用来算 hash）。
     """

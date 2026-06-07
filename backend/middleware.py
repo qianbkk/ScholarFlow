@@ -42,7 +42,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
-            "connect-src 'self'"
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
         )
         return response
 
