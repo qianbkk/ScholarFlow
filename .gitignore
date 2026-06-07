@@ -43,7 +43,11 @@ backend/.budget_state.json
 backend/.cache/
 
 # Personal notes & verification artifacts (not for public repo)
-docs/
+# docs/ is intentionally narrow: only ignore internal scratch + audit logs.
+# docs/FUTURE_TASKS.md is tracked (project-level roadmap, not personal).
+docs/internal/
+docs/notes/
+docs/audit-logs/
 playwright_runs/
 
 # Claude memory: local-only (AI collaboration meta, not for public repo)

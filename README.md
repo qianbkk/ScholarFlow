@@ -28,7 +28,7 @@ ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 
 
 - **后端**: Python 3.11+ · LangGraph 0.2+ · FastAPI · httpx · Anthropic SDK · OpenAI SDK
 - **前端**: React 18 · TypeScript · Vite · D3.js v7 · Tailwind CSS · marked
-- **LLM**: Kimi K2.5 (Anthropic 协议, 可换 K2.6) · GLM-4.6 · MiniMax-M3 · Claude (官方) · DeepSeek (OpenAI 协议)
+- **LLM**: Kimi K2.5 (Anthropic 协议, 可换 K2.6) · GLM-4.6 · Claude (官方) · DeepSeek (OpenAI 协议) · 内部 fallback (mock)
 - **数据源**: Semantic Scholar Graph API · OpenAlex API
 
 ---
@@ -226,9 +226,54 @@ END
 | **TEST** | 7 个新测试 | 覆盖 M-1/M-3/M-4/S-3/S-4 |
 | **DEFER** | 9 项入 `docs/FUTURE_TASKS.md` | Dockerfile / 多 worker / K8s / 日志结构化 / etc. |
 
-**总 commit 数**: 第 5 轮 **15 个 commit**(含 docs 追加),累计 5 轮共 **~60+ commits**。
-
 详见 `docs/FUTURE_TASKS.md` 了解推迟项。
+
+---
+
+## 🛡️ Round 6 优化 (2026-06-07)
+
+第 6 轮聚焦 **稳定性 + 资源收敛**, 在 R5 基础上加 6 项硬化:
+
+| 类别 | 项 | 描述 |
+|------|---|------|
+| **STAB-1** | in-flight task table | ContextVar 跨节点追踪, cancel 时能找到真 pipeline |
+| **STAB-2** | cancel 真取消 | `/search/cancel` 端点真触发 `asyncio.CancelledError`,不是空 reset |
+| **SEC-6** | model_usage_summary 白名单 | 去除 provider 内部名 (fallback / mock) 泄露 |
+| **TYPED-1** | TypedDict 显式声明 | `top5_summary_cache` 等缓存字段类型化, IDE 可推断 |
+| **SEC-7** | sanitize 加 jailbreak / DAN / developer mode | denylist 覆盖 LLM 提示词注入高频词 |
+| **PERF-1** | log_throttle 抽 utils, 5 分钟窗口 | 同类日志 5min 内只记 1 次, 减少 ~80% logger I/O |
+
+---
+
+## 🛡️ Round 7 优化 (2026-06-07)
+
+第 7 轮聚焦 **R6 误杀修复 + 边缘场景**, 5 项收口:
+
+| 类别 | 项 | 描述 |
+|------|---|------|
+| **FIX-1** | sanitize denylist 学术词误杀 | 移除独立 `dan` (会误杀 "Dan Hendrycks" 等人名); `mode` 类加 `enable/activate` 上下文才命中 |
+| **FIX-2** | budget_lifecycle CancelledError 路径 | 3 个新测试覆盖节点取消时预算正确归还 (try/finally) |
+| **FIX-3** | budget_lifecycle 异常路径 | R3 兜底扩展到 CancelledError, 防止预算泄漏 |
+| **DOC-1** | cache 文档化 aiosqlite | 注释说明 `asyncio.to_thread` 包装同步 SQLite 是预期行为 (避免后续误改) |
+| **PROV-1** | provider skip (R7) | 测试 skip 配置缺失的 provider, 防止 CI 误报 |
+
+---
+
+## 🛡️ Round 8 优化 (2026-06-07)
+
+第 8 轮聚焦 **provider 严格语义 + 测试隔离**, R8 + R8.2 + R8.3 三批:
+
+| 类别 | 项 | 描述 |
+|------|---|------|
+| **PROV-2** | `get_provider_config` 严格化 | 未知 provider `raise` 而非静默回退 (config.py:83-150) |
+| **PROV-3** | `_resolve_provider` `has_key` 过滤 | 防止 "name 合法但 `has_key=False`" 静默回退 mock |
+| **SCHEMA-1** | ProviderInfo.verified 字段 | 前端 API 透传 `verified: bool`, UI 可差异化显示 |
+| **SCHEMA-2** | model_usage_summary 必填 | 必填字段对齐 R6 白名单, 防止字段漂移 |
+| **TEST-ISO** | autouse `_reset_global_state` fixture | conftest.py 加 fixture, limiter + in-flight table 跨文件测试隔离 |
+| **R8.3-T1** | test_cors_hardening subprocess 隔离 | reload backend.main 改用 subprocess, 避免 sys.modules 不一致 |
+| **R8.3-T2** | `_PROVIDER_HEALTH_CACHE` reset | autouse fixture 重置 module-level 缓存, R5 以来首次 0 failed |
+
+R8 累计: 6 failed → 5 failed → 0 failed (307 passed + 2 skipped, 全部稳定)。
 
 ---
 

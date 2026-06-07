@@ -2,10 +2,10 @@
 
 ## Supported Versions
 
-| Version | Supported          |
-|---------|--------------------|
-| 1.0.x   | :white_check_mark: |
-| 0.1.x   | :x:                |
+| Version | Supported          | Notes |
+|---------|--------------------|-------|
+| 1.0.x   | :white_check_mark: | 首个稳定 release, 包含 R1-R8.3 全部安全硬化 |
+| 0.1.x   | :x:                | 仅 pre-release 快照, 不再 backport 安全修复 |
 
 ## Reporting a Vulnerability
 
