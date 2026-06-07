@@ -59,6 +59,24 @@ def _reset_global_state(request):
                 prov_mod._PROVIDER_HEALTH_CACHE.clear()
         except (ImportError, AttributeError):
             pass
+        # R9: routes/search.py 暴露独立 limiter (慢 API decorator 需 module-level binding),
+        # main.limiter 跟 routes.search.limiter 是不同实例, 不 reset 会导致
+        # 跨 test 累计 → 5min 内的 5/minute 限流计数器残留.
+        try:
+            from backend.api.routes import search as routes_search
+            if hasattr(routes_search, "limiter"):
+                routes_search.limiter.reset()
+        except (ImportError, AttributeError):
+            pass
+        # R9: log_throttle._THROTTLES 是 module-level dict, should_log 用
+        # 5min 窗口 throttle. 跨 test 累计会导致后续 test 在窗口内被吞掉
+        # "expected throttled" 日志断言, 测试飘.
+        try:
+            from backend.utils import log_throttle
+            if hasattr(log_throttle, "_THROTTLES"):
+                log_throttle._THROTTLES.clear()
+        except (ImportError, AttributeError):
+            pass
     except (ImportError, AttributeError):
         pass
 
@@ -75,6 +93,18 @@ def _reset_global_state(request):
             from backend.api.services import providers as prov_mod
             if hasattr(prov_mod, "_PROVIDER_HEALTH_CACHE"):
                 prov_mod._PROVIDER_HEALTH_CACHE.clear()
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.api.routes import search as routes_search
+            if hasattr(routes_search, "limiter"):
+                routes_search.limiter.reset()
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.utils import log_throttle
+            if hasattr(log_throttle, "_THROTTLES"):
+                log_throttle._THROTTLES.clear()
         except (ImportError, AttributeError):
             pass
     except (ImportError, AttributeError):
