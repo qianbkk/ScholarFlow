@@ -1,14 +1,43 @@
 # ScholarFlow
 
-> 面向研究生科研工作流的自主多 Agent 学术情报系统
+> **中英双语 LLM 综述 + 引用可核查 + 私有化部署** 的开源学术研究助手。其他工具只能查文献, ScholarFlow 帮你写综述。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg)](VERSION)
 [![Built with AI assistance](https://img.shields.io/badge/Built_with-AI_assistance-FF6F00.svg)](https://github.com/qianbkk/ScholarFlow)
 
-> **Built with AI assistance (诚实声明)**: 6 轮共 ~165 个 commit 中, **架构设计 / LangGraph 状态机 / 多源并行检索 / 安全防护 (sanitize 注入防御 + HTTP 安全头)** 由 qianbkk 主导;**辅助实现 / 单测补充 / 重复性重构 / 文档润色** 由 Claude (Anthropic) 协助完成。git history 里 qianbkk 跟 claude 两个 author 标签真实反映这种协作分工, 不是"AI 全自动刷榜"。
+> **Built with AI assistance (诚实声明)**: R1-R10 累计 ~185 个 commit 中, **架构设计 / LangGraph 状态机 / 多源并行检索 / 安全防护 (sanitize 注入防御 + HTTP 安全头)** 由 qianbkk 主导;**辅助实现 / 单测补充 / 重复性重构 / 文档润色** 由 Claude (Anthropic) 协助完成。git history 里 qianbkk 跟 claude 两个 author 标签真实反映这种协作分工, 不是"AI 全自动刷榜"。
 
 ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 个串联的 LangGraph 节点**完成：查询理解与分解 → 多源并行检索 → 引文网络扩展 → 三维质检排序 → 自适应迭代优化 → 结构化综述报告 → 引文知识图谱 → 成本追踪汇报。
+
+---
+
+## 💡 为什么用 ScholarFlow
+
+> **一句话定位**: ScholarFlow 是少数把"LLM 综述生成 + 引用可核查 + 幻觉防御"做进同一管线的开源学术工具 — 其他工具要么只能查 (Google Scholar / 知网), 要么只生成不防幻觉 (Semantic Scholar TLDR), 要么闭源 (Connected Papers)。
+
+### 8 维对比 (vs 主流学术搜索)
+
+| 维度 | 知网 | Google Scholar | Semantic Scholar | OpenAlex | **ScholarFlow** |
+|------|------|----------------|------------------|----------|-----------------|
+| **中英双语** | 中文强 | ✓ | ✗ (英为主) | ✗ (英为主) | **✓ 中文综述 + 英文子查询** |
+| **LLM 综述生成** | ✗ | ✗ | 单篇 TLDR | ✗ | **✓ 6 段结构化综述** |
+| **幻觉防御** | N/A | N/A | ✗ (TLDR 偶有幻觉) | N/A | **✓ Grounding 验证 + 未匹配警告** |
+| **三维质检** | ✗ | ✗ | ✗ | ✗ | **✓ 相关性+权威性+一致性** |
+| **引文图谱** | 弱 | 无 | 弱 | 弱 (数据) | **✓ 4 类边 + 3 布局 (M-18)** |
+| **私有化部署** | ✗ (付费闭源) | ✗ | ✗ | ✗ | **✓ docker-compose 一键** |
+| **成本可见** | 隐藏 | 隐藏 | 隐藏 | 隐藏 | **✓ per-model token 面板** |
+| **prompt 注入防御** | N/A | N/A | N/A | N/A | **✓ 6 层 sanitize** |
+
+### 5 大杀手场景
+
+| 场景 | 你在做什么 | ScholarFlow 帮你 |
+|------|----------|-----------------|
+| 📚 **研究生综述周** | 1 周交方向综述 | 1 个 query → 1 小时出 8 节点流水线报告 |
+| 🎓 **导师基金申请** (NSF/NSFC) | Background 要 50 篇最新预印本 | 1 跳沿引用 + forward citers 双向扩展 |
+| 🔍 **博士开题** | 跨 query 预算核算 | 实时 per-model token/cost 折叠面板 |
+| 🇨🇳 **中文文献调研** | 知网英文弱 / SS 中文弱 | 唯一中英双语 + 中文 sanitize 防御 |
+| 🏢 **实验室 RAG 私有化** | 数据合规不能上公网 | docker-compose 一键起, 数据本地 |
 
 ---
 

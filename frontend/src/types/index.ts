@@ -34,6 +34,11 @@ export interface GraphNode {
   authors: string[];
   size: number;
   color_value: number;
+  // M-18 引文图谱重构 (P0 节点 metadata)
+  in_degree?: number;       // 入度 (在 ranked 子图内被引次数)
+  out_degree?: number;      // 出度 (在 ranked 子图内引用次数)
+  pagerank?: number;        // 中心度近似 (归一化 in_degree, R11 用 NetworkX 真实 PageRank)
+  community_id?: number;    // 社区标签 (decade 分组: 0=最老 decade, 1=下一个, ...)
 }
 
 // D3 模拟节点：在 GraphNode 基础上加 x/y/fx/fy/vx/vy
@@ -60,6 +65,10 @@ export interface CitationGraph {
     total_links: number;
     query: string;
     search_iterations: number;
+    // M-18 引文图谱重构 (P0 metadata)
+    year_range?: [number, number];
+    link_type_counts?: { cites: number; co_cited: number; same_venue: number; author_overlap: number };
+    community_count?: number;
   };
 }
 

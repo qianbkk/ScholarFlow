@@ -4,6 +4,7 @@ import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
+import { WhyScholarFlow } from './components/WhyScholarFlow';
 import { useSearch } from './hooks/useSearch';
 import { healthCheck } from './services/api';
 
@@ -117,6 +118,12 @@ export default function App() {
       </div>
 
       <CostDashboard result={result} loading={loading} elapsed={elapsed} />
+
+      {/* M-19 (R10): WhyScholarFlow 折叠区 — 顶部放 CostDashboard 之下, 三栏之上.
+         默认折叠避免视觉负担; 用户可在结果页头部展开看 5 大场景 + 8 维对比. */}
+      <div className="px-4 pt-3">
+        <WhyScholarFlow />
+      </div>
 
       {serverOk === false && (
         <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 text-xs text-rose-700 flex items-center gap-2">
