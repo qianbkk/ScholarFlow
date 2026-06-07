@@ -56,10 +56,11 @@ metadata:
 - Claude 默认用占位符 `claude <noreply@anthropic.com>` / `R6 SIMPLIFY <simplify@local>`
 - **必须在 prompt 里强制**:
   ```bash
-  git -c user.name="qianbkk" -c user.email="qianbkk@github.com" commit ...
+  git -c user.name="qianbkk" -c user.email="qianbkk@users.noreply.github.com" commit ...
   ```
   或 `git config user.name "..."` 预 set
 - 6 轮结束用 `git filter-branch` 一次性 rewrite 历史
+- **Email 必须是 `users.noreply.github.com` 格式**,否则 GitHub Contributors 不识别(见 [commit-author-rule](commit-author-rule.md))
 
 ### 5. 5 并发触发 SS API 429
 - SS free tier 100 req/5min → 5 个 agent × 5 子查询 = 25+ 请求
