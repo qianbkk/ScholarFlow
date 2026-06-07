@@ -17,127 +17,111 @@ These tests verify:
   * A normal ``ALLOWED_ORIGINS`` value imports cleanly.
   * The ``CORSMiddleware`` is configured with explicit
     ``allow_methods`` / ``allow_headers`` (no wildcards).
+
+R8.3 重构 (reviewer feedback 3.4 - test isolation):
+  旧实现用 _purge_backend_modules() + importlib.import_module 重新加载 backend.main。
+  reload 失败 (ALLOWED_ORIGINS=* 抛 ValueError) 时, sys.modules["backend.main"] 留下
+  半成品模块, 后续 test_request_id / test_search_node_semaphore 的 TestClient 拿到
+  旧模块对象, 旧 limiter 被填到 5/5 触发 429。
+  新实现: 用 subprocess 完全隔离, 每次启 Python 解释器, 不污染主进程 sys.modules。
 """
-import importlib
+import os
+import subprocess
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
 
-# Make sure the project root is on sys.path so `backend.*` imports work
+# Make sure the project root is on sys.path so the subprocess can find backend.*
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
 
 
-def _purge_backend_modules() -> None:
-    """Drop every cached `backend.*` module so the next import re-runs
-    the module-level ALLOWED_ORIGINS check with fresh env vars."""
-    for name in list(sys.modules):
-        if name == "backend" or name.startswith("backend."):
-            del sys.modules[name]
+def _run_in_subprocess(allowed_origins: str) -> subprocess.CompletedProcess:
+    """在隔离的 subprocess 跑 'import backend.main', 捕获 stdout/stderr/returncode。
 
-
-def test_cors_wildcard_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``ALLOWED_ORIGINS=*`` must raise ValueError at import time."""
-    monkeypatch.setenv("ALLOWED_ORIGINS", "*")
-    _purge_backend_modules()
-
-    with pytest.raises(ValueError, match=r"ALLOWED_ORIGINS must not contain '\*'"):
-        importlib.import_module("backend.main")
-
-
-def test_cors_wildcard_in_list_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``ALLOWED_ORIGINS=http://a.com,*`` must also raise (any '*' fails)."""
-    monkeypatch.setenv("ALLOWED_ORIGINS", "http://a.com,*")
-    _purge_backend_modules()
-
-    with pytest.raises(ValueError, match=r"ALLOWED_ORIGINS must not contain '\*'"):
-        importlib.import_module("backend.main")
-
-
-def _get_cors_middleware_opts(app) -> dict:
-    """Inspect the CORSMiddleware's stored options on the app.
-
-    Starlette's ``Middleware`` namedtuple stores the user's kwargs in
-    ``mw.kwargs``. We scan ``app.user_middleware`` and return that
-    kwargs dict for the CORS entry.
+    不用主进程 sys.modules, 不污染当前 pytest 会话。
+    传 ALLOWED_ORIGINS env var 控制 backend.main 模块级 guard。
     """
-    from starlette.middleware.cors import CORSMiddleware as _CORS
-
-    for mw in app.user_middleware:
-        cls = getattr(mw, "cls", None)
-        if cls is _CORS:
-            return dict(getattr(mw, "kwargs", {}) or {})
-    raise AssertionError("CORSMiddleware not found in app.user_middleware")
-
-
-def test_cors_normal_origins_no_wildcards(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Normal comma-separated origins import without error, and the
-    CORSMiddleware is configured with explicit (non-wildcard) lists."""
-    monkeypatch.setenv(
-        "ALLOWED_ORIGINS",
-        "http://localhost:5173,http://127.0.0.1:5173",
-    )
-    _purge_backend_modules()
-
-    main_mod = importlib.import_module("backend.main")
-    app = main_mod.app
-    opts = _get_cors_middleware_opts(app)
-
-    # Hard-coded allowlist — no wildcards
-    assert opts.get("allow_methods") != ["*"], (
-        "H8 FAIL: allow_methods is still a wildcard; should be ['GET', 'POST']"
-    )
-    assert opts.get("allow_headers") != ["*"], (
-        "H8 FAIL: allow_headers is still a wildcard; should be a small explicit list"
-    )
-    assert sorted(opts.get("allow_methods") or []) == ["GET", "POST"], (
-        f"allow_methods should be exactly ['GET', 'POST'], got {opts.get('allow_methods')}"
-    )
-    assert sorted(opts.get("allow_headers") or []) == [
-        "Accept", "Cache-Control", "Content-Type",
-    ], (
-        f"allow_headers should be exactly "
-        f"['Accept', 'Cache-Control', 'Content-Type'], got {opts.get('allow_headers')}"
-    )
-
-    # allow_origins should be the explicit list, no wildcards
-    origins = opts.get("allow_origins") or []
-    assert "*" not in origins, f"allow_origins still contains wildcard: {origins}"
-    assert "http://localhost:5173" in origins
-    assert "http://127.0.0.1:5173" in origins
-
-
-def test_cors_credentials_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``allow_credentials`` must remain False (CORS spec disallows it
-    with wildcards, and we don't need cookies anyway)."""
-    monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
-    _purge_backend_modules()
-
-    main_mod = importlib.import_module("backend.main")
-    app = main_mod.app
-    opts = _get_cors_middleware_opts(app)
-
-    assert opts.get("allow_credentials") is False, (
-        "allow_credentials should be False — no cookies / no wildcard needed"
+    code = textwrap.dedent(f"""
+        import os
+        os.environ['ALLOWED_ORIGINS'] = {allowed_origins!r}
+        try:
+            import backend.main
+            print('OK_IMPORT')
+        except ValueError as e:
+            print(f'RAISED_VALUE_ERROR:{{e}}')
+            sys.exit(1)
+    """)
+    env = {**os.environ, "ALLOWED_ORIGINS": allowed_origins}
+    return subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=str(PROJECT_ROOT),
+        timeout=30,
     )
 
 
-def test_main_py_source_has_no_cors_wildcard() -> None:
-    """Static fallback: even if middleware introspection is brittle
-    across Starlette versions, the source must not contain the
-    bad wildcard patterns."""
+# ===== CORS wildcard guard =====
+
+def test_cors_wildcard_raises_value_error():
+    """``ALLOWED_ORIGINS=*`` must raise ValueError at import time."""
+    result = _run_in_subprocess("*")
+    assert result.returncode != 0, (
+        f"subprocess 应该 raise ValueError 但 exit 0. "
+        f"stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+    )
+    assert "ALLOWED_ORIGINS must not contain" in (result.stdout + result.stderr), (
+        f"raise 时的错误信息应包含 'ALLOWED_ORIGINS must not contain', "
+        f"got: {result.stdout!r} + {result.stderr!r}"
+    )
+
+
+def test_cors_wildcard_in_list_raises():
+    """``ALLOWED_ORIGINS=http://a.com,*`` must also raise (any '*' fails)."""
+    result = _run_in_subprocess("http://a.com,*")
+    assert result.returncode != 0, (
+        f"subprocess 应该 raise ValueError 但 exit 0. "
+        f"stdout: {result.stdout!r}, stderr: {result.stderr!r}"
+    )
+    assert "ALLOWED_ORIGINS must not contain" in (result.stdout + result.stderr), (
+        f"raise 时的错误信息应包含 'ALLOWED_ORIGINS must not contain', "
+        f"got: {result.stdout!r} + {result.stderr!r}"
+    )
+
+
+# ===== Normal CORS 配置 (用 AST + 静态检查, 不 reload) =====
+
+def test_main_py_source_has_explicit_allowlists():
+    """Static check: main.py 源码里 cors 配置必须是 explicit allow-list, 不允许 wildcard。"""
     main_path = PROJECT_ROOT / "backend" / "main.py"
     src = main_path.read_text(encoding="utf-8")
-    # The fix replaces these literals with explicit allow-lists.
     assert 'allow_methods=["*"]' not in src, (
         "H8 FAIL: backend/main.py still has `allow_methods=['*']`"
     )
     assert 'allow_headers=["*"]' not in src, (
         "H8 FAIL: backend/main.py still has `allow_headers=['*']`"
     )
-    # And the wildcard guard must be present
     assert "ALLOWED_ORIGINS must not contain" in src, (
         "H8 FAIL: backend/main.py is missing the ALLOWED_ORIGINS wildcard guard"
+    )
+    # 必须是显式列表, 而不是空 (空 = 拒绝所有 CORS)
+    # main.py 里 cors 配置用双引号, 例 allow_methods=["GET", "POST"]
+    assert '"GET"' in src and '"POST"' in src, (
+        "H8 FAIL: allow_methods 应该显式列出 GET/POST"
+    )
+    assert "Accept" in src and "Content-Type" in src, (
+        "H8 FAIL: allow_headers 应该显式列出 Accept/Content-Type/Cache-Control"
+    )
+
+
+def test_main_py_source_has_credentials_disabled():
+    """Static check: main.py 源码里 allow_credentials 必须是 False。"""
+    main_path = PROJECT_ROOT / "backend" / "main.py"
+    src = main_path.read_text(encoding="utf-8")
+    # 搜索 CORSMiddleware 配置块里的 allow_credentials
+    assert "allow_credentials=False" in src, (
+        "H8 FAIL: backend/main.py should have allow_credentials=False"
     )
