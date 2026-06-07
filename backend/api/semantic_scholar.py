@@ -7,30 +7,16 @@ https://api.semanticscholar.org/graph/v1
 import asyncio
 import logging
 import os
-import time as _time
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+# Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
+from backend.utils.log_throttle import should_log
 
 logger = logging.getLogger(__name__)
-
-# Round 6 S3: SS/OA 日志 throttle 5 分钟, 7 次搜索 317 条日志降到 < 50 条
-# 同一 key 5 分钟内只记第一次, 避免 MiniMax 401 反复触发刷屏。
-_LOG_THROTTLE: dict[str, float] = {}
-_LOG_THROTTLE_INTERVAL = 300.0  # 5 分钟
-
-
-def _should_log(key: str) -> bool:
-    """Round 6 S3: 简单 throttle, 同一 key 5 分钟内只记一次."""
-    now = _time.time()
-    last = _LOG_THROTTLE.get(key, 0.0)
-    if now - last >= _LOG_THROTTLE_INTERVAL:
-        _LOG_THROTTLE[key] = now
-        return True
-    return False
 
 BASE_URL = "https://api.semanticscholar.org/graph/v1"
 PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
@@ -95,7 +81,7 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
     """
     papers = get_mock_papers(query, limit=limit)
     if papers:
-        if _should_log("ss_fallback"):
+        if should_log("ss_fallback"):
             logger.warning(f"[SemanticScholar] fallback to mock for {query[:40]!r}: {len(papers)} papers")
     for p in papers:
         p.is_fallback = True
@@ -141,13 +127,13 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            if _should_log(f"ss_search_{resp.status_code}"):
+            if should_log(f"ss_search_{resp.status_code}"):
                 logger.warning(f"[SemanticScholar] search error {resp.status_code}: {query[:60]}")
             # 失败降级：仍返回 mock 数据，避免 8 节点流水线空跑
             return _mock_fallback(query, limit)
         data = resp.json()
     except Exception as e:
-        if _should_log("ss_search_exception"):
+        if should_log("ss_search_exception"):
             logger.warning(f"[SemanticScholar] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
         return _mock_fallback(query, limit)
 
@@ -209,12 +195,12 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            if _should_log(f"ss_refs_{resp.status_code}"):
+            if should_log(f"ss_refs_{resp.status_code}"):
                 logger.warning(f"[SemanticScholar] refs {paper_id} status {resp.status_code}")
             return []
         data = resp.json()
     except Exception as e:
-        if _should_log("ss_refs_exception"):
+        if should_log("ss_refs_exception"):
             logger.warning(f"[SemanticScholar] refs exception: {scrub_sensitive(str(e))}")
         return []
 
@@ -276,12 +262,12 @@ async def get_citations(paper_id: str, limit: int = 20) -> list[Paper]:
             headers=HEADERS,
         )
         if resp.status_code != 200:
-            if _should_log(f"ss_citations_{resp.status_code}"):
+            if should_log(f"ss_citations_{resp.status_code}"):
                 logger.warning(f"[SemanticScholar] citations {paper_id} status {resp.status_code}")
             return []
         data = resp.json()
     except Exception as e:
-        if _should_log("ss_citations_exception"):
+        if should_log("ss_citations_exception"):
             logger.warning(f"[SemanticScholar] citations exception: {scrub_sensitive(str(e))}")
         return []
 
