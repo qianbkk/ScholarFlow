@@ -17,6 +17,12 @@ def track_cost_node(state: SearchState) -> SearchState:
     iteration = state.get("iteration", 0)
     final_papers = len(state.get("ranked_papers", []))
 
+    # M-A 修复 (P0-2 PER_ITER 语义): cost_tracker 是终态节点, 把 prev_iter_cost_usd
+    # 写为当前 total_cost (相当于"下一个 iter 起点"); 在 LangGraph 内本节点之后
+    # 即 END, 但若上层有 checkpointer 恢复 state, 这个值能保证下一次启动 router
+    # 拿到的 iter_delta 起算点正确, 而不是历史 prev (会算成负 delta 或溢出)。
+    prev_iter_cost = total_cost
+
     # ===== 成本报告：print + logger.info 双写 =====
     # print 保留 console 用户展示（uvicorn 启动时 logger 经常被静默）
     # logger.info 同时写日志文件供后续审计
@@ -42,4 +48,4 @@ def track_cost_node(state: SearchState) -> SearchState:
                     model, usage['tokens'], usage['cost'])
     print("=" * 60 + "\n")
 
-    return {**state, "status": "done"}
+    return {**state, "prev_iter_cost_usd": prev_iter_cost, "status": "done"}

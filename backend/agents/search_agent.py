@@ -35,9 +35,20 @@ async def _throttled_search(coro):
 async def search_node(state: SearchState) -> SearchState:
     """并行调用双源 API，合并去重。"""
 
+    # M-A 修复 (P0-2 PER_ITER 语义): search_agent 是每个 iter 的入口节点 (无论 iter 1
+    # 由 query_decompose 调入, 还是 iter N 由 query_refiner→search 回环调入)。在节点
+    # 第一行把当前累计成本快照为 prev_iter_cost_usd, 这是"本轮起点"; 后续 rank 结束时
+    # router 用 iter_delta = total_cost_usd - prev_iter_cost_usd 检查本轮真实增量。
+    prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
+
     sub_queries = state.get("sub_queries") or []
     if not sub_queries:
-        return {**state, "raw_papers": [], "status": "expanding"}
+        return {
+            **state,
+            "raw_papers": [],
+            "prev_iter_cost_usd": prev_iter_cost,
+            "status": "expanding",
+        }
 
     # 并发搜索：每个子查询同时查两个数据库
     # Round 2 PERF-004: 通过 _throttled_search 走 Semaphore(4) 限流，避免 429
@@ -83,5 +94,6 @@ async def search_node(state: SearchState) -> SearchState:
     return {
         **state,
         "raw_papers": [p.to_dict() for p in unique_papers],
+        "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 本轮起点成本透传
         "status": "expanding",
     }

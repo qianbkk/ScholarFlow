@@ -43,6 +43,11 @@ async def _throttled_call(coro):
 async def expand_citations_node(state: SearchState) -> SearchState:
     """同时做 backward（references）+ forward（citations）扩展。"""
 
+    # M-A 修复 (P0-2 PER_ITER 语义): 入口透传 prev_iter_cost_usd。
+    # citation_expander 不调 LLM (只调 SS API 取引文图谱), 所以快照值仍是 iter start;
+    # 但为了与 search/synth/rank 4 节点的写入链对齐, 显式 propagate 一次。
+    prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
+
     raw_dicts = state.get("raw_papers") or []
     raw: list[Paper] = []
     for d in raw_dicts:
@@ -54,7 +59,12 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             continue
 
     if not raw:
-        return {**state, "expanded_papers": [], "status": "ranking"}
+        return {
+            **state,
+            "expanded_papers": [],
+            "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传 iter 起点
+            "status": "ranking",
+        }
 
     # 选引用数最高的前 N 篇做引文扩展（只用 SS，有结构化引用数据）
     ss_papers = [p for p in raw if p.source == "semantic_scholar" and p.paper_id]
@@ -70,6 +80,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             **state,
             "expanded_papers": [p.to_dict() for p in raw],
             "expanded_paper_ids": list(seen),
+            "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传 iter 起点
             "status": "ranking",
         }
 
@@ -147,5 +158,6 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         **state,
         "expanded_papers": [p.to_dict() for p in unique],
         "expanded_paper_ids": list(seen | {p.paper_id for p in top if p.paper_id}),
+        "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传 iter 起点
         "status": "ranking",
     }

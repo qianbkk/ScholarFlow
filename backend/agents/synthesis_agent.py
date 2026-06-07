@@ -41,6 +41,12 @@ def _fallback_report(query: str, ranked: list[dict]) -> str:
 async def synthesize_node(state: SearchState) -> SearchState:
     """生成结构化 Markdown 综述报告。"""
 
+    # M-A 修复 (P0-2 PER_ITER 语义): 入口透传 prev_iter_cost_usd。
+    # synthesize 是 router 决定"不再 refine"后的终态节点, 此时 prev_iter_cost_usd
+    # 不再被 router 读, 但保留入口透传以保证 state 字段一致性, 方便 cost_tracker
+    # 和外部审计回看"最后一 iter 起点成本"。
+    prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
+
     # FIX: 统一 ranked 论文数为 15 — 与 ranker_agent / graph_builder 对齐
     # Round 5 S-1: 从 25 → 15, 减少 LLM input token 浪费 (~40% 截断量)。
     # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
@@ -48,7 +54,12 @@ async def synthesize_node(state: SearchState) -> SearchState:
     query = state["original_query"]
 
     if not ranked:
-        return {**state, "report": "未检索到相关论文。", "status": "building_graph"}
+        return {
+            **state,
+            "report": "未检索到相关论文。",
+            "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传
+            "status": "building_graph",
+        }
 
     papers_text = "\n\n".join([
         f"**[Paper {i+1}]** {p.get('title','')}\n"
@@ -145,9 +156,68 @@ async def synthesize_node(state: SearchState) -> SearchState:
 
     cost_update = merge_usage_into_state(state, usage)
 
+    # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
+    # 旧实现: LLM 输出综述后无任何追溯, LLM 可发明 DOI / 混淆作者 / 拼凑虚构论文。
+    # 修复: (1) 在综述末尾追加可点击的原始来源锚点表 (paper_id + URL),
+    #       (2) 用 _verify_citations_in_report 检查 **粗体标题** 是否能在 ranked_papers 中
+    #           找到对应; 找不到的列入 ⚠️ 警告, 让用户自行核查。
+    # 即使 LLM 在 Top5 推荐段编造论文, 用户能看到警告 + 完整 ranked 列表, 避免被误导。
+    paper_anchors = _build_paper_anchors(ranked)
+    report = (report or "") + paper_anchors
+
+    _, unverified = _verify_citations_in_report(report, ranked)
+    if unverified:
+        warning = (
+            "\n\n> ⚠️ **系统提示**: 以下引用未在检索结果中找到对应来源, 请自行核查:\n"
+            + "\n".join(f"> - {t}" for t in unverified[:5])
+        )
+        report += warning
+
     return {
         **state,
         **cost_update,
         "report": report,
+        "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传 iter 起点
         "status": "building_graph",
     }
+
+
+# ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
+
+def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, list[str]]:
+    """检查综述中 **粗体标题** 是否对应到 ranked_papers。
+
+    Returns:
+        (verified_report, unverified_titles)
+    """
+    ranked_titles = {p.get("title", "").lower()[:60] for p in ranked if p.get("title")}
+    cited_in_report = re.findall(r'\*\*([^*]{5,80})\*\*', report)
+    unverified = []
+    for cited in cited_in_report:
+        cited_words = set(cited.lower().split())
+        matched = any(
+            len(cited_words & set(t.split())) / max(len(cited_words), 1) > 0.5
+            for t in ranked_titles
+        )
+        if not matched and len(cited) > 10:
+            unverified.append(cited)
+    return report, unverified
+
+
+def _build_paper_anchors(ranked: list[dict]) -> str:
+    """在综述末尾生成可点击的原始来源锚点表。
+
+    格式:
+      ## 📎 原始文献来源（可核查）
+      1. [Title 1](url) — SS ID: `xxx`
+      ...
+    """
+    if not ranked:
+        return ""
+    lines = ["\n\n---\n## 📎 原始文献来源（可核查）\n"]
+    for i, p in enumerate(ranked[:15], 1):
+        ss_id = p.get("paper_id", "unknown")
+        url = p.get("url", f"https://semanticscholar.org/paper/{ss_id}")
+        title = (p.get("title") or "Unknown").strip()
+        lines.append(f"{i}. [{title}]({url}) — SS ID: `{ss_id}`")
+    return "\n".join(lines)

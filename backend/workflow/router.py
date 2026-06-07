@@ -67,12 +67,19 @@ def should_refine(state: SearchState) -> str:
     # Round 6 S8: per-iter cost cap, 单 iter 超过 $0.3 强制 synthesize
     # 在 ratio margin 之前 — per-iter cap 更严格, 先拦; 避免异常 LLM 调用
     # (e.g. 异常 max_tokens / 循环 retry) 一次烧光 $0.3+ 直接绕过 ratio 检查
-    if PER_ITER_BUDGET_CAP_USD > 0 and cost >= PER_ITER_BUDGET_CAP_USD:
-        logger.info(
-            f"[router] single iter cost ${cost:.4f} >= cap ${PER_ITER_BUDGET_CAP_USD:.2f}, "
-            f"强制 synthesize (round 6 S8 per-iter cap)"
-        )
-        return "synthesize"
+    # M-A 修复 (P0-2): 旧实现 `cost >= PER_ITER_BUDGET_CAP_USD` 检查的是累计
+    # total_cost_usd, 不是本轮增量。注释"单轮超 $0.3 停止"是错的 — 当 iter 2
+    # 时累计成本本来就 >= $0.3, 会无脑触发。改用 iter_delta = cost - prev_iter_cost
+    # 才是真正的"本轮 LLM 消耗"。prev_iter_cost_usd 由 search_agent 入口在每个
+    # iter 开始时写入 (透传到 expand / rank / synth), 准确刻画本 iter 起点。
+    if PER_ITER_BUDGET_CAP_USD > 0:
+        prev_cost = state.get("prev_iter_cost_usd", 0.0) or 0.0
+        iter_delta = cost - prev_cost  # 本轮真实增量
+        if iter_delta >= PER_ITER_BUDGET_CAP_USD:
+            logger.warning(
+                f"[Router] per-iter delta ${iter_delta:.4f} >= cap ${PER_ITER_BUDGET_CAP_USD:.2f}, synthesize"
+            )
+            return "synthesize"
 
     # FIX: 预算检查改为比例阈值。budget<=0 时不做预算检查（视为无预算约束）。
     if budget > 0:

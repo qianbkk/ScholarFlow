@@ -287,9 +287,20 @@ async def rank_node(state: SearchState) -> SearchState:
         "cost_usd": total_cost,
     })
 
+    # M-A 修复 (P0-1 状态爆炸): rank_node 之后再无节点读取 raw_papers / expanded_papers,
+    # 它们继续随 {**state} 拷贝是浪费 (~125+50 篇 dict, ~300KB/worker × 4 worker × 4 step
+    # = ~1.2MB 冗余内存 + GC 压力)。这里显式清零以释放后续 synthesis / graph_builder /
+    # cost_tracker 节点的 state 拷贝压力。ranked_papers 保留 (synthesis 读)。
+    # M-A 修复 (P0-2 PER_ITER 语义): 记录本次 iter 结束时(rank 入口)的累计成本快照,
+    # 供 router 计算"本轮真实增量" (iter_delta = cost_now - prev_iter_cost_usd)。
+    # 注: 真正的 iter-START 值由 search_agent 入口写入 (透传 prev_iter_cost 链),
+    #     这里再写一次作为 defense-in-depth。
     return {
         **state,
         **cost_update,
         "ranked_papers": [p.to_dict() for p in ranked],
+        "raw_papers": [],          # M-A P0-1: 节点②③ 之后已无节点读取, 清零
+        "expanded_papers": [],     # M-A P0-1: 同上
+        "prev_iter_cost_usd": state.get("total_cost_usd", 0.0),  # M-A P0-2: iter 结束成本快照
         "status": "checking_refine",
     }

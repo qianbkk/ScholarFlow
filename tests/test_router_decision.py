@@ -151,6 +151,64 @@ def test_margin_budget_zero_no_division_by_zero():
     assert result == "refine", f"budget=0 应跳过预算检查, 实际 got {result}"
 
 
+# ============================================================
+# 4) M-A: PER_ITER_BUDGET_CAP_USD 改用 iter_delta (本轮真实增量)
+# ============================================================
+
+def test_per_iter_cap_uses_delta_not_cumulative():
+    """M-A P0-2: 旧实现用 cost (累计) 触发 cap; 新实现用 cost - prev_iter_cost_usd (增量)。
+
+    场景: 第一 iter, total_cost=0.5, prev=0.0, iter_delta=0.5 >= 0.3 cap → synthesize。
+    断言: per-iter cap 现在基于本轮增量而不是累计成本, 早期拦截避免预算被一次异常烧光。
+    """
+    state = {
+        "iteration": 1,
+        "max_iterations": 3,
+        "total_cost_usd": 0.5,
+        "prev_iter_cost_usd": 0.0,   # iter 起点
+        "budget_limit_usd": 2.0,     # 预算还充足
+        # 提供足量优质论文, 避免落到下游 refine 分支干扰本测试焦点
+        "ranked_papers": [{"relevance_score": 8.0}] * 20,
+    }
+    # iter_delta = 0.5 - 0.0 = 0.5 >= 0.3 cap → synthesize
+    assert should_refine(state) == "synthesize"
+
+
+def test_per_iter_cap_delta_below_threshold_keeps_refining():
+    """M-A P0-2: prev_iter_cost_usd 比 cost 接近时, iter_delta 小于 cap 不触发。
+
+    场景: 第 2 iter 累计 0.45, prev=0.3 (iter 1 用了 0.3), iter_delta=0.15 < 0.3 cap
+    → 不该被 per-iter cap 拦, 走下游 quality / ratio 决策。
+    """
+    state = {
+        "iteration": 1,
+        "max_iterations": 3,
+        "total_cost_usd": 0.45,
+        "prev_iter_cost_usd": 0.30,   # iter 1 用了 0.3
+        "budget_limit_usd": 20.0,     # 预算充足
+        # 低质量 + 数量少, 强制走 refine 路径 (验证 per-iter cap 没拦住)
+        "ranked_papers": [{"relevance_score": 0.5}] * 3,
+    }
+    # iter_delta = 0.15 < 0.3 cap → 不拦; 论文少 → refine
+    assert should_refine(state) == "refine"
+
+
+def test_per_iter_cap_no_prev_treats_as_zero():
+    """M-A P0-2: 旧 state 没有 prev_iter_cost_usd 字段时, 默认 0 (向后兼容)。
+
+    场景: cost=0.4, 无 prev 字段, iter_delta = 0.4 - 0 = 0.4 >= 0.3 → synthesize。
+    """
+    state = {
+        "iteration": 0,
+        "max_iterations": 3,
+        "total_cost_usd": 0.4,
+        # 故意不写 prev_iter_cost_usd, 模拟旧 checkpoint 反序列化
+        "budget_limit_usd": 2.0,
+        "ranked_papers": [{"relevance_score": 8.0}] * 20,
+    }
+    assert should_refine(state) == "synthesize"
+
+
 if __name__ == "__main__":
     import sys
     sys.path.insert(0, "D:/AI/Claude code workspace/Atest")

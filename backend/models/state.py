@@ -44,6 +44,14 @@ class SearchState(TypedDict):
     budget_limit_usd: float
     model_usage: dict  # {"model-name": {"tokens": int, "cost": float}}
 
+    # M-A 修复 (P0-2 PER_ITER 语义): PER_ITER_BUDGET_CAP_USD 检查的"本轮增量"需要
+    # 本字段记录 iter 开始时的累计成本 (snapshot)。
+    # 由 search_agent / citation_expander / synthesis_agent / rank_node 入口透传写入
+    # (defense-in-depth, 在 cost-free 节点链 search/expand 中也持续刷新, 但因为这两
+    # 个节点不调 LLM, snapshot 值 = iter start cost), router 用
+    # iter_delta = total_cost_usd - prev_iter_cost_usd 判断单 iter 是否超 $0.3 硬上限。
+    prev_iter_cost_usd: Optional[float]
+
     # 状态机状态
     status: PipelineStatus
     error: Optional[str]
