@@ -794,23 +794,6 @@ class TestCheckBudgetUnit:
         assert check_budget(0.5, 2.0, hard_cap_ratio=0.5) is False
 
 
-class TestBudgetExceededErrorUnit:
-    def test_attributes(self):
-        e = BudgetExceededError(cost=2.5, limit=2.0, node="synthesize")
-        assert e.cost == 2.5
-        assert e.limit == 2.0
-        assert e.node == "synthesize"
-        assert "synthesize" in str(e)
-        assert "2.5" in str(e)
-        assert "2.00" in str(e)
-
-    def test_default_message(self):
-        e = BudgetExceededError(cost=2.5, limit=2.0)
-        assert e.node is None
-        assert "after node" not in str(e)
-        assert "2.5" in str(e)
-
-
 def test_sse_emits_budget_exceeded_when_cost_spikes(client, monkeypatch):
     """[from budget_node_hard_stop] cost spike at 2nd node → emit budget_exceeded + no done."""
     _mock_provider_list(monkeypatch, ["kimi"])
@@ -1009,7 +992,13 @@ def test_sse_no_trigger_when_budget_field_missing(client, monkeypatch):
 
 
 def test_search_handles_budget_exceeded_error(client, monkeypatch):
-    """[from budget_node_hard_stop] Defensive: ainvoke raises BudgetExceededError → status=budget_exceeded."""
+    """[from budget_node_hard_stop] Defensive: ainvoke raises BudgetExceededError → status=budget_exceeded.
+
+    R9-A 删 BudgetExceededError 类后该 test 已失效, 暂时 disable (R10 重新设计
+    异常传播路径后再恢复)。
+    """
+    pytest.skip("R9-A 删 BudgetExceededError 后该 test 失效, R10 重设计")
+
     _mock_provider_list(monkeypatch, ["kimi"])
     main_mod._save_budget_to_db(0.0, _time.time())
 
@@ -1155,9 +1144,11 @@ def test_router_source_has_hard_cap():
 
 
 def test_budget_guard_module_exists():
-    """[from budget_node_hard_stop] Sanity: the new module is importable."""
+    """[from budget_node_hard_stop] Sanity: the new module is importable.
+
+    R9-A 删 BudgetExceededError 类后该 test 部分失效 (前两个 hasattr 改).
+    """
     from backend.utils import budget_guard
-    assert hasattr(budget_guard, "BudgetExceededError")
     assert hasattr(budget_guard, "check_budget")
     assert hasattr(budget_guard, "BUDGET_GUARD_HARD_CAP_RATIO")
     assert budget_guard.BUDGET_GUARD_HARD_CAP_RATIO == 1.0

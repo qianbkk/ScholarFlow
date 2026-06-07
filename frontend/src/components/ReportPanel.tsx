@@ -32,7 +32,7 @@ export function ReportPanel({
       // 关键：DOMPurify.sanitize() 必须在 dangerouslySetInnerHTML 之前调用，
       // 防止 LLM 输出 <script> / onerror= 等可执行 payload。
       const rawHtml = marked.parse(report) as string;
-      return DOMPurify.sanitize(rawHtml, {
+      const sanitized = DOMPurify.sanitize(rawHtml, {
         ALLOWED_TAGS: [
           'h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li',
           'strong', 'em', 'a', 'code', 'pre', 'blockquote',
@@ -42,6 +42,21 @@ export function ReportPanel({
         FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed'],
         FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
       });
+      // R9 阶段 3 (审计员 #3): tabnabbing 防护
+      // 之前 marked 渲染 LLM 输出的 Markdown 链接带 [text](url){:target="_blank"} 时
+      // 会生成 <a target=_blank> 但没强制 rel=noopener, 新窗口可通过 window.opener
+      // 反向操控父页 (XSS 等级 low, 但报告里外部链接可点, 防御纵深必须有).
+      // 保守方案: ALLOWED_ATTR 保留 target (让用户能新窗口打开), sanitize 后用
+      // DOMParser 兜底遍历所有 target=_blank 的 <a>, 显式补 rel="noopener noreferrer".
+      // 不激进 (即不在 ALLOWED_ATTR 里删 target), 因为论文链接在原页面打开会丢失报告.
+      if (typeof DOMParser !== 'undefined' && /target=["']_blank["']/i.test(sanitized)) {
+        const doc = new DOMParser().parseFromString(sanitized, 'text/html');
+        doc.querySelectorAll('a[target="_blank"]').forEach((a) => {
+          a.setAttribute('rel', 'noopener noreferrer');
+        });
+        return doc.body.innerHTML;
+      }
+      return sanitized;
     } catch (e) {
       // 兜底：parse 失败时转义所有 < > 字符
       return DOMPurify.sanitize(report.replace(/</g, '&lt;').replace(/>/g, '&gt;'));

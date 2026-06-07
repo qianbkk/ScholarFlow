@@ -132,11 +132,49 @@ export function QueryPanel({
                 {providers.length === 0 && !providersLoading && (
                   <option value="">（无可用 provider）</option>
                 )}
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id} title={p.flagship_model}>
-                    {p.name}
-                  </option>
-                ))}
+                {providers.map((p) => {
+                  // R8.2 + R9 阶段 3 (审计员 #3): verified 字段差异化 UI
+                  // 之前 verified 字段 (后端 R8 加的) 在前端 types 声明但 UI 不消费,
+                  // 配错 key 的 provider 跟没配 key 一样默默从下拉消失 (其实 has_key
+                  // 仍然 true, 它会出现在下拉但调用 401, 用户以为是网络问题重试).
+                  // 修复 — 三态 UI:
+                  //   - verified === false: 🔴 红字 "(key 失效)" + tooltip 提示
+                  //     .env/key 问题, 仍可下拉看到, 让用户知道哪个 provider 出问题
+                  //   - verified === null: ⏳ 灰色 "(验证中...)" + disabled,
+                  //     启动后 5s 内后端 health check 未完成, 强制用户等
+                  //   - verified === true: 正常显示, verified 字段不外露
+                  if (p.verified === false) {
+                    return (
+                      <option
+                        key={p.id}
+                        value={p.id}
+                        disabled={false}
+                        title="API key 验证失败,请检查 .env 或重新生成"
+                        style={{ color: '#dc2626' }}
+                      >
+                        🔴 {p.name} (key 失效)
+                      </option>
+                    );
+                  }
+                  if (p.verified === null) {
+                    return (
+                      <option
+                        key={p.id}
+                        value={p.id}
+                        disabled={true}
+                        title="后端启动后 5s 内未完成 key 验证,稍候重试"
+                        style={{ color: '#94a3b8' }}
+                      >
+                        ⏳ {p.name} (验证中...)
+                      </option>
+                    );
+                  }
+                  return (
+                    <option key={p.id} value={p.id} title={p.flagship_model}>
+                      {p.name}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <label className="flex items-center gap-1 text-slate-600">
