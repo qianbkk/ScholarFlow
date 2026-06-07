@@ -4,13 +4,12 @@ description: Agent commit 必须显式指定 author 为 qianbkk 或 claude 之�
 metadata:
   node_type: memory
   type: feedback
-  originSessionId: 84fec3b7-3ad7-4192-a373-7e48ddf349d2
 ---
 
 # Commit Author 规则 (ScholarFlow)
 
 **Why**: 6 轮多 agent 优化后,git history 含奇怪 author 污染:
-- `R6 SIMPLIFY <simplify@local>`
+- `Round 6 简化 <simplify@local>`
 - `Round 5 Agent <round5-agent@scholarflow.local>`
 - `claude <claude@anthropic.com>` (默认占位符)
 - `ScholarFlow Dev <scholarflow@local>`
@@ -100,8 +99,10 @@ git -c user.name="qianbkk" -c user.email="qianbkk@users.noreply.github.com" comm
 
 ## Push 触发方决定 author (qianbkk vs claude)
 
-**用户原话**(2026-06-07):
-> 如果是在我的提醒或者提议下 git push 的就用我 qianbkk,如果你自己觉得要 git push 的就用你 claude 的
+**决策时间**: 2026-06-07 (多 agent 第 6 轮 review 时确立)
+**触发方规则**:
+- 用户提醒/提议 → qianbkk (用户主动)
+- AI 自发判断 → claude (AI 主动)
 
 **How to apply**:
 - 用户在消息里说"push 吧" / "提交一下" / "commit 上去" → **qianbkk** (用户主动)
@@ -109,4 +110,4 @@ git -c user.name="qianbkk" -c user.email="qianbkk@users.noreply.github.com" comm
 - 紧急修复 (CI 红 / 用户提的 bug) → **qianbkk** (用户上下文驱动)
 - memory 维护 / 文档润色 (无外部触发) → **claude** (AI 自发)
 
-**永远只有这两个 author**,不要有第三种占位 (如 `R6 SIMPLIFY` / `ScholarFlow Dev` / `claude-code`)。
+**永远只有这两个 author**,不要有第三种占位 (如 `Round 6 简化` / `ScholarFlow Dev` / `claude-code`)。

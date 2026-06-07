@@ -11,7 +11,7 @@
 
 ## 全局官方 memory
 
-本机全局 `~/.claude/projects/D--AI-Claude-code-workspace-Atest/memory/` 还有一条:
+本机全局 `~/.claude/projects/<encoded-project-path>/memory/` 还有一条:
 
 - `scholarflow-test-methodology.md` — 测试三件套 (mavis-browser + Playwright + Read) 的使用流程
 

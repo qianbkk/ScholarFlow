@@ -4,7 +4,6 @@ description: ScholarFlow 6 轮多 agent 审计 + 优化的完整方法论 - 何�
 metadata:
   node_type: memory
   type: project
-  originSessionId: 84fec3b7-3ad7-4192-a373-7e48ddf349d2
 ---
 
 # ScholarFlow 多 agent 审计 + 优化方法论
@@ -53,7 +52,7 @@ metadata:
 - 任何跨层改动都需要"接力补 commit"
 
 ### 4. agent commit author 必须显式指定
-- Claude 默认用占位符 `claude <noreply@anthropic.com>` / `R6 SIMPLIFY <simplify@local>`
+- Claude 默认用占位符 `claude <noreply@anthropic.com>` / `Round 6 简化 <simplify@local>`
 - **必须在 prompt 里强制**:
   ```bash
   git -c user.name="qianbkk" -c user.email="qianbkk@users.noreply.github.com" commit ...

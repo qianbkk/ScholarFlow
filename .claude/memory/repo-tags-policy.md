@@ -4,7 +4,6 @@ description: ScholarFlow 仓库必备标签文件清单 - LICENSE/VERSION/CHANGE
 metadata:
   node_type: memory
   type: project
-  originSessionId: 84fec3b7-3ad7-4192-a373-7e48ddf349d2
 ---
 
 # ScholarFlow 仓库标签文件政策
