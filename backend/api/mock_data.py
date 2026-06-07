@@ -4,7 +4,6 @@ ScholarFlow 学术 API Mock 数据集
 内置一组真实存在的代表性论文（基于公开的 arXiv / 会议信息构造），
 用于在无网络环境下让流水线跑通。
 """
-import os
 from backend.models.paper import Paper
 
 
@@ -233,16 +232,6 @@ _MOCK_PAPERS = [
         "venue": "ICLR",
         "citation_count": 130000,
         "abstract": "We introduce Adam, an algorithm for first-order gradient-based optimization of stochastic objective functions, based on adaptive estimates of lower-order moments. The method is straightforward to implement and computationally efficient.",
-        "source": "openalex",
-    },
-    {
-        "paper_id": "openalex_W003",
-        "title": "Generative Adversarial Networks",
-        "year": 2014,
-        "authors": ["Ian J. Goodfellow", "Jean Pouget-Abadie"],
-        "venue": "NeurIPS",
-        "citation_count": 75000,
-        "abstract": "We propose a new framework for estimating generative models via an adversarial process, in which we simultaneously train two models: a generative model G and a discriminative model D. We train D to distinguish real samples from G's fake samples.",
         "source": "openalex",
     },
     {
@@ -836,7 +825,6 @@ _PAPER_URL_MAP: dict[str, str] = {
     "ss_050_kge_rotate":     "https://arxiv.org/abs/1902.10197",
     "openalex_W001":         "https://arxiv.org/abs/1512.03385",
     "openalex_W002":         "https://arxiv.org/abs/1412.6980",
-    "openalex_W003":         "https://arxiv.org/abs/1406.2661",
     "openalex_W004":         "https://jmlr.org/papers/v15/srivastava14a.html",
     "openalex_W005":         "https://papers.nips.cc/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html",
     "openalex_W006":         "https://arxiv.org/abs/1505.04597",

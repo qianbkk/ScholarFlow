@@ -11,6 +11,7 @@ import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
+from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
@@ -21,7 +22,6 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://api.openalex.org"
 TIMEOUT = 30.0
 SELECT_FIELDS = "id,title,abstract_inverted_index,publication_year,authorships,cited_by_count,primary_location,doi,referenced_works"
-MAX_RETRIES = 2
 
 # NEW-001 修复：模块级 AsyncClient 单例 + 不用 async with
 #
@@ -101,27 +101,6 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
         return ""
     max_pos = max(positions.keys())
     return " ".join(positions.get(i, "") for i in range(max_pos + 1))
-
-
-async def _get_with_retry(client: httpx.AsyncClient, url: str, params: dict) -> httpx.Response:
-    last_exc = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            resp = await client.get(url, params=params)
-            if resp.status_code == 429 or resp.status_code >= 500:
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(0.3 * (2 ** attempt))
-                    continue
-            return resp
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            last_exc = e
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(0.3 * (2 ** attempt))
-                continue
-            raise
-    if last_exc:
-        raise last_exc
-    return resp
 
 
 async def search_papers(query: str, limit: int = 50) -> list[Paper]:

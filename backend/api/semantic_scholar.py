@@ -11,6 +11,7 @@ import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
+from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
@@ -23,7 +24,6 @@ PAPER_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,external
 BATCH_FIELDS = "paperId,title,abstract,year,authors,citationCount,venue,externalIds,url,references"
 HEADERS = {"x-api-key": SEMANTIC_SCHOLAR_API_KEY} if SEMANTIC_SCHOLAR_API_KEY else {}
 TIMEOUT = 30.0
-MAX_RETRIES = 2
 
 # NEW-001 修复：模块级 AsyncClient 单例 + 禁用 async with（避免 __aexit__ 关闭连接池）
 # 正确用法：client = _get_client()  →  await client.get(...)
@@ -86,27 +86,6 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
     for p in papers:
         p.is_fallback = True
     return papers
-
-
-async def _get_with_retry(client: httpx.AsyncClient, url: str, params: dict, headers: dict) -> httpx.Response:
-    last_exc = None
-    for attempt in range(MAX_RETRIES + 1):
-        try:
-            resp = await client.get(url, params=params, headers=headers)
-            if resp.status_code == 429 or resp.status_code >= 500:
-                if attempt < MAX_RETRIES:
-                    await asyncio.sleep(0.3 * (2 ** attempt))
-                    continue
-            return resp
-        except (httpx.TimeoutException, httpx.NetworkError) as e:
-            last_exc = e
-            if attempt < MAX_RETRIES:
-                await asyncio.sleep(0.3 * (2 ** attempt))
-                continue
-            raise
-    if last_exc:
-        raise last_exc
-    return resp
 
 
 async def search_papers(query: str, limit: int = 50) -> list[Paper]:

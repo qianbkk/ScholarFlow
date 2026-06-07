@@ -24,11 +24,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import time
 from pathlib import Path
 
+
+_cache_logger = logging.getLogger(__name__)
 
 _CACHE_DIR = Path(__file__).parent.parent / ".cache"
 _CACHE_DIR.mkdir(exist_ok=True)
@@ -194,6 +197,51 @@ def cache_key(
 
 # ===== H4 修复：async 同步辅助函数（offload 阻塞 I/O 到线程） =====
 
+def _retry_sqlite_op(sync_fn, *args, **kwargs):
+    """同步版 sqlite3.OperationalError 指数退避重试。
+
+    3 次尝试，退避 50ms / 100ms / 200ms。失败时 log warning 并返回 None
+    （cache miss / no-op 语义，便于 caller 优雅降级）。
+
+    曾 4 处重复（get_cached / set_cached / get_cached_async / set_cached_async），
+    合并到本 helper。async 变体见 _retry_sqlite_op_async（无法在 sync 函数中
+    await asyncio.sleep，所以拆两个）。
+    """
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return sync_fn(*args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(0.05 * (2 ** attempt))
+                continue
+            _cache_logger.warning(
+                f"[cache] {sync_fn.__name__} failed after {_MAX_RETRIES} retries: {e}"
+            )
+            return None
+    return None
+
+
+async def _retry_sqlite_op_async(sync_fn, *args, **kwargs):
+    """async 版：把 sync_fn 放到线程池跑，退避用 asyncio.sleep（不阻塞事件循环）。
+
+    H4 修复：旧实现 get_cached_async 的 time.sleep(0.05 * 2**attempt) 在 async
+    调用栈中会阻塞事件循环最长 350ms。改用 asyncio.sleep 后事件循环可继续
+    处理其他请求。
+    """
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return await asyncio.to_thread(sync_fn, *args, **kwargs)
+        except sqlite3.OperationalError as e:
+            if attempt < _MAX_RETRIES - 1:
+                await asyncio.sleep(0.05 * (2 ** attempt))
+                continue
+            _cache_logger.warning(
+                f"[cache] {sync_fn.__name__} failed after {_MAX_RETRIES} retries: {e}"
+            )
+            return None
+    return None
+
+
 def _get_cached_sync(key: str, ttl_seconds: int):
     """同步 SQLite cache 读。被 get_cached_async 通过 asyncio.to_thread 调用。"""
     _init_db_once()
@@ -261,34 +309,8 @@ def get_cached(
 
     _init_db_once()
     key = cache_key(query, max_iterations, budget, provider)
-    for attempt in range(_MAX_RETRIES):
-        try:
-            conn = _connect_with_wal()
-            try:
-                row = conn.execute(
-                    "SELECT response_json, cost_usd, tokens, created_at "
-                    "FROM search_cache WHERE query_hash=?",
-                    (key,),
-                ).fetchone()
-            finally:
-                conn.close()
-            if not row:
-                return None
-            if time.time() - row[3] > ttl_seconds:
-                return None  # expired
-            return json.loads(row[0]), row[1], row[2]
-        except sqlite3.OperationalError as e:
-            # 极端并发：busy_timeout 后仍未拿到锁，指数退避重试
-            if attempt < _MAX_RETRIES - 1:
-                time.sleep(0.05 * (2 ** attempt))
-                continue
-            # 重试耗尽：保守降级为未命中（不阻塞 /search）
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[cache] get_cached failed after {_MAX_RETRIES} retries: {e}"
-            )
-            return None
-    return None
+    # 退避重试逻辑抽到 _retry_sqlite_op (Round N SIMPLIFY)
+    return _retry_sqlite_op(_get_cached_sync, key, ttl_seconds)
 
 
 def set_cached(
@@ -312,36 +334,8 @@ def set_cached(
 
     _init_db_once()
     key = cache_key(query, max_iterations, budget, provider)
-    # H8 修复：payload 不再含 query 文本 — query_hash 已是不可逆 SHA-256。
-    payload = (
-        key,
-        json.dumps(response, ensure_ascii=False),
-        cost_usd,
-        tokens,
-        time.time(),
-    )
-    for attempt in range(_MAX_RETRIES):
-        try:
-            conn = _connect_with_wal()
-            try:
-                conn.execute(
-                    "INSERT OR REPLACE INTO search_cache VALUES (?, ?, ?, ?, ?)",
-                    payload,
-                )
-                conn.commit()
-            finally:
-                conn.close()
-            return
-        except sqlite3.OperationalError as e:
-            if attempt < _MAX_RETRIES - 1:
-                time.sleep(0.05 * (2 ** attempt))
-                continue
-            # 重试耗尽：非阻塞降级（log warning，缓存未写入但 /search 仍返回正确结果）
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[cache] set_cached failed after {_MAX_RETRIES} retries: {e}"
-            )
-            return
+    # 退避重试逻辑抽到 _retry_sqlite_op (Round N SIMPLIFY)
+    _retry_sqlite_op(_set_cached_sync, key, response, cost_usd, tokens)
 
 
 # ===== H4 修复：async 变体 — 不阻塞事件循环 =====
@@ -364,20 +358,8 @@ async def get_cached_async(
         ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 
     key = cache_key(query, max_iterations, budget, provider)
-    for attempt in range(_MAX_RETRIES):
-        try:
-            return await asyncio.to_thread(_get_cached_sync, key, ttl_seconds)
-        except sqlite3.OperationalError as e:
-            if attempt < _MAX_RETRIES - 1:
-                # 用 asyncio.sleep 让出事件循环（不阻塞）
-                await asyncio.sleep(0.05 * (2 ** attempt))
-                continue
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[cache] get_cached_async failed after {_MAX_RETRIES} retries: {e}"
-            )
-            return None
-    return None
+    # 退避重试逻辑抽到 _retry_sqlite_op_async (Round N SIMPLIFY)
+    return await _retry_sqlite_op_async(_get_cached_sync, key, ttl_seconds)
 
 
 async def set_cached_async(
@@ -398,18 +380,7 @@ async def set_cached_async(
     if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
         return
     key = cache_key(query, max_iterations, budget, provider)
-    for attempt in range(_MAX_RETRIES):
-        try:
-            await asyncio.to_thread(
-                _set_cached_sync, key, response, cost_usd, tokens,
-            )
-            return
-        except sqlite3.OperationalError as e:
-            if attempt < _MAX_RETRIES - 1:
-                await asyncio.sleep(0.05 * (2 ** attempt))
-                continue
-            import logging
-            logging.getLogger(__name__).warning(
-                f"[cache] set_cached_async failed after {_MAX_RETRIES} retries: {e}"
-            )
-            return
+    # 退避重试逻辑抽到 _retry_sqlite_op_async (Round N SIMPLIFY)
+    await _retry_sqlite_op_async(
+        _set_cached_sync, key, response, cost_usd, tokens,
+    )
