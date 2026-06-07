@@ -1,10 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CostDashboard } from './components/CostDashboard';
 import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { useSearch } from './hooks/useSearch';
 import { healthCheck } from './services/api';
+
+// Round 6 SIMPLIFY (REDUNDANT-004): 修复 onRetry 闭包丢失用户表单状态 bug
+// 之前 onRetry={(q) => search(q)} 只传 query, useSearch.search 内部对
+// budget/maxIter/provider 走 useState 默认值 (2.0/3/undefined),
+// 用户上次改的预算/迭代/provider 全部丢失, 重试得到不一致的行为.
+// 修复: 在 App.tsx 用 lastSearchOpts 记住上一次用户实际提交的参数,
+// onRetry 用同一组参数复现上次搜索.
+
+interface LastSearchOpts {
+  budget: number;
+  maxIter: number;
+  provider?: string;
+}
 
 export default function App() {
   const {
@@ -13,6 +26,8 @@ export default function App() {
   } = useSearch();
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  // Round 6 SIMPLIFY (REDUNDANT-004): 跟踪上一次成功提交的搜索参数, 给 onRetry 用
+  const [lastSearchOpts, setLastSearchOpts] = useState<LastSearchOpts | null>(null);
 
   useEffect(() => {
     healthCheck()
@@ -24,6 +39,18 @@ export default function App() {
   useEffect(() => {
     if (result?.elapsed_seconds) setElapsed(result.elapsed_seconds);
   }, [result]);
+
+  // Round 6 SIMPLIFY (REDUNDANT-004): 包装 search, 在调用前先记住当前表单参数.
+  // 这样 onRetry 闭包能拿到和用户上次提交完全一致的 budget/maxIter/provider.
+  // search 签名本身不变 (useSearch.search(q, budget=2.0, maxIter=3, provider?) ),
+  // 这里只是把"用户实际选择的值"存到 lastSearchOpts, 不修改下游.
+  const handleSearch = useCallback(
+    (q: string, budget: number, maxIter: number, provider?: string) => {
+      setLastSearchOpts({ budget, maxIter, provider });
+      search(q, budget, maxIter, provider);
+    },
+    [search]
+  );
 
   return (
     <div className="h-screen flex flex-col bg-slate-50">
@@ -53,7 +80,7 @@ export default function App() {
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
         <QueryPanel
           loading={loading}
-          onSearch={search}
+          onSearch={handleSearch}
           onReset={reset}
           papers={result?.ranked_papers ?? []}
           lastQuery={lastQuery}
@@ -65,17 +92,19 @@ export default function App() {
         />
         {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
             激活 R4 U4 死代码 (用户重试按钮生效).
-            ReportPanel 在 R4 U4 已加 errorMsg/lastQuery/onRetry 三个 optional prop,
-            App.tsx 之前未透传, 导致 ReportPanel 的"重试"按钮永远不显示.
-            现在从 useSearch 暴露的 error/lastQuery 透传,
-            onRetry 直接复用 useSearch.search 闭包, 预算/迭代/provider 走默认参数. */}
+            Round 6 SIMPLIFY (REDUNDANT-004): onRetry 改用 lastSearchOpts 复现
+            用户上次表单状态 (预算/迭代/provider), 修复闭包丢失 bug. */}
         <ReportPanel
           report={result?.report ?? ''}
           loading={loading}
           query={lastQuery}
           errorMsg={error}
           lastQuery={lastQuery}
-          onRetry={(q) => search(q)}
+          onRetry={(q) =>
+            lastSearchOpts
+              ? search(q, lastSearchOpts.budget, lastSearchOpts.maxIter, lastSearchOpts.provider)
+              : search(q)
+          }
         />
         <GraphPanel graph={result?.citation_graph ?? null} />
       </div>
