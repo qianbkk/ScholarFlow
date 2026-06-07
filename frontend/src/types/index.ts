@@ -69,7 +69,11 @@ export interface SearchResult {
   citation_graph: CitationGraph;
   total_cost_usd: number;
   total_tokens_used: number;
-  model_usage: Record<string, { tokens: number; cost: number }>;
+  // R8 修复 (reviewer feedback 3.3 - 前后端 schema 漂移): 后端 SearchResponse 已经
+  // 升级到 model_usage_summary, 前端 SearchResult 同步对齐, 避免 UI 静默退化。
+  // 旧名 model_usage 仍兼容保留为可选字段, 给可能从老 cache 读到的数据兜底。
+  model_usage_summary: Record<string, { tokens: number; cost: number }>;
+  model_usage?: Record<string, { tokens: number; cost: number }>;
   iteration: number;
   status: string;
   elapsed_seconds: number;

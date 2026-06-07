@@ -80,10 +80,26 @@ ROUTER_QUALITY_THRESHOLD_PAPERS = int(os.getenv("ROUTER_QUALITY_THRESHOLD_PAPERS
 ROUTER_BUDGET_SAFETY_MARGIN = float(os.getenv("ROUTER_BUDGET_SAFETY_MARGIN", "0.3"))
 
 
-def get_provider_config(provider: str | None = None) -> dict:
+def get_provider_config(
+    provider: str | None = None,
+    *,
+    strict: bool = True,
+) -> dict:
     """
     返回当前 provider 的 base_url / api_key / model / fast_model 字典。
-    如果指定的 provider 未启用或无 key，返回空 dict（调用方应优雅降级）。
+
+    R8 修复 (reviewer feedback 3.2 - provider 语义错误):
+      旧实现: 未知 provider 静默回退到 kimi — 把"根本不存在的 provider"伪装成
+      "合法 provider", 属于 correctness bug (错误地成功)。
+      新实现:
+        - strict=True (默认): 未知 provider 直接 raise ValueError, fail loud
+        - strict=False: 旧行为回退 (仅 /providers 端点等需要"列举所有合法 + 未配置"
+          的场景才用, 显式 opt-in)
+      caller 端:
+        - 内部 LLM 调用路径 (llm_client.py): 默认 strict, 任意传错会立即 500 +
+          真实错误信息, 而非"用 kimi 跑出莫名其妙结果"
+        - /providers 端点: 显式 strict=False 列举所有合法 provider
+          (含未启用 / 未配 key)
     """
     provider = (provider or LLM_PROVIDER).lower()
 
@@ -121,4 +137,12 @@ def get_provider_config(provider: str | None = None) -> dict:
             "enabled": bool(ANTHROPIC_API_KEY),
         },
     }
-    return configs.get(provider, configs["kimi"])
+    if provider not in configs:
+        if strict:
+            raise ValueError(
+                f"unknown LLM provider: {provider!r} "
+                f"(known: {sorted(configs.keys())})"
+            )
+        # strict=False: 旧回退行为, 仅 /providers 端点等列举场景使用
+        return configs["kimi"]
+    return configs[provider]
