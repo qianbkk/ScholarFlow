@@ -35,6 +35,13 @@ R7 评估 (reviewer feedback: "为何不用 aiosqlite"):
 R9 清理: 删除同步版 get_cached / set_cached (R8 审计报告 — 死代码,生产从未调用)
 和同步 retry helper _retry_sqlite_op (async 版 _retry_sqlite_op_async 仍保留)。
 只剩 async 公共 API: get_cached_async / set_cached_async。
+
+R10 增量 (M-D P0-D): 加 query_embedding BLOB 列 (语义缓存 / numpy cos-sim 检索)
+- 旧 cache 表自动 ALTER TABLE ADD COLUMN (Python 端 idempotent ALTER, 只在缺列时加)
+- 新表直接在 CREATE TABLE 里加列
+- semantic_cache.py 读 query_embedding BLOB 时 numpy 余弦相似度 top-1
+- BLOB 缺失时退化到精确匹配路径 (get_semantic_cached 返 None)
+- _set_cached_sync 改用命名列 INSERT, 加新列时无需改 INSERT 语句
 """
 from __future__ import annotations
 
@@ -117,6 +124,7 @@ def _init_db() -> None:
                     """
                     CREATE TABLE IF NOT EXISTS search_cache_new (
                         query_hash TEXT PRIMARY KEY,
+                        query_embedding BLOB,
                         response_json TEXT NOT NULL,
                         cost_usd REAL NOT NULL,
                         tokens INTEGER NOT NULL,
@@ -145,11 +153,28 @@ def _init_db() -> None:
                     "[cache] H8 migration: dropped `query` column + VACUUM "
                     "to scrub original query text from disk (privacy hardening)"
                 )
+            # M-D P0-D 修复: 表无 query_embedding 列时 ALTER TABLE ADD COLUMN (idempotent)
+            # SQLite 没有"IF NOT EXISTS"对 ADD COLUMN,所以先查列再决定 ALTER
+            cols = {
+                row[1]
+                for row in conn.execute("PRAGMA table_info(search_cache)").fetchall()
+            }
+            if "query_embedding" not in cols:
+                conn.execute(
+                    "ALTER TABLE search_cache ADD COLUMN query_embedding BLOB"
+                )
+                conn.commit()
+                import logging
+                logging.getLogger(__name__).info(
+                    "[cache] M-D P0-D: added query_embedding BLOB column "
+                    "for semantic cache (numpy cos-sim top-1)"
+                )
         else:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS search_cache (
                     query_hash TEXT PRIMARY KEY,
+                    query_embedding BLOB,
                     response_json TEXT NOT NULL,
                     cost_usd REAL NOT NULL,
                     tokens INTEGER NOT NULL,
@@ -258,6 +283,8 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
     """同步 SQLite cache 写。被 set_cached_async 通过 asyncio.to_thread 调用。
 
     H8 修复：不再接受 `query` 参数 — query 文本不落盘，cache 里只存 hash。
+    M-D 修复：用命名列 INSERT 而不是 VALUES (?,?,?,?,?), 加新列(如 query_embedding)
+    时无需改 SQL — 当前 INSERT 只写 5 个非 BLOB 列, query_embedding 留 NULL。
     """
     _init_db_once()
     payload = (
@@ -269,8 +296,12 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
     )
     conn = _connect_with_wal()
     try:
+        # 命名列 INSERT: 加新列时 (如 query_embedding) 不需要改这里,
+        # 新列默认 NULL,semantic_cache.py 后续可以 UPDATE 补 BLOB
         conn.execute(
-            "INSERT OR REPLACE INTO search_cache VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO search_cache "
+            "(query_hash, response_json, cost_usd, tokens, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
             payload,
         )
         conn.commit()
