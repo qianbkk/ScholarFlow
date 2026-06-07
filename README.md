@@ -1,43 +1,11 @@
 # ScholarFlow
 
-> **中英双语 LLM 综述 + 引用可核查 + 私有化部署** 的开源学术研究助手。其他工具只能查文献, ScholarFlow 帮你写综述。
+> 面向研究生科研工作流的自主多 Agent 学术情报系统
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg)](VERSION)
-[![Built with AI assistance](https://img.shields.io/badge/Built_with-AI_assistance-FF6F00.svg)](https://github.com/qianbkk/ScholarFlow)
-
-> **Built with AI assistance (诚实声明)**: R1-R10 累计 ~185 个 commit 中, **架构设计 / LangGraph 状态机 / 多源并行检索 / 安全防护 (sanitize 注入防御 + HTTP 安全头)** 由 qianbkk 主导;**辅助实现 / 单测补充 / 重复性重构 / 文档润色** 由 Claude (Anthropic) 协助完成。git history 里 qianbkk 跟 claude 两个 author 标签真实反映这种协作分工, 不是"AI 全自动刷榜"。
 
 ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 个串联的 LangGraph 节点**完成：查询理解与分解 → 多源并行检索 → 引文网络扩展 → 三维质检排序 → 自适应迭代优化 → 结构化综述报告 → 引文知识图谱 → 成本追踪汇报。
-
----
-
-## 💡 为什么用 ScholarFlow
-
-> **一句话定位**: ScholarFlow 是少数把"LLM 综述生成 + 引用可核查 + 幻觉防御"做进同一管线的开源学术工具 — 其他工具要么只能查 (Google Scholar / 知网), 要么只生成不防幻觉 (Semantic Scholar TLDR), 要么闭源 (Connected Papers)。
-
-### 8 维对比 (vs 主流学术搜索)
-
-| 维度 | 知网 | Google Scholar | Semantic Scholar | OpenAlex | **ScholarFlow** |
-|------|------|----------------|------------------|----------|-----------------|
-| **中英双语** | 中文强 | ✓ | ✗ (英为主) | ✗ (英为主) | **✓ 中文综述 + 英文子查询** |
-| **LLM 综述生成** | ✗ | ✗ | 单篇 TLDR | ✗ | **✓ 6 段结构化综述** |
-| **幻觉防御** | N/A | N/A | ✗ (TLDR 偶有幻觉) | N/A | **✓ Grounding 验证 + 未匹配警告** |
-| **三维质检** | ✗ | ✗ | ✗ | ✗ | **✓ 相关性+权威性+一致性** |
-| **引文图谱** | 弱 | 无 | 弱 | 弱 (数据) | **✓ 4 类边 + 3 布局 (M-18)** |
-| **私有化部署** | ✗ (付费闭源) | ✗ | ✗ | ✗ | **✓ docker-compose 一键** |
-| **成本可见** | 隐藏 | 隐藏 | 隐藏 | 隐藏 | **✓ per-model token 面板** |
-| **prompt 注入防御** | N/A | N/A | N/A | N/A | **✓ 6 层 sanitize** |
-
-### 5 大杀手场景
-
-| 场景 | 你在做什么 | ScholarFlow 帮你 |
-|------|----------|-----------------|
-| 📚 **研究生综述周** | 1 周交方向综述 | 1 个 query → 1 小时出 8 节点流水线报告 |
-| 🎓 **导师基金申请** (NSF/NSFC) | Background 要 50 篇最新预印本 | 1 跳沿引用 + forward citers 双向扩展 |
-| 🔍 **博士开题** | 跨 query 预算核算 | 实时 per-model token/cost 折叠面板 |
-| 🇨🇳 **中文文献调研** | 知网英文弱 / SS 中文弱 | 唯一中英双语 + 中文 sanitize 防御 |
-| 🏢 **实验室 RAG 私有化** | 数据合规不能上公网 | docker-compose 一键起, 数据本地 |
 
 ---
 
@@ -233,76 +201,6 @@ END
 
 ---
 
-## 🛡️ Round 5 优化 (2026-06-07)
-
-历经 5 轮密集审计+优化,本轮聚焦 **生产化硬化**:
-
-| 类别 | 项 | 描述 |
-|------|---|------|
-| **M-1** | `SearchResponse.is_degraded_response` 顶层信号 | 任一 paper fallback → 整篇响应标记为 degraded,前端 banner 闭环 |
-| **M-2** | `load_dotenv(override=True)` → `False` | 修复 K8s/Docker secret 部署时静默被 .env 覆盖 |
-| **M-3** | HTTP 7 个安全头 + `TrustedHostMiddleware` | X-Frame-Options / HSTS / CSP / X-Content-Type-Options 等 |
-| **M-4** | `model_usage` 字段白名单 | 去除 cost + provider 内部名泄露 (如 `MiniMax-M3 (fallback to mock)`) |
-| **S-1** | LLM token 浪费 3 处 | synthesis 25→15 papers, abstract 400→200 字符, decompose max_tokens 800→500 |
-| **S-2** | CJK prompt 注入 denylist | 中文/日文/韩文"忽略指令"关键词 |
-| **S-3** | Pydantic 422 不回显 input | 防日志注入 + 隐私 |
-| **S-4** | `/search/cancel` 限流 + 校验 | 10/minute + request_id 长度/charset |
-| **S-5** | 前端真调 `/search/cancel` | reset 不只关 EventSource,让后端停 in-flight pipeline |
-| **M-5** | useSearch setInterval 4Hz → 1Hz | 减少 75% setState 次数 (800 re-render → 200) |
-| **S-8** | D3 alphaDecay 调优 | 加快收敛 1 倍, 拖拽停止更平滑 |
-| **SIMPLIFY** | 抽 `_build_search_response` helper | 消除 /search + /search/stream ~30 行重复 |
-| **SIMPLIFY** | 删 `usingFallback` 死状态 | 前端 0 处读的 state + 4 处 set |
-| **TEST** | 7 个新测试 | 覆盖 M-1/M-3/M-4/S-3/S-4 |
-| **DEFER** | 9 项入 `docs/FUTURE_TASKS.md` | Dockerfile / 多 worker / K8s / 日志结构化 / etc. |
-
-详见 `docs/FUTURE_TASKS.md` 了解推迟项。
-
----
-
-## 🛡️ Round 6 优化 (2026-06-07)
-
-第 6 轮聚焦 **稳定性 + 资源收敛**, 在 R5 基础上加 6 项硬化:
-
-| 类别 | 项 | 描述 |
-|------|---|------|
-| **STAB-1** | in-flight task table | ContextVar 跨节点追踪, cancel 时能找到真 pipeline |
-| **STAB-2** | cancel 真取消 | `/search/cancel` 端点真触发 `asyncio.CancelledError`,不是空 reset |
-| **SEC-6** | model_usage_summary 白名单 | 去除 provider 内部名 (fallback / mock) 泄露 |
-| **TYPED-1** | TypedDict 显式声明 | `top5_summary_cache` 等缓存字段类型化, IDE 可推断 |
-| **SEC-7** | sanitize 加 jailbreak / DAN / developer mode | denylist 覆盖 LLM 提示词注入高频词 |
-| **PERF-1** | log_throttle 抽 utils, 5 分钟窗口 | 同类日志 5min 内只记 1 次, 减少 ~80% logger I/O |
-
----
-
-## 🛡️ Round 7 优化 (2026-06-07)
-
-第 7 轮聚焦 **R6 误杀修复 + 边缘场景**, 5 项收口:
-
-| 类别 | 项 | 描述 |
-|------|---|------|
-| **FIX-1** | sanitize denylist 学术词误杀 | 移除独立 `dan` (会误杀 "Dan Hendrycks" 等人名); `mode` 类加 `enable/activate` 上下文才命中 |
-| **FIX-2** | budget_lifecycle CancelledError 路径 | 3 个新测试覆盖节点取消时预算正确归还 (try/finally) |
-| **FIX-3** | budget_lifecycle 异常路径 | R3 兜底扩展到 CancelledError, 防止预算泄漏 |
-| **DOC-1** | cache 文档化 aiosqlite | 注释说明 `asyncio.to_thread` 包装同步 SQLite 是预期行为 (避免后续误改) |
-| **PROV-1** | provider skip (R7) | 测试 skip 配置缺失的 provider, 防止 CI 误报 |
-
----
-
-## 🛡️ Round 8 优化 (2026-06-07)
-
-第 8 轮聚焦 **provider 严格语义 + 测试隔离**, R8 + R8.2 + R8.3 三批:
-
-| 类别 | 项 | 描述 |
-|------|---|------|
-| **PROV-2** | `get_provider_config` 严格化 | 未知 provider `raise` 而非静默回退 (config.py:83-150) |
-| **PROV-3** | `_resolve_provider` `has_key` 过滤 | 防止 "name 合法但 `has_key=False`" 静默回退 mock |
-| **SCHEMA-1** | ProviderInfo.verified 字段 | 前端 API 透传 `verified: bool`, UI 可差异化显示 |
-| **SCHEMA-2** | model_usage_summary 必填 | 必填字段对齐 R6 白名单, 防止字段漂移 |
-| **TEST-ISO** | autouse `_reset_global_state` fixture | conftest.py 加 fixture, limiter + in-flight table 跨文件测试隔离 |
-| **R8.3-T1** | test_cors_hardening subprocess 隔离 | reload backend.main 改用 subprocess, 避免 sys.modules 不一致 |
-| **R8.3-T2** | `_PROVIDER_HEALTH_CACHE` reset | autouse fixture 重置 module-level 缓存, R5 以来首次 0 failed |
-
-R8 累计: 6 failed → 5 failed → 0 failed (307 passed + 2 skipped, 全部稳定)。
 
 ---
 
