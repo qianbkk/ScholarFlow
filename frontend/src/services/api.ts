@@ -18,6 +18,9 @@ export interface ProviderInfo {
 }
 
 export interface ProvidersResponse {
+  // R10 (M-16): default_provider 硬编为 'minimax' (项目所有者偏好).
+  // 也允许动态 (后端实际返回哪个就用哪个), 这里保留 string 类型, 由 caller
+  // 在运行时判断. 已知合法值: 'kimi' | 'glm' | 'minimax' | 'anthropic' | 'deepseek'.
   default_provider: string;
   // R8.2 修复: 端点列表在 health.py 返回, 旧版前端没有声明类型 (弱类型透传 OK 但
   // 失去 IDE 提示)。加可选字段, 不破坏现有 caller。

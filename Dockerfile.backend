@@ -16,11 +16,28 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/ ./backend/
 COPY .env.example .env
 
+# R10 (M-20): 非 root user — 最小权限原则.
+# 容器进程不应该以 root 运行, 一旦被 RCE 入侵, 攻击者拿到的是普通用户权限,
+# 无法改 /etc/passwd / install package / mount host fs.
+# scholarflow UID 1000 (与典型 docker-host 用户对齐, 避免 volume 挂载时出现 ownership 错误).
+RUN groupadd -r -g 1000 scholarflow \
+    && useradd -r -u 1000 -g scholarflow -m -d /home/scholarflow -s /bin/bash scholarflow
+
+# R10 (M-20): .cache 目录是 SQLite cache DB 的家, 必须可写且 0700 严格权限.
+# 仅 scholarflow user 能读写 — 防止同主机其他用户 (容器共享 volume) 偷看 cache.
+RUN mkdir -p /app/backend/.cache \
+    && chown -R scholarflow:scholarflow /app/backend/.cache \
+    && chmod 0700 /app/backend/.cache \
+    && chown -R scholarflow:scholarflow /app
+
 EXPOSE 8000
 
-# 健康检查
+# R10 (M-20): 健康检查 — endpoint /health (后端 health.py 加了 SQLite 写权限验证)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# R10 (M-20): 切到非 root 用户运行
+USER scholarflow
 
 # 启动
 CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

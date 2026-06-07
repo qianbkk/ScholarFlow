@@ -9,8 +9,17 @@ services:
     env_file: .env
     ports:
       - "8000:8000"
+    # R10 (M-20): 安全加固
+    # 1) read_only: 根文件系统只读, 防止运行期往 /usr /app 写东西 (除了显式 rw mount)
+    # 2) volumes: 仅 .cache 单独 rw — SQLite cache DB 必需可写
+    # 3) tmpfs: /tmp 内存盘 — 临时文件 (上传 / log) 不落盘, 容器退出自动清
+    # 4) user: 与 Dockerfile 的 scholarflow (UID 1000) 对齐
+    read_only: true
+    user: "1000:1000"
     volumes:
-      - ./backend/.cache:/app/backend/.cache
+      - ./backend/.cache:/app/backend/.cache:rw
+    tmpfs:
+      - /tmp:size=64m
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]

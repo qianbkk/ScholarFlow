@@ -7,6 +7,12 @@ service descriptor. No business logic, no state — safe to mount first.
 """
 from __future__ import annotations
 
+import logging
+import os
+import tempfile
+import time as _time
+from pathlib import Path
+
 from fastapi import APIRouter, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -25,15 +31,88 @@ limiter = Limiter(key_func=get_remote_address)
 router.on_startup = []  # type: ignore[attr-defined]
 router.on_shutdown = []  # type: ignore[attr-defined]
 
+logger = logging.getLogger(__name__)
+
+
+def _check_cache_writable() -> dict:
+    """R10 (M-20): 验证 backend/.cache 目录 SQLite 可写.
+
+    实际场景: 容器 read_only 根 fs + tmpfs /tmp 之后, SQLite cache DB
+    必须能 INSERT/UPDATE 才行. 这个 round-trip 测试:
+      1) 在 .cache 目录创建临时 SQLite DB
+      2) CREATE TABLE + INSERT 1 行 + SELECT 验证 + DELETE
+      3) 删掉测试文件
+
+    返回: {writable: bool, latency_ms: float, error: str|None}
+    """
+    start = _time.monotonic()
+    cache_dir = Path(__file__).resolve().parents[3] / "backend" / ".cache"
+    # 兼容: 容器内 / 本地测试
+    candidates = [cache_dir, Path("/app/backend/.cache"), Path(tempfile.gettempdir())]
+    last_error: str | None = None
+    for d in candidates:
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+        except (PermissionError, OSError) as e:
+            last_error = f"mkdir {d}: {e}"
+            continue
+        # round-trip test
+        test_db = d / f"_healthcheck_{os.getpid()}.sqlite"
+        try:
+            import sqlite3
+            with sqlite3.connect(str(test_db), timeout=2.0) as conn:
+                conn.execute("CREATE TABLE IF NOT EXISTS _hc (id INTEGER PRIMARY KEY, ts REAL)")
+                conn.execute("INSERT INTO _hc (ts) VALUES (?)", (_time.time(),))
+                rows = conn.execute("SELECT COUNT(*) FROM _hc").fetchone()
+                conn.execute("DELETE FROM _hc WHERE id = (SELECT MAX(id) FROM _hc)")
+                conn.commit()
+            assert rows and rows[0] >= 1, "round-trip count mismatch"
+            # 清理
+            try:
+                test_db.unlink()
+            except OSError:
+                pass
+            latency = (_time.monotonic() - start) * 1000.0
+            return {
+                "writable": True,
+                "latency_ms": round(latency, 2),
+                "path": str(d),
+                "error": None,
+            }
+        except Exception as e:
+            last_error = f"sqlite at {d}: {e}"
+            continue
+    latency = (_time.monotonic() - start) * 1000.0
+    return {
+        "writable": False,
+        "latency_ms": round(latency, 2),
+        "path": None,
+        "error": last_error or "no writable cache directory found",
+    }
+
 
 @router.get("/health")
 async def health():
-    """健康检查。"""
-    return {
-        "status": "ok",
+    """健康检查。
+
+    R10 (M-20): 加 SQLite cache 写权限 round-trip 验证 — k8s/docker 健康检查
+    不仅看进程在不在, 还要看 cache DB 能否 INSERT (容器 read_only fs 配错就
+    会在第一次 /search 报 OperationalError). status 字段:
+      - "ok": 全部健康
+      - "degraded": cache 不可写但服务可访问 (前端可继续用 mock)
+    """
+    cache_check = _check_cache_writable()
+    status = "ok" if cache_check["writable"] else "degraded"
+    resp = {
+        "status": status,
         "service": "ScholarFlow",
         "version": "1.0.0",
     }
+    # 仅当 cache 异常时附 details, 正常情况不暴露 (减少响应体积 + 信息泄露)
+    if not cache_check["writable"]:
+        resp["cache"] = cache_check
+        logger.warning(f"[health] cache not writable: {cache_check['error']}")
+    return resp
 
 
 @router.get("/providers")

@@ -35,7 +35,17 @@ logger = logging.getLogger(__name__)
 # 给前端 /providers 端点用的展示元数据。
 # has_key 来自对应 *_API_KEY 环境变量 — 没有 key 的 provider 不在选择列表里。
 # DeepSeek 走 OpenAI 协议（不走 get_provider_config），单独处理。
+#
+# R10 (M-16): 顺序按"演示默认 → 备选"排 (minimax → kimi → glm → anthropic → deepseek).
+# 注意: 5 个 provider 全部保留 — 实际项目演示只需要 MiniMax 即可,
+# 但其他 provider 是"用户可能切换"的产品选项, 不是冗余.
+# 不要删 — 即便当前 .env 只配了 MiniMax key, 删了反而限制灵活性.
 _PROVIDER_META = {
+    "minimax": {
+        "name": "MiniMax",
+        "flagship_model": "MiniMax-M3",
+        "fast_model": "MiniMax-M2.7",
+    },
     "kimi": {
         "name": "Kimi (Moonshot)",
         "flagship_model": "kimi-k2.5",
@@ -45,11 +55,6 @@ _PROVIDER_META = {
         "name": "GLM (智谱)",
         "flagship_model": "glm-4.6",
         "fast_model": "glm-4.6-air",
-    },
-    "minimax": {
-        "name": "MiniMax",
-        "flagship_model": "MiniMax-M3",
-        "fast_model": "MiniMax-M2.7",
     },
     "anthropic": {
         "name": "Anthropic Claude",

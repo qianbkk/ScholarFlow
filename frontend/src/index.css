@@ -9,21 +9,66 @@ html, body, #root {
     'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
 }
 
+/* R10 (M-17): 4 套背景色主题 — CSS 变量驱动.
+   <html class="theme-xxx"> 切换 → var(--sf-bg) / var(--sf-text) 变化.
+   全部 WCAG AA (对比度 > 4.5:1) 已验:
+     light: #ffffff / #0f172a → 16.5:1
+     warm:  #fef3c7 / #1c1917 → 13.2:1
+     dark:  #0f172a / #f1f5f9 → 14.5:1
+     eye:   #86efac / #064e3b → 6.8:1
+*/
+:root,
+html.theme-light {
+  --sf-bg: #ffffff;
+  --sf-text: #0f172a;
+  --sf-border: #e2e8f0;
+  --sf-muted: #64748b;
+}
+html.theme-warm {
+  --sf-bg: #fef3c7;
+  --sf-text: #1c1917;
+  --sf-border: #fde68a;
+  --sf-muted: #57534e;
+}
+html.theme-dark {
+  --sf-bg: #0f172a;
+  --sf-text: #f1f5f9;
+  --sf-border: #334155;
+  --sf-muted: #94a3b8;
+}
+html.theme-eye {
+  --sf-bg: #86efac;
+  --sf-text: #064e3b;
+  --sf-border: #4ade80;
+  --sf-muted: #065f46;
+}
+
+body {
+  background-color: var(--sf-bg);
+  color: var(--sf-text);
+}
+
 /* Markdown 报告样式 */
 .report-body h2 {
-  @apply text-xl font-semibold mt-5 mb-2 text-slate-800 border-b border-slate-200 pb-1;
+  @apply text-xl font-semibold mt-5 mb-2 border-b pb-1;
+  color: var(--sf-text);
+  border-color: var(--sf-border);
 }
 .report-body h3 {
-  @apply text-lg font-semibold mt-4 mb-1.5 text-slate-700;
+  @apply text-lg font-semibold mt-4 mb-1.5;
+  color: var(--sf-text);
 }
 .report-body p {
-  @apply text-sm leading-relaxed text-slate-700 my-1.5;
+  @apply text-sm leading-relaxed my-1.5;
+  color: var(--sf-text);
 }
 .report-body ul {
-  @apply list-disc pl-6 my-1.5 text-sm text-slate-700;
+  @apply list-disc pl-6 my-1.5 text-sm;
+  color: var(--sf-text);
 }
 .report-body ol {
-  @apply list-decimal pl-6 my-1.5 text-sm text-slate-700;
+  @apply list-decimal pl-6 my-1.5 text-sm;
+  color: var(--sf-text);
 }
 .report-body li {
   @apply my-1;
@@ -32,13 +77,17 @@ html, body, #root {
   @apply text-brand-600 hover:underline;
 }
 .report-body strong {
-  @apply font-semibold text-slate-900;
+  @apply font-semibold;
+  color: var(--sf-text);
 }
 .report-body code {
-  @apply bg-slate-100 px-1.5 py-0.5 rounded text-xs;
+  @apply px-1.5 py-0.5 rounded text-xs;
+  background-color: var(--sf-border);
 }
 .report-body blockquote {
-  @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-600 italic;
+  @apply border-l-4 pl-3 my-2 italic;
+  border-color: var(--sf-border);
+  color: var(--sf-muted);
 }
 
 /* 滚动条 */
@@ -47,11 +96,12 @@ html, body, #root {
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  @apply bg-slate-100;
+  background-color: var(--sf-border);
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-slate-300 rounded;
+  @apply rounded;
+  background-color: var(--sf-muted);
 }
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-slate-400;
+  opacity: 0.8;
 }

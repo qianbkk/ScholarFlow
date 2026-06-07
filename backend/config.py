@@ -24,10 +24,11 @@ LLM_MOCK = os.getenv("LLM_MOCK", "true").lower() in ("1", "true", "yes")
 API_MOCK = os.getenv("API_MOCK", "true").lower() in ("1", "true", "yes")
 
 # 如果没有任何 LLM key，自动开启 mock
+# R10 (M-16): 列出顺序按"演示默认 → 备选"排 (MiniMax → Kimi → GLM → Anthropic)
 _has_any_llm_key = any([
+    os.getenv("MiniMax_API_KEY", ""),
     os.getenv("KIMI_API_KEY", ""),
     os.getenv("GLM_API_KEY", ""),
-    os.getenv("MiniMax_API_KEY", ""),
     os.getenv("ANTHROPIC_API_KEY", ""),
 ])
 if not _has_any_llm_key:
@@ -36,10 +37,16 @@ if not _has_any_llm_key:
 
 
 # ===== LLM Provider 路由配置 =====
+# R10 (M-16): 顺序按"演示默认 → 备选"排.
+# 实际使用只需要 MiniMax 即可演示, 其他 provider 是为"用户可能切换"保留的 fallback.
+# 5 个 provider 全部保留 (不要删 — 即便项目当前只配了 MiniMax key,
+# 不同用户会切到不同 provider; 删了反而限制灵活性).
 
-# Anthropic 官方
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+# MiniMax (Anthropic-compatible) — 演示默认
+MiniMax_API_KEY = os.getenv("MiniMax_API_KEY", "")
+MiniMax_BASE_URL = os.getenv("MiniMax_BASE_URL", "https://api.minimaxi.com/anthropic")
+MiniMax_MODEL = os.getenv("MiniMax_MODEL", "MiniMax-M3")
+MiniMax_FAST_MODEL = os.getenv("MiniMax_FAST_MODEL", "MiniMax-M2.7")
 
 # Kimi / Moonshot
 KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
@@ -53,11 +60,9 @@ GLM_BASE_URL = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/anthropic
 GLM_MODEL = os.getenv("GLM_MODEL", "glm-4.6")
 GLM_FAST_MODEL = os.getenv("GLM_FAST_MODEL", "glm-4.6-air")
 
-# MiniMax
-MiniMax_API_KEY = os.getenv("MiniMax_API_KEY", "")
-MiniMax_BASE_URL = os.getenv("MiniMax_BASE_URL", "https://api.minimaxi.com/anthropic")
-MiniMax_MODEL = os.getenv("MiniMax_MODEL", "MiniMax-M3")
-MiniMax_FAST_MODEL = os.getenv("MiniMax_FAST_MODEL", "MiniMax-M2.7")
+# Anthropic 官方
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
 # DeepSeek（兼容 OpenAI 协议）
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
@@ -68,7 +73,12 @@ SEMANTIC_SCHOLAR_API_KEY = os.getenv("SEMANTIC_SCHOLAR_API_KEY", "")
 OPENALEX_EMAIL = os.getenv("OPENALEX_EMAIL", "scholar@flow.ai")
 
 # ===== 运行时配置 =====
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "kimi").lower()
+# R10 (M-16): 默认 provider 改 minimax.
+# 注意: 这里改的是"默认值", .env 里 LLM_PROVIDER 仍可手动覆盖 (kimi/glm/anthropic/deepseek).
+# 默认测试用 minimax — 性价比高, 国内直连, 无需 VPN.
+# 如果 .env 没配 MiniMax_API_KEY, 启动时 R8.2 strict 检查会发现 minimax 没 key,
+# 抛 400 让用户切其他 provider 或开 LLM_MOCK.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "minimax").lower()
 BUDGET_LIMIT_USD = float(os.getenv("BUDGET_LIMIT_USD", "2.0"))
 MAX_SEARCH_ITERATIONS = int(os.getenv("MAX_SEARCH_ITERATIONS", "3"))
 
@@ -104,6 +114,14 @@ def get_provider_config(
     provider = (provider or LLM_PROVIDER).lower()
 
     configs = {
+        "minimax": {
+            "base_url": MiniMax_BASE_URL,
+            "api_key": MiniMax_API_KEY,
+            "model": MiniMax_MODEL,
+            "fast_model": MiniMax_FAST_MODEL,
+            "auth_type": "bearer",
+            "enabled": bool(MiniMax_API_KEY),
+        },
         "kimi": {
             "base_url": KIMI_BASE_URL,
             "api_key": KIMI_API_KEY,
@@ -119,14 +137,6 @@ def get_provider_config(
             "fast_model": GLM_FAST_MODEL,
             "auth_type": "bearer",
             "enabled": bool(GLM_API_KEY),
-        },
-        "minimax": {
-            "base_url": MiniMax_BASE_URL,
-            "api_key": MiniMax_API_KEY,
-            "model": MiniMax_MODEL,
-            "fast_model": MiniMax_FAST_MODEL,
-            "auth_type": "bearer",
-            "enabled": bool(MiniMax_API_KEY),
         },
         "anthropic": {
             "base_url": ANTHROPIC_BASE_URL,

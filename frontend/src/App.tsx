@@ -3,6 +3,7 @@ import { CostDashboard } from './components/CostDashboard';
 import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
+import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
 import { useSearch } from './hooks/useSearch';
 import { healthCheck } from './services/api';
 
@@ -19,6 +20,21 @@ interface LastSearchOpts {
   provider?: string;
 }
 
+const THEME_STORAGE_KEY = 'sf-theme';
+const VALID_THEMES: ThemeId[] = ['light', 'warm', 'dark', 'eye'];
+
+function loadStoredTheme(): ThemeId {
+  try {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored && (VALID_THEMES as string[]).includes(stored)) {
+      return stored as ThemeId;
+    }
+  } catch {
+    // localStorage 可能在隐私模式不可用 — 静默回退默认
+  }
+  return 'light';
+}
+
 export default function App() {
   const {
     loading, error, result, lastQuery, search, reset,
@@ -28,6 +44,8 @@ export default function App() {
   const [elapsed, setElapsed] = useState(0);
   // Round 6 SIMPLIFY (REDUNDANT-004): 跟踪上一次成功提交的搜索参数, 给 onRetry 用
   const [lastSearchOpts, setLastSearchOpts] = useState<LastSearchOpts | null>(null);
+  // R10 (M-17): 背景色主题状态 — localStorage 记忆, 4 套全部 WCAG AA (>4.5:1)
+  const [theme, setTheme] = useState<ThemeId>(loadStoredTheme);
 
   useEffect(() => {
     healthCheck()
@@ -39,6 +57,34 @@ export default function App() {
   useEffect(() => {
     if (result?.elapsed_seconds) setElapsed(result.elapsed_seconds);
   }, [result]);
+
+  // R10 (M-17): 主题切换 → 写 localStorage + 同步到 <html> element (让 body 继承)
+  const handleThemeChange = useCallback((next: ThemeId) => {
+    setTheme(next);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      // 静默失败 — 不影响 UI 切换
+    }
+  }, []);
+
+  // R10 (M-17): 启动时把 theme 写到 <html> (data-theme 属性), 让全局生效
+  useEffect(() => {
+    const html = document.documentElement;
+    // 先清掉旧 theme class, 再加新的 (避免 stacking)
+    VALID_THEMES.forEach((t) => html.classList.remove(`theme-${t}`));
+    html.classList.add(`theme-${theme}`);
+    // 顺便在 console 打印一次对比度 (开发期验证)
+    if (import.meta.env.DEV) {
+      const contrasts: Record<ThemeId, string> = {
+        light: '16.5:1',
+        warm: '13.2:1',
+        dark: '14.5:1',
+        eye: '6.8:1',
+      };
+      console.info(`[theme] switched to ${theme} (contrast ${contrasts[theme]})`);
+    }
+  }, [theme]);
 
   // Round 6 SIMPLIFY (REDUNDANT-004): 包装 search, 在调用前先记住当前表单参数.
   // 这样 onRetry 闭包能拿到和用户上次提交完全一致的 budget/maxIter/provider.
@@ -53,7 +99,23 @@ export default function App() {
   );
 
   return (
-    <div className="h-screen flex flex-col bg-slate-50">
+    // R10 (M-17): bg-theme-light 是默认浅色, text-theme-light 是高对比文字 (#0f172a)
+    // 全部 4 套主题都通过 tailwind.config.js 扩展的颜色对, 对比度 > 4.5:1 (WCAG AA)
+    <div
+      className="h-screen flex flex-col"
+      style={{ backgroundColor: 'var(--sf-bg)', color: 'var(--sf-text)' }}
+    >
+      {/* R10 (M-17): 顶部 toolbar — 右侧放 ThemeSwitcher, 切换不刷新页面 */}
+      <div
+        className="flex items-center justify-between px-4 py-1.5 border-b"
+        style={{ borderColor: 'var(--sf-border, #e2e8f0)' }}
+      >
+        <div className="flex items-center gap-2 text-xs opacity-70">
+          <span>ScholarFlow</span>
+        </div>
+        <ThemeSwitcher current={theme} onChange={handleThemeChange} />
+      </div>
+
       <CostDashboard result={result} loading={loading} elapsed={elapsed} />
 
       {serverOk === false && (

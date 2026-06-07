@@ -51,12 +51,25 @@ export function QueryPanel({
     fetchProviders()
       .then((resp) => {
         if (cancelled) return;
-        setProviders(resp.providers.filter((p) => p.has_key));
+        // R10 (M-16): provider 排序 — minimax 置顶, 其他保留后端原顺序.
+        // 后端 _PROVIDER_META 顺序已经是 minimax 第一, 这里防御性再排一次 (前端不依赖后端顺序).
+        const available = resp.providers.filter((p) => p.has_key);
+        const sorted = [...available].sort((a, b) => {
+          if (a.id === 'minimax') return -1;
+          if (b.id === 'minimax') return 1;
+          return 0;
+        });
+        setProviders(sorted);
         setDefaultProvider(resp.default_provider);
-        // 初始化为默认 provider（如果有 key），否则保持空
-        const def = resp.providers.find(
-          (p) => p.id === resp.default_provider && p.has_key
+        // 初始化为默认 provider (minimax 优先, 后端 default 次之, 最后空字符串)
+        // 旧逻辑: 用后端 default_provider 字段; 但 .env 可能配了 minimax 没 key,
+        // 那时 default_provider='minimax' 但 has_key=false, 默认 fallback 到第一个有 key 的.
+        let def = sorted.find(
+          (p) => p.id === resp.default_provider
         );
+        if (!def && sorted.length > 0) {
+          def = sorted[0];  // 第一个 (排序后 minimax 优先)
+        }
         if (def) setSelectedProvider(def.id);
       })
       .catch((err) => {
@@ -127,7 +140,7 @@ export function QueryPanel({
                 onChange={(e) => setSelectedProvider(e.target.value)}
                 disabled={providersLoading}
                 title={providersLoading ? '加载中…' : '选择 LLM provider（仅显示已配置 key 的）'}
-                className="border border-slate-300 rounded px-1.5 py-0.5 text-xs max-w-[120px] focus:outline-none focus:ring-1 focus:ring-brand-500"
+                className="border border-slate-300 rounded px-1.5 py-0.5 text-xs max-w-[140px] focus:outline-none focus:ring-1 focus:ring-brand-500"
               >
                 {providers.length === 0 && !providersLoading && (
                   <option value="">（无可用 provider）</option>
@@ -143,6 +156,8 @@ export function QueryPanel({
                   //   - verified === null: ⏳ 灰色 "(验证中...)" + disabled,
                   //     启动后 5s 内后端 health check 未完成, 强制用户等
                   //   - verified === true: 正常显示, verified 字段不外露
+                  //
+                  // R10 (M-16): minimax 加 "🎯 默认" 标签 — 让用户一眼知道哪个是默认.
                   if (p.verified === false) {
                     return (
                       <option
@@ -169,9 +184,16 @@ export function QueryPanel({
                       </option>
                     );
                   }
+                  // R10 (M-16): minimax 在 option label 上加 "🎯 默认" 标识
+                  const isDefault = p.id === 'minimax';
                   return (
-                    <option key={p.id} value={p.id} title={p.flagship_model}>
-                      {p.name}
+                    <option
+                      key={p.id}
+                      value={p.id}
+                      title={p.flagship_model}
+                      style={isDefault ? { color: '#1d4ed8', fontWeight: 600 } : undefined}
+                    >
+                      {isDefault ? `🎯 ${p.name} (默认)` : p.name}
                     </option>
                   );
                 })}

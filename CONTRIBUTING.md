@@ -85,6 +85,14 @@ DCO 是 Linux Kernel / Git / Docker 等 200+ 项目使用的轻量替代, 1 行 
 
 请友好、包容、专注技术。所有 PR 都基于代码质量评审,与作者身份无关。
 
+## Community
+
+- 💬 [GitHub Discussions](https://github.com/qianbkk/ScholarFlow/discussions) — 提问 / 想法 / 学术反馈
+- 🐛 [Issue Tracker](https://github.com/qianbkk/ScholarFlow/issues) — Bug 报告
+- 🎓 [Academic Feedback](.github/ISSUE_TEMPLATE/academic_feedback.md) — 检索质量反馈
+
+> R10+ 计划：把 Discussion categories 进一步细分（学术 / 工程 / 安全），目前先用 GitHub 内置 categories。
+
 ## License
 
 贡献的代码按 [MIT License](LICENSE) 发布。
