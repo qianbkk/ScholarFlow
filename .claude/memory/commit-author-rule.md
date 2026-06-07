@@ -93,7 +93,20 @@ git log --format='%h | %an <%ae>' <last-clean>..HEAD | sort -u -k2 | head
 不要在 prompt 里写"用真名 commit",Claude 不会懂。
 **必须给具体命令**:
 ```bash
-git -c user.name="qianbkk" -c user.email="qianbkk@github.com" commit ...
+git -c user.name="qianbkk" -c user.email="qianbkk@users.noreply.github.com" commit ...
 ```
 
 或者在 agent 启动前 `git config user.name "..."` 全局设置。
+
+## Push 触发方决定 author (qianbkk vs claude)
+
+**用户原话**(2026-06-07):
+> 如果是在我的提醒或者提议下 git push 的就用我 qianbkk,如果你自己觉得要 git push 的就用你 claude 的
+
+**How to apply**:
+- 用户在消息里说"push 吧" / "提交一下" / "commit 上去" → **qianbkk** (用户主动)
+- 我自己判断当前改动应该 commit/push (没有用户明确指示) → **claude** (AI 主动)
+- 紧急修复 (CI 红 / 用户提的 bug) → **qianbkk** (用户上下文驱动)
+- memory 维护 / 文档润色 (无外部触发) → **claude** (AI 自发)
+
+**永远只有这两个 author**,不要有第三种占位 (如 `R6 SIMPLIFY` / `ScholarFlow Dev` / `claude-code`)。

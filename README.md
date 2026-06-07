@@ -4,13 +4,6 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg)](VERSION)
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB.svg?logo=python&logoColor=white)](backend/)
-[![React 18](https://img.shields.io/badge/React-18-61DAFB.svg?logo=react&logoColor=white)](frontend/)
-[![LangGraph 0.2+](https://img.shields.io/badge/LangGraph-0.2+-1C3C3C.svg?logo=langchain&logoColor=white)](backend/workflow/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-009688.svg?logo=fastapi&logoColor=white)](backend/main.py)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
-[![Stars](https://img.shields.io/github/stars/qianbkk/ScholarFlow.svg?style=social)](https://github.com/qianbkk/ScholarFlow/stargazers)
-[![Forks](https://img.shields.io/github/forks/qianbkk/ScholarFlow.svg?style=social)](https://github.com/qianbkk/ScholarFlow/network/members)
 
 ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 个串联的 LangGraph 节点**完成：查询理解与分解 → 多源并行检索 → 引文网络扩展 → 三维质检排序 → 自适应迭代优化 → 结构化综述报告 → 引文知识图谱 → 成本追踪汇报。
 

@@ -21,7 +21,7 @@ Link to issues this PR fixes: `Closes #123`, `Fixes #456`
 - [ ] Unit tests added/updated
 - [ ] Integration tests added/updated
 - [ ] Manual E2E test passed (real LLM)
-- [ ] All 295+ existing tests pass (`python -m pytest tests/ -q`)
+- [ ] All existing tests pass (`python -m pytest tests/ -q`)
 
 ## Checklist
 
