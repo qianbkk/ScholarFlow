@@ -1,0 +1,18 @@
+# Code owners for ScholarFlow
+# Lines starting with '#' are comments.
+# Each line is a file pattern followed by one or more owners.
+
+# Default owners for everything
+*       @qianbkk
+
+# Backend
+/backend/         @qianbkk
+/eval/            @qianbkk
+
+# Frontend
+/frontend/        @qianbkk
+
+# Infrastructure
+/Dockerfile*      @qianbkk
+/docker-compose*  @qianbkk
+/.github/         @qianbkk

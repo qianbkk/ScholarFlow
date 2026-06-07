@@ -248,4 +248,14 @@ KIMI_API_KEY=sk-...
 
 ## 📜 License
 
-MIT
+MIT — see [LICENSE](LICENSE).
+
+当前版本: [VERSION](VERSION) ([CHANGELOG](CHANGELOG.md))
+
+## 📚 文档
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — 如何贡献
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — 行为准则
+- [SECURITY.md](SECURITY.md) — 安全策略
+- [docs/FUTURE_TASKS.md](docs/FUTURE_TASKS.md) — 推迟项列表
+- [.editorconfig](.editorconfig) / [.gitattributes](.gitattributes) — 代码风格 / 行尾
