@@ -121,13 +121,19 @@ def test_margin_uses_ratio_low_budget_triggers_synthesize():
 
 
 def test_margin_high_budget_keeps_refining():
-    """[from margin_ratio] budget=20, cost=1 → 剩余 95% > 15% → refine。"""
+    """[from margin_ratio] budget=20, cost=1 → 剩余 95% > 15% → refine。
+
+    R7 update: cost 调为 0.1 避开 Round 6 S8 per-iter cap ($0.3), relevance 调为 0.5
+    避开"质量已够好"early-return (ROUTER_QUALITY_THRESHOLD_REL=2.5)。原值 1.0/5.0 在
+    实际 router 行为下应返回 synthesize (1.0>$0.3 cap + 5.0>2.5 quality), 不符合本测试
+    的"budget 充足 → refine" 意图。
+    """
     state = {
         "iteration": 0,
         "max_iterations": 3,
-        "total_cost_usd": 1.0,
+        "total_cost_usd": 0.1,
         "budget_limit_usd": 20.0,
-        "ranked_papers": [{"relevance_score": 5.0}] * 20,
+        "ranked_papers": [{"relevance_score": 0.5}] * 20,
     }
     assert should_refine(state) == "refine"
 

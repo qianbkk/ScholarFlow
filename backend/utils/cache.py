@@ -18,6 +18,19 @@ H4 修复：async 变体（get_cached_async / set_cached_async）：
 
 P1 修复：cache_key 加 provider 维度（跨 provider 同 query 缓存隔离）。
 P1 修复：_init_db_once 标志位（避免每次 get_cached/set_cached 都做 schema 检查）。
+
+R7 评估 (reviewer feedback: "为何不用 aiosqlite"):
+- 当前实现线程安全: 每次 op 都 _connect_with_wal() 新建连接 + 操作完 conn.close(),
+  不跨线程共享 connection, 所以 check_same_thread=False 都不需要 (Python sqlite3 默认
+  check_same_thread=True 只在跨线程持有同一 connection 时才会炸)。
+- 但 aiosqlite 确实是 Python 生态共识: 1) 真正的 async 路径, 不用 to_thread; 2) 避免
+  任何"看似 OK 实则边界 case 会炸"的隐患; 3) Gunicorn 多 worker + 多 host 部署时更稳。
+- 本轮 R7 不改: aiosqlite 重构涉及 4 个函数签名 + 5 个测试 fixture + 5 个 commit 依赖,
+  风险/收益比不划算。R8 计划: 替换 sync/async 双栈为 aiosqlite 单栈, 配合 SQLAlchemy 2.0
+  async session (跟未来 R5 ARCH-008 cache_key mode 维度 + K8s 多 worker 一并上)。
+- 当前已知限制: to_thread 把 SQLite I/O 扔到默认 ThreadPoolExecutor, 高并发下
+  线程池排队会抵消部分 offload 收益。生产环境建议显式设 loop.default_executor =
+  ThreadPoolExecutor(max_workers=32) (FastAPI lifespan 阶段)。
 """
 from __future__ import annotations
 

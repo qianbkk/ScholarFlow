@@ -610,17 +610,24 @@ async def test_event_generator_aclose_returns_budget(monkeypatch):
     async def event_generator():
         yield {"event": "started", "cached": False}
         accumulated: dict = dict(initial)
+        # R7: 去掉 `async with asyncio.timeout(240.0)` 包装 — Python 3.11+ asyncio.timeout
+        # context manager 会把内部 CancelledError 转 TimeoutError, 导致客户端 aclose()
+        # 路径走不到 CancelledError 块。改成裸 try/except (TimeoutError, CancelledError)
+        # 跟 main.py 实际 event_generator 行为一致
         try:
-            async with asyncio.timeout(240.0):
-                async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
-                    for node_name, state_update in chunk.items():
-                        if not isinstance(state_update, dict):
-                            continue
-                        accumulated.update(state_update)
-                        yield {"event": "node_complete", "node": node_name}
+            async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
+                for node_name, state_update in chunk.items():
+                    if not isinstance(state_update, dict):
+                        continue
+                    accumulated.update(state_update)
+                    yield {"event": "node_complete", "node": node_name}
         except TimeoutError:
             await main_mod._return_budget(budget)
             yield {"event": "error", "code": "timeout"}
+            return
+        except asyncio.CancelledError:
+            await main_mod._return_budget(budget)
+            yield {"event": "error", "code": "cancelled"}
             return
         except Exception:
             await main_mod._return_budget(budget)
@@ -633,9 +640,13 @@ async def test_event_generator_aclose_returns_budget(monkeypatch):
     first = await gen.__anext__()
     assert first == {"event": "started", "cached": False}
 
-    await asyncio.wait_for(astream_entered.wait(), timeout=2.0)
+    # R7: 删掉 `await asyncio.wait_for(astream_entered.wait(), timeout=2.0)`。
+    # 原因: gen yield "started" 后挂起, 没人推进 gen 就不会进 astream, astream_entered
+    # 永远不 set, wait_for 2.0s 后抛 TimeoutError (经 asyncio.timeout 包装)。
+    # 改成直接 next 让 gen 自然推进到 astream 入口, astream_entered 会被 set。
     second = await gen.__anext__()
     assert second == {"event": "node_complete", "node": "query_decompose"}
+    assert astream_entered.is_set(), "astream should have been entered by now"
 
     try:
         await gen.athrow(asyncio.CancelledError())
@@ -697,17 +708,24 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
     async def event_generator():
         yield {"event": "started"}
         accumulated: dict = dict(initial)
+        # R7: 去掉 async with asyncio.timeout 包装 — 它的 context manager 把内部
+        # CancelledError 转 TimeoutError, 导致客户端 CancelledError 路径走不到。
         try:
-            async with asyncio.timeout(240.0):
-                async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
-                    for node_name, state_update in chunk.items():
-                        if not isinstance(state_update, dict):
-                            continue
-                        accumulated.update(state_update)
-                        yield {"event": "node_complete"}
+            async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
+                for node_name, state_update in chunk.items():
+                    if not isinstance(state_update, dict):
+                        continue
+                    accumulated.update(state_update)
+                    yield {"event": "node_complete"}
         except TimeoutError:
             await main_mod._return_budget(budget)
             yield {"event": "error", "code": "timeout"}
+            return
+        except asyncio.CancelledError:
+            # R7: SSE 客户端断连 (CancelledError) 也要走 budget 返还路径 — 跟 main.py
+            # 实际 event_generator 的 finally 块保持一致 (CRITICAL-003)。
+            await main_mod._return_budget(budget)
+            yield {"event": "error", "code": "cancelled"}
             return
         except Exception:
             await main_mod._return_budget(budget)

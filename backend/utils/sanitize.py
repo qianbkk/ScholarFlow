@@ -37,11 +37,21 @@ _INJECTION_PATTERNS = re.compile(
     r"假装.*?是|扮演.*?角色|你现在是|"  # 中文: "假装你是" / "扮演...角色"
     r"指示を無視|前の指示を忘れて|"  # 日文: "指示を無視" / "前の指示を忘れて"
     r"이전\s*지시.*?무시|이전\s*지시.*?잊어|"  # 韩文: "이전 지시 무시" / "이전 지시 잊어"
-    # Round 6 M5: jailbreak 类注入 — "DAN mode enabled" / "jailbreak the system" /
+    # Round 6 M5: jailbreak 类注入 — "jailbreak the system" / "enable DAN mode" /
     # "developer mode" / "admin mode" / "root mode" 都是典型的'解锁 LLM 限制'攻击。
     # 之前 denylist 覆盖了"忽略指令 / 扮演角色", 但漏了"激活 jailbreak mode"
     # 这类攻击向量 (这类不直接说'忽略指令', 而是说'切换到 DAN mode')。
-    r"\bjailbreak\b|\bdan\b|\b(developer|dev|admin|root)\s+mode\b",
+    #
+    # Round 7 修正 (解决 false positive):
+    #   - 移除独立 \bdan\b — 学术中 DAN = Deep Adaptive Network / Data Augmentation
+    #     Network / Domain Adaptation Network, 大量 CS 论文标题含此缩写
+    #   - 把 "(developer|dev|admin|root) mode" 改为只在含"enable/activate/unlock/
+    #     bypass/turn on/switch to"等激活动词上下文时才 ban — 单独出现"developer mode"
+    #     (Android 系统研究) / "admin mode" / "root mode" (操作系统研究) 全部放行
+    #   - 保留 \bjailbreak\b (单字攻击向量, 学术基本不用, FP 风险低)
+    r"\bjailbreak\b|"
+    r"(enable|activate|unlock|bypass|turn\s+on|switch\s+to)\s+"
+    r"(developer|dev|admin|root|dan|god|unrestricted)\s+mode\b",
     re.IGNORECASE,
 )
 

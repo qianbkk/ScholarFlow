@@ -4,6 +4,9 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg)](VERSION)
+[![Built with AI assistance](https://img.shields.io/badge/Built_with-AI_assistance-FF6F00.svg)](https://github.com/qianbkk/ScholarFlow)
+
+> **Built with AI assistance (诚实声明)**: 6 轮共 ~165 个 commit 中, **架构设计 / LangGraph 状态机 / 多源并行检索 / 安全防护 (sanitize 注入防御 + HTTP 安全头)** 由 qianbkk 主导;**辅助实现 / 单测补充 / 重复性重构 / 文档润色** 由 Claude (Anthropic) 协助完成。git history 里 qianbkk 跟 claude 两个 author 标签真实反映这种协作分工, 不是"AI 全自动刷榜"。
 
 ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 个串联的 LangGraph 节点**完成：查询理解与分解 → 多源并行检索 → 引文网络扩展 → 三维质检排序 → 自适应迭代优化 → 结构化综述报告 → 引文知识图谱 → 成本追踪汇报。
 

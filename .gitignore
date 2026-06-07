@@ -46,6 +46,6 @@ backend/.cache/
 docs/
 playwright_runs/
 
-# Claude memory: track .claude/memory/ but ignore private subdir (sensitive info)
-.claude/memory/private/
+# Claude memory: local-only (AI collaboration meta, not for public repo)
+.claude/memory/
 
