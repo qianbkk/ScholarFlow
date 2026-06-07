@@ -11,7 +11,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 首个稳定 release。8 节点 LangGraph 流水线 (decompose → search → expand → rank → refine/synthesize → graph → cost) 历经 6 轮多 agent 审计+优化, ~165 commits (R1-R8.3)。
 
-### Added
+### Release Notes
+
+**为什么 1.0.0 而不是 0.9.x**: 这是首个**承诺向后兼容**的稳定 release。后续 1.x.y
+版本将保持:
+- HTTP API contract 不变 (新字段 optional, 老字段不删)
+- 配置文件 schema 兼容 (旧 .env 继续可用)
+- 数据库 schema 兼容 (老 SQLite cache 自动迁移)
+- 8 节点 LangGraph 流水线稳定 (新节点只加在末端)
+
+**生产就绪承诺**:
+- ✅ 7 项 HTTP 安全头 (CSP, HSTS, X-Frame-Options 等)
+- ✅ 6 层 sanitize (NFKC + 同形字 + 数学字母 + CJK + 注入词 + jailbreak)
+- ✅ SQLite WAL 缓存 (并发 reader+writer)
+- ✅ 全量 314 tests passed / 0 failed
+- ✅ CI/CD 流水线 (.github/workflows/ci.yml)
+- ✅ Docker 镜像 (Dockerfile.backend + Dockerfile.frontend)
+- ✅ docker-compose 一键私有化部署
+
+**集成方建议**:
+- 升级到 1.0.0+ 后, API client 代码无需改动
+- 缓存数据可平滑迁移 (旧 SHA-256 key 自动失效一次)
+- 关注 [SECURITY.md](SECURITY.md) 了解 1.0.x 支持周期
+
+### Added (R1-R8 累计)
 - R6: in-flight task table + cancel 真取消 (ContextVar 跨节点追踪)
 - R6: model_usage_summary 字段白名单 (去除 provider 内部名泄露)
 - R6: TypedDict 显式声明 top5_summary_cache

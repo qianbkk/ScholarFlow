@@ -50,6 +50,37 @@ python -m pytest tests/ -q
 
 新增功能或修复,请遵循相同的"独立 commit + 文件严格切分"原则,避免并发 agent 互相冲突。
 
+## DCO Sign-Off (Developer Certificate of Origin 1.1)
+
+本项目采用 [DCO 1.1](https://developercertificate.org/) 而非传统 CLA。所有 commit
+必须包含 `Signed-off-by:` 行证明你有权贡献该代码:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+### 设置 git 自动 sign-off
+
+```bash
+git config --global user.name "Your Name"
+git config --global user.email "your.email@example.com"
+git config --local format.signOff true  # 本仓库已设
+```
+
+### commit 时加 sign-off
+
+```bash
+git commit -s -m "feat: 新功能描述"
+# 或
+git commit --signoff -m "feat: 新功能描述"
+```
+
+### 为什么不用 cla-assistant.io
+
+传统 CLA (Contributor License Agreement) 需要法律实体签署, 流程重, 不适合学术开源项目。
+DCO 是 Linux Kernel / Git / Docker 等 200+ 项目使用的轻量替代, 1 行 sign-off 即可
+证明贡献者有权贡献代码。
+
 ## Code of Conduct
 
 请友好、包容、专注技术。所有 PR 都基于代码质量评审,与作者身份无关。
