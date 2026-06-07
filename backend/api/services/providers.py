@@ -186,17 +186,32 @@ async def _refresh_provider_health_cache() -> None:
 
 
 def _resolve_provider(provider: Optional[str]) -> str:
-    """解析并校验 provider；合法则返回小写 id，否则 raise 400。
+    """解析并校验 provider；合法且有 key 则返回小写 id，否则 raise 400。
 
     规则：
-      * None 或空字符串 → 默认 LLM_PROVIDER（来自 .env）
-      * 在已配置 key 的 provider 列表里 → 返回该 id
+      * None 或空字符串 → 默认 LLM_PROVIDER（来自 .env）— **前提是默认 provider 有 key**
+        否则也 raise (避免默认 provider 静默回退)
+      * 在 *有 key 的* provider 列表里 → 返回该 id
       * 其他 → 400 (含可用的 provider 列表)
+
+    R8.2 修复 (reviewer feedback 3.2 - 旧实现 valid_ids 不过滤 has_key):
+      旧实现: valid_ids = {p["id"] for p in candidates} 把"名字合法但 has_key=False"
+      的 provider 也算 valid, 然后 llm_client 看到 enabled=False 会悄悄退化成 mock
+      ("用户选了 provider X, 实际跑的是 mock Y" — 错误地成功)
+      新实现: valid_ids = {p["id"] for p in candidates if p["has_key"]} 严格过滤
     """
     candidates = _get_providers_with_keys()
-    valid_ids = {p["id"] for p in candidates}
+    valid_ids = {p["id"] for p in candidates if p["has_key"]}
     if not provider:
-        return LLM_PROVIDER.lower()
+        default = LLM_PROVIDER.lower()
+        if default not in valid_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"默认 provider {default!r} 无可用 key. "
+                       f"请在 .env 配 *_API_KEY 或显式传 provider. "
+                       f"可用: {sorted(valid_ids)}",
+            )
+        return default
     provider = provider.strip().lower()
     if provider not in valid_ids:
         raise HTTPException(

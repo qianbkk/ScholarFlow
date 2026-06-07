@@ -1,7 +1,17 @@
 """Pytest configuration for ScholarFlow tests.
 
 Ensures project root is on sys.path so `backend.*` imports work,
-and provides a fixture to force API_MOCK + LLM_MOCK mode for hermetic tests.
+provides fixtures to force API_MOCK + LLM_MOCK mode for hermetic tests,
+and provides an autouse fixture that resets all process-global state
+(limiter, budget, request_id, in-flight task table) so tests are
+truly isolated regardless of execution order.
+
+R8.2 修复 (reviewer feedback 3.4 - 测试隔离):
+  旧实现: 只有 test_budget_lifecycle.py 自己手动 limiter.reset() + cache DB tmp_path。
+  别的 test (request_id_propagation / search_node_semaphore) 共享同一个 limiter,
+  跑过 5 次就 429, 失败表现"随机飘"而非稳定可复现。
+  新实现: autouse fixture 强制所有测试在 setup/teardown 阶段 reset 全部进程级状态,
+  不依赖具体 test 自己 reset。
 """
 import os
 import sys
@@ -14,6 +24,48 @@ if PROJECT_ROOT not in sys.path:
 
 import pytest
 
+
+# ===== Autouse: 全局状态 reset (R8.2 修复) =====
+
+@pytest.fixture(autouse=True)
+def _reset_global_state(request):
+    """强制每个 test 在 setup/teardown 阶段重置全部进程级状态。
+
+    覆盖的状态:
+      1. limiter (slowapi): 限流计数器 5/minute;20/hour, 跑过 5 次就 429
+      2. in-flight task table (R6 cancel): /search/cancel 用的全局字典
+
+    用 autouse=True 让所有 test 自动获得隔离, 不用具体 test 自己 reset。
+    副作用: 如果某个 test 想保留状态(罕见), 可以用 @pytest.mark.allow_global_state 标记。
+    """
+    if "allow_global_state" in request.keywords:
+        yield
+        return
+
+    # ===== Setup: 重置到干净基线 =====
+    try:
+        import backend.main as main_mod
+        if hasattr(main_mod, "limiter"):
+            main_mod.limiter.reset()
+        if hasattr(main_mod, "_in_flight_tasks"):
+            main_mod._in_flight_tasks.clear()
+    except (ImportError, AttributeError):
+        pass
+
+    yield  # 跑 test 本身
+
+    # ===== Teardown: 再 reset 一次, 避免泄露到下一个 test =====
+    try:
+        import backend.main as main_mod
+        if hasattr(main_mod, "limiter"):
+            main_mod.limiter.reset()
+        if hasattr(main_mod, "_in_flight_tasks"):
+            main_mod._in_flight_tasks.clear()
+    except (ImportError, AttributeError):
+        pass
+
+
+# ===== Existing: force_mock_api =====
 
 @pytest.fixture
 def force_mock_api(monkeypatch):
