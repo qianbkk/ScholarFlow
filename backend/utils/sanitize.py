@@ -36,7 +36,12 @@ _INJECTION_PATTERNS = re.compile(
     r"系统提示词|system\s*prompt|role\s*play|"  # 角色扮演注入向量
     r"假装.*?是|扮演.*?角色|你现在是|"  # 中文: "假装你是" / "扮演...角色"
     r"指示を無視|前の指示を忘れて|"  # 日文: "指示を無視" / "前の指示を忘れて"
-    r"이전\s*지시.*?무시|이전\s*지시.*?잊어",  # 韩文: "이전 지시 무시" / "이전 지시 잊어"
+    r"이전\s*지시.*?무시|이전\s*지시.*?잊어|"  # 韩文: "이전 지시 무시" / "이전 지시 잊어"
+    # Round 6 M5: jailbreak 类注入 — "DAN mode enabled" / "jailbreak the system" /
+    # "developer mode" / "admin mode" / "root mode" 都是典型的'解锁 LLM 限制'攻击。
+    # 之前 denylist 覆盖了"忽略指令 / 扮演角色", 但漏了"激活 jailbreak mode"
+    # 这类攻击向量 (这类不直接说'忽略指令', 而是说'切换到 DAN mode')。
+    r"\bjailbreak\b|\bdan\b|\b(developer|dev|admin|root)\s+mode\b",
     re.IGNORECASE,
 )
 
