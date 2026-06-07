@@ -49,9 +49,13 @@ fi
 ## 修复成本
 
 如果已经污染,用 `git filter-branch` 一行脚本即可:
-- 范围:从上一个干净 commit 到 HEAD
-- 时间:17 个 commit ~10 秒
+- **范围**: 用 `--branches --tags` (全分支+全 tag) **不要**用 range,否则 R4/R5 污染 commit 会漏掉
+- 时间:165 个 commit ~85 秒
 - 然后 `git push --force-with-lease`
+
+```bash
+git filter-branch -f --env-filter '...' --tag-name-filter cat -- --branches --tags
+```
 
 ## 验证
 
