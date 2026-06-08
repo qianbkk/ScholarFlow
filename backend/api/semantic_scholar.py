@@ -12,6 +12,7 @@ from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
+from backend.utils.circuit_breaker import CircuitOpenError, ss_breaker  # Fix-X8
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
@@ -104,6 +105,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             f"{BASE_URL}/paper/search",
             params={"query": query, "limit": limit, "fields": PAPER_FIELDS},
             headers=HEADERS,
+            breaker=ss_breaker,  # Fix-X8: 3 失败 → 30s 熔断
         )
         if resp.status_code != 200:
             if should_log(f"ss_search_{resp.status_code}"):
@@ -111,6 +113,11 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
             # 失败降级：仍返回 mock 数据，避免 8 节点流水线空跑
             return _mock_fallback(query, limit)
         data = resp.json()
+    except CircuitOpenError:
+        # Fix-X8: 熔断器 OPEN, 立即降级, 不再 hang 30s 等 retry
+        if should_log("ss_search_breaker_open"):
+            logger.warning(f"[SemanticScholar] circuit OPEN, immediate mock fallback: {query[:60]}")
+        return _mock_fallback(query, limit)
     except Exception as e:
         if should_log("ss_search_exception"):
             logger.warning(f"[SemanticScholar] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")
@@ -172,6 +179,7 @@ async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
             f"{BASE_URL}/paper/{paper_id}/references",
             params={"fields": BATCH_FIELDS, "limit": limit},
             headers=HEADERS,
+            breaker=ss_breaker,  # Fix-X8
         )
         if resp.status_code != 200:
             if should_log(f"ss_refs_{resp.status_code}"):
@@ -239,6 +247,7 @@ async def get_citations(paper_id: str, limit: int = 20) -> list[Paper]:
             f"{BASE_URL}/paper/{paper_id}/citations",
             params={"fields": BATCH_FIELDS, "limit": limit},
             headers=HEADERS,
+            breaker=ss_breaker,  # Fix-X8
         )
         if resp.status_code != 200:
             if should_log(f"ss_citations_{resp.status_code}"):

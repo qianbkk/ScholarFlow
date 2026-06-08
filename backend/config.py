@@ -94,6 +94,10 @@ GLM_FAST_MODEL = os.getenv("GLM_FAST_MODEL", "glm-4.6-air")
 # Anthropic 官方
 ANTHROPIC_API_KEY = _getenv_ci("ANTHROPIC_API_KEY")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+# Fix-X4: Anthropic 模型可配置 (跟 MiniMax/Kimi/GLM 一致). 之前硬编码
+# claude-sonnet-4-6, Anthropic 4.x 系列弃用时用户需改源码.
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+ANTHROPIC_FAST_MODEL = os.getenv("ANTHROPIC_FAST_MODEL", "claude-haiku-4-5-20251001")
 
 # DeepSeek（兼容 OpenAI 协议）
 DEEPSEEK_API_KEY = _getenv_ci("DEEPSEEK_API_KEY")
@@ -172,8 +176,8 @@ def get_provider_config(
         "anthropic": {
             "base_url": ANTHROPIC_BASE_URL,
             "api_key": ANTHROPIC_API_KEY,
-            "model": "claude-sonnet-4-6",
-            "fast_model": "claude-haiku-4-5-20251001",
+            "model": ANTHROPIC_MODEL,
+            "fast_model": ANTHROPIC_FAST_MODEL,
             "auth_type": "x-api-key",
             "enabled": bool(ANTHROPIC_API_KEY),
         },

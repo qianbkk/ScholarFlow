@@ -12,6 +12,7 @@ from backend.config import OPENALEX_EMAIL, API_MOCK
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
 from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
+from backend.utils.circuit_breaker import CircuitOpenError, oa_breaker  # Fix-X8
 from backend.utils.proxy import get_proxy  # PERF-002 / B-002
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
@@ -136,12 +137,18 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
                 "select": SELECT_FIELDS,
                 "filter": "has_abstract:true",
             },
+            breaker=oa_breaker,  # Fix-X8
         )
         if resp.status_code != 200:
             if should_log(f"oa_search_{resp.status_code}"):
                 logger.warning(f"[OpenAlex] search error {resp.status_code}: {query[:60]}  → 降级到 mock")
             return _mock_fallback(query, limit)
         data = resp.json()
+    except CircuitOpenError:
+        # Fix-X8: 熔断器 OPEN, 立即降级
+        if should_log("oa_search_breaker_open"):
+            logger.warning(f"[OpenAlex] circuit OPEN, immediate mock fallback: {query[:60]}")
+        return _mock_fallback(query, limit)
     except Exception as e:
         if should_log("oa_search_exception"):
             logger.warning(f"[OpenAlex] search exception: {scrub_sensitive(str(e))}  → 降级到 mock")

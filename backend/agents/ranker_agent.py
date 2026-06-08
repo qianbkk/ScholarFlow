@@ -21,7 +21,10 @@ from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.scrub import scrub_sensitive  # VULN-004
-from backend.utils.text_utils import extract_json_object as _extract_json_object
+from backend.utils.text_utils import (
+    extract_json_object as _extract_json_object,
+    sanitize_paper_content,  # Fix-X6: 防 arXiv 论文摘要间接 prompt 注入
+)
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +102,13 @@ async def _score_papers_combined_batch(
     from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
     safe_query = wrap_user_input(query, tag="user_query")
 
+    # Fix-X6: 论文 title/abstract 走 sanitize_paper_content(), 过滤
+    # [SYSTEM: / [INST: / <|system|> / <|im_start|> / <<SYS>> / ### System 等
+    # 类系统指令模式, 防止 arXiv 预印本 abstract 间接 prompt 注入.
+    # 配合 isolation_system_suffix() 的标签边界声明, 起到双保险.
     papers_text = "\n\n".join([
-        f"[{i+1}] Title: {p.title}\nAbstract: {p.abstract[:200]}"
+        f"[{i+1}] Title: {sanitize_paper_content(p.title, max_len=120)}\n"
+        f"Abstract: {sanitize_paper_content(p.abstract, max_len=200)}"
         for i, p in enumerate(papers)
     ])
     safe_papers = wrap_user_input(papers_text, tag="paper_list")

@@ -42,6 +42,10 @@ R10 增量 (M-D P0-D): 加 query_embedding BLOB 列 (语义缓存 / numpy cos-si
 - semantic_cache.py 读 query_embedding BLOB 时 numpy 余弦相似度 top-1
 - BLOB 缺失时退化到精确匹配路径 (get_semantic_cached 返 None)
 - _set_cached_sync 改用命名列 INSERT, 加新列时无需改 INSERT 语句
+
+R10.5 Fix-X7: 删 query_embedding 列的代码路径.  semantic_cache.py 已
+成占位桩 (Fix-E), 真实 embedding 留 R11.  新建表不再带 query_embedding
+列, ALTER TABLE 迁移代码删除 (旧表里这列保留不动, 不影响功能).
 """
 from __future__ import annotations
 
@@ -124,7 +128,6 @@ def _init_db() -> None:
                     """
                     CREATE TABLE IF NOT EXISTS search_cache_new (
                         query_hash TEXT PRIMARY KEY,
-                        query_embedding BLOB,
                         response_json TEXT NOT NULL,
                         cost_usd REAL NOT NULL,
                         tokens INTEGER NOT NULL,
@@ -153,28 +156,16 @@ def _init_db() -> None:
                     "[cache] H8 migration: dropped `query` column + VACUUM "
                     "to scrub original query text from disk (privacy hardening)"
                 )
-            # M-D P0-D 修复: 表无 query_embedding 列时 ALTER TABLE ADD COLUMN (idempotent)
-            # SQLite 没有"IF NOT EXISTS"对 ADD COLUMN,所以先查列再决定 ALTER
-            cols = {
-                row[1]
-                for row in conn.execute("PRAGMA table_info(search_cache)").fetchall()
-            }
-            if "query_embedding" not in cols:
-                conn.execute(
-                    "ALTER TABLE search_cache ADD COLUMN query_embedding BLOB"
-                )
-                conn.commit()
-                import logging
-                logging.getLogger(__name__).info(
-                    "[cache] M-D P0-D: added query_embedding BLOB column "
-                    "for semantic cache (numpy cos-sim top-1)"
-                )
+            # Fix-X7: 删除 R10 M-D P0-D 引入的 query_embedding BLOB 列
+            # 迁移. semantic_cache.py 已成占位桩, 真实 embedding 留 R11,
+            # 现在加这个 ALTER TABLE 反而让维护者困惑"为什么有这个列".
+            # 现有表里的 query_embedding 列保留不动 (不影响功能, NULL 默认值)
+            # — 但不再有代码向它写入或读取, 也不会新建表加这列.
         else:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS search_cache (
                     query_hash TEXT PRIMARY KEY,
-                    query_embedding BLOB,
                     response_json TEXT NOT NULL,
                     cost_usd REAL NOT NULL,
                     tokens INTEGER NOT NULL,
@@ -232,15 +223,17 @@ def cache_key(
     行（如果有）会被视为新 key 失效，触发一次重算。考虑到旧 key 没有 provider
     信息，保留旧 key 反而会跨 provider 污染，所以这里接受一次失效。
 
-    R10.5 Fix-L (审计 PPP §2.3): budget 改为 0.5 USD 区间分桶, 减少
-    无意义 key 分散.  1.3→1.5, 1.8→2.0, 2.1→2.0.  "同一查询多次尝试不同
-    预算" 场景命中率从 ~0% 提到 ~100%.
+    Fix-X5: 取消 R10.5 Fix-L 的 0.5 USD 分桶 (PPP 报告建议, 但跟 router
+    决策的剩余预算触发条件冲突: budget 1.3 可能 1 轮完成, 1.7 可能 2 轮,
+    同 query 同 key 会拿到 1 轮结果污染 1.7 轮预期). 改用精确 budget (cents):
+      - 1.30 → 130, 1.70 → 170, 1.99 → 199
+      - 同 budget + 同 query + 同 provider → 命中 (跟分桶前一样)
+      - 不同 budget → 不同 key (语义正确, 牺牲少量命中率换语义安全)
     """
-    # 0.5 USD 步长分桶; round(budget * 2) / 2 落到最近 0.5
-    # 1.0 → 1.0, 1.2 → 1.0, 1.3 → 1.5, 1.8 → 2.0, 2.1 → 2.0
-    budget_bucket = round(budget * 2) / 2
+    # 精确到分 (cents), 避免浮点 hash 不一致
+    budget_cents = round(budget * 100)
     return hashlib.sha256(
-        f"{query.strip().lower()}|{max_iterations}|{budget_bucket}|{provider or 'default'}".encode()
+        f"{query.strip().lower()}|{max_iterations}|{budget_cents}|{provider or 'default'}".encode()
     ).hexdigest()[:32]
 
 
