@@ -24,6 +24,7 @@ from fastapi import HTTPException
 
 from backend.config import (
     LLM_PROVIDER,
+    LLM_MOCK,
     DEEPSEEK_API_KEY,
     get_provider_config,
 )
@@ -204,9 +205,21 @@ def _resolve_provider(provider: Optional[str]) -> str:
       的 provider 也算 valid, 然后 llm_client 看到 enabled=False 会悄悄退化成 mock
       ("用户选了 provider X, 实际跑的是 mock Y" — 错误地成功)
       新实现: valid_ids = {p["id"] for p in candidates if p["has_key"]} 严格过滤
+
+    R10.5 Fix (CI 回归 — test_budget_lifecycle 12 fail / 131 pass):
+      严格过滤在 mock 模式下会把所有 provider 都判 invalid (没 key),
+      LLM_MOCK=True 时返回 "默认 provider 'minimax' 无可用 key" 400,
+      但用户根本没打算调真 LLM — mock 模式不需 key. 修复: LLM_MOCK=True
+      时绕过 key 严格过滤, 让 _PROVIDER_META 里所有 provider id 都 valid
+      (因为 call_llm 看到 LLM_MOCK=True 会直接走 mock, 不会读 provider 字段).
     """
     candidates = _get_providers_with_keys()
-    valid_ids = {p["id"] for p in candidates if p["has_key"]}
+    # LLM_MOCK=True: mock 模式不真调 LLM, 跳过 key 严格过滤. 真实模式
+    # (LLM_MOCK=False) 仍走 R8.2 严格 has_key 过滤.
+    if LLM_MOCK:
+        valid_ids = set(_PROVIDER_META.keys())
+    else:
+        valid_ids = {p["id"] for p in candidates if p["has_key"]}
     if not provider:
         default = LLM_PROVIDER.lower()
         if default not in valid_ids:
