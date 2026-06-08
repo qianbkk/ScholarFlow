@@ -269,11 +269,14 @@ export function GraphPanel({ graph }: Props) {
     if (!svgRef.current || !graph) return;
     const svg = d3.select(svgRef.current);
     // 邻居集合 (与 simulation effect 同样逻辑, 这里独立计算避免 ref 传复杂度)
+    // 注: 用 as unknown cast 绕过 TS narrowing (TS 看到 l.source: string 后,
+    //     else 分支 'l.source.id' 推导成 'never', 实际无意义 — 我们安全 guard).
     const neighborOfSelected = (id: string) => {
       const s = new Set<string>([id]);
       for (const l of graph.links) {
-        const sId = typeof l.source === 'string' ? l.source : l.source.id;
-        const tId = typeof l.target === 'string' ? l.target : l.target.id;
+        const lAny = l as unknown as { source: string | { id: string }; target: string | { id: string } };
+        const sId = typeof lAny.source === 'string' ? lAny.source : lAny.source.id;
+        const tId = typeof lAny.target === 'string' ? lAny.target : lAny.target.id;
         if (sId === id) s.add(tId);
         if (tId === id) s.add(sId);
       }
