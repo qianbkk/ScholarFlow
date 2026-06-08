@@ -58,12 +58,12 @@ playwright_runs/
 docs/
 # tests/ 全部是开发用的测试代码, 不是使用项目必须的
 tests/
-# .github/ 模板和 CI 流程 — 仓库维护者用, 不是使用项目必须
-.github/
 # pytest.ini 是测试配置, 跟 tests/ 一起本地保留
 pytest.ini
 
-# ===== 保留 (开源项目标配) =====
+# ===== 标准开源仓库标配 (入仓) =====
 # README.md / LICENSE / VERSION / CHANGELOG.md / CONTRIBUTING.md
 # / CODE_OF_CONDUCT.md / SECURITY.md / .env.example 全部保留入仓
+# .github/ 仓库协作模板 (issue templates + PR template + CODEOWNERS)
+# + CI workflow — 标准仓库必须有, R10.5 重新纳入跟踪
 
