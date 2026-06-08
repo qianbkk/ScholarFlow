@@ -92,8 +92,15 @@ async def test_refresh_provider_health_cache_populates_all():
         assert (_time.time() - cached_ts) < 60  # 刚写入
 
 
-def test_get_providers_uses_cache_when_fresh():
-    """cache 在 TTL 内时, _get_providers_with_keys 应读 cache (不再 env 估计)。"""
+def test_get_providers_uses_cache_when_fresh(monkeypatch):
+    """cache 在 TTL 内时, _get_providers_with_keys 应读 cache (不再 env 估计)。
+
+    R10.5 CI 修复: has_key = env_key_present AND verified.
+    之前测试只塞 cache (verified=True) 不设 env, 在 CI (无 *_API_KEY) 必败.
+    修复: 同时 patch backend.config.MiniMax_API_KEY 让 env_key_present=True.
+    """
+    import backend.config as cfg_mod
+    monkeypatch.setattr(cfg_mod, "MiniMax_API_KEY", "fake-test-key")
     # 手动塞一个 "verified=True" 的 cache
     main_mod._PROVIDER_HEALTH_CACHE["minimax"] = (True, _time.time())
     providers = main_mod._get_providers_with_keys()
