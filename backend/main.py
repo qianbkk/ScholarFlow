@@ -261,6 +261,10 @@ async def request_id_middleware(request, call_next):
     set_request_id(rid)
     response = await call_next(request)
     response.headers["X-Request-ID"] = rid
+    # Fix-X11: 所有响应附 X-API-Version 头, 客户端能判断 server 兼容版本.
+    # 路径不变 (/search 仍无 /v1 前缀, 跟 X 报告"最小化版本化"一致 —
+    # 强制改前缀会破现有 SDK 集成 + tests/, 头版本是零破坏起点).
+    response.headers["X-API-Version"] = "1.0.0"
     return response
 
 

@@ -35,6 +35,11 @@ class Paper:
     consistency_score: float = 0.0
     final_score: float = 0.0
 
+    # Fix-X13: 显式区分"未评分"和"评分为 0". 旧版 ranker 用 ==0 跨迭代
+    # 缓存, 真无关论文 (rel=0.0) 会被第二轮回炉重评浪费 LLM token.
+    #  True = 本轮已 LLM 评过分 (即使 rel=0);  False = 待评.
+    _scored: bool = False
+
     # 引用关系（用于图谱构建）
     references: list[str] = field(default_factory=list)
 

@@ -213,12 +213,13 @@ async def rank_node(state: SearchState) -> SearchState:
     # ===== Round 2 PERF-006: 跨迭代复用 relevance/consistency score =====
     # Root cause: refine 迭代会重新调 LLM 给所有论文打分, 即使前一轮已评过
     # (relevance/consistency 已写入 expanded_papers dict 跨迭代保留), 浪费 ~50% LLM token。
-    # Fix: 仅对 relevance_score == 0 或 consistency_score == 0 的论文调 LLM,
-    #      其余论文直接复用缓存的 final_score / authority / relevance / consistency。
+    # Fix: 仅对 _scored=False 的论文调 LLM, 其余论文直接复用缓存分数.
+    # Fix-X13: 用 _scored 显式标志位替代旧 ==0 检查, 区分"未评"和"评分为 0"
+    # (真无关论文 rel=0.0 不再被第二轮回炉重评).
     # Verification: log 报告 scoring N new papers (skipped M already scored);
     #               全部已评时 LLM 调用数为 0 (fast-path), total_cost=$0.0000。
-    papers_to_score = [p for p in papers_filtered if p.relevance_score == 0 or p.consistency_score == 0]
-    papers_already_scored = [p for p in papers_filtered if p.relevance_score > 0 and p.consistency_score > 0]
+    papers_to_score = [p for p in papers_filtered if not p._scored]
+    papers_already_scored = [p for p in papers_filtered if p._scored]
 
     if not papers_to_score:
         logger.info(
@@ -287,6 +288,8 @@ async def rank_node(state: SearchState) -> SearchState:
         paper.relevance_score = rel
         paper.authority_score = _authority_score(paper.citation_count, paper.venue, paper.year or 0)
         paper.consistency_score = cons
+        # Fix-X13: 评完即打 _scored 标, 防止 refine 迭代二次评分 (rel=0 论文)
+        paper._scored = True
         final = rel * 0.5 + paper.authority_score * 0.3 + cons * 0.2
         # Fix-I R10.5: 阈值 4.0 → 5.5. 旧阈值在 mock 兜底 rel=5.0/6.0 时失效,
         # 无关高引论文(alphafold 类) 拿到 6.4 污染 Top 25. 新阈值压制兜底.
