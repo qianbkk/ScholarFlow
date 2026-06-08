@@ -46,8 +46,8 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
             SF
           </div>
           <div>
-            <h1 className="text-base font-semibold text-slate-900 leading-none">ScholarFlow</h1>
-            <p className="text-xs text-slate-500 leading-none mt-0.5">科研文献智能搜索</p>
+            <h1 className="text-base font-semibold text-themed leading-none">ScholarFlow</h1>
+            <p className="text-xs text-themed-muted leading-none mt-0.5">科研文献智能搜索</p>
           </div>
         </div>
 
@@ -81,7 +81,7 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
               ▸
             </span>
             <span>模型用量明细 ({usageEntries.length} 个)</span>
-            <span className="text-slate-400 ml-1">
+            <span className="text-themed-muted ml-1">
               · 累计 ${usageEntries.reduce((s, [, v]) => s + v.cost, 0).toFixed(4)}
             </span>
             {/* M-19 (R10.5) UI 差异化: 唯一可见 per-model 成本面板, 实时反映"哪个模型在烧钱",
@@ -102,7 +102,7 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
                 <span className="font-mono text-[11px] flex-1 truncate" title={model}>
                   {model}
                 </span>
-                <span className="font-mono text-[11px] text-slate-500 w-20 sm:w-24 text-right">
+                <span className="font-mono text-[11px] text-themed-muted w-20 sm:w-24 text-right">
                   {info.tokens.toLocaleString()} tok
                 </span>
                 <span className="font-mono text-[11px] text-brand-600 font-semibold w-16 sm:w-20 text-right">
@@ -128,7 +128,7 @@ function Stat({
 }) {
   return (
     <div className={`flex flex-col ${className}`}>
-      <span className="text-[10px] uppercase tracking-wider text-slate-500">{label}</span>
+      <span className="text-[10px] uppercase tracking-wider text-themed-muted">{label}</span>
       <span className="text-sm font-semibold text-slate-800">{value}</span>
     </div>
   );

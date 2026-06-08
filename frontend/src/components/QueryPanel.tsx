@@ -299,7 +299,7 @@ export function QueryPanel({
         )}
 
         <div className="mt-2">
-          <p className="text-[10px] uppercase text-slate-500 mb-1">示例</p>
+          <p className="text-[10px] uppercase text-themed-muted mb-1">示例</p>
           <div className="flex flex-wrap gap-1">
             {SUGGESTIONS.map((s) => (
               <button
@@ -342,11 +342,11 @@ export function QueryPanel({
             论文列表 {papers.length > 0 && `(${papers.length})`}
           </h3>
           {papers.length > 0 && (
-            <span className="text-[10px] text-slate-400">按相关性排序 · 点击打开</span>
+            <span className="text-[10px] text-themed-muted">按相关性排序 · 点击打开</span>
           )}
         </div>
         {lastQuery && papers.length === 0 && (
-          <p className="text-xs text-slate-400 p-4 text-center">未找到论文</p>
+          <p className="text-xs text-themed-muted p-4 text-center">未找到论文</p>
         )}
         <ul className="divide-y divide-slate-100">
           {papers.map((p, i) => (
@@ -362,7 +362,7 @@ export function QueryPanel({
               title={p.title}
             >
               <div className="flex items-start gap-2">
-                <span className="text-[10px] font-mono text-slate-400 mt-0.5 shrink-0 w-5 text-right">
+                <span className="text-[10px] font-mono text-themed-muted mt-0.5 shrink-0 w-5 text-right">
                   {i + 1}
                 </span>
                 <div className="flex-1 min-w-0">
@@ -381,7 +381,7 @@ export function QueryPanel({
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-slate-500">
+                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-themed-muted">
                     <span>{p.year || '—'}</span>
                     <span>·</span>
                     <span>{p.citation_count.toLocaleString()}</span>

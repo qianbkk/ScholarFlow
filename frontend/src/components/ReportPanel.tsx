@@ -100,7 +100,7 @@ export function ReportPanel({
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-baseline gap-2">
             <h2 className="text-sm font-semibold text-slate-600">研究报告</h2>
-            {query && <span className="text-xs text-slate-400">— {query}</span>}
+            {query && <span className="text-xs text-themed-muted">— {query}</span>}
           </div>
           {report && !loading && (
             <div className="flex gap-1.5">
@@ -123,17 +123,17 @@ export function ReportPanel({
         </div>
 
         {loading && (
-          <div className="bg-white border border-slate-200 rounded-lg p-6 text-center text-slate-500">
+          <div className="bg-[var(--sf-bg)] border border-slate-200 rounded-lg p-6 text-center text-themed-muted">
             <div className="inline-block animate-spin w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full mb-2" />
             <p className="text-sm">正在驱动 8 节点流水线检索中...</p>
-            <p className="text-xs text-slate-400 mt-1">查询分解 → 双源检索 → 引文扩展 → 三维排序 → 综述生成</p>
+            <p className="text-xs text-themed-muted mt-1">查询分解 → 双源检索 → 引文扩展 → 三维排序 → 综述生成</p>
           </div>
         )}
 
         {!loading && !report && !errorMsg && (
           <div className="bg-white border border-dashed border-slate-300 rounded-lg p-12 text-center">
-            <p className="text-slate-500 text-sm">左侧输入研究问题并点击「搜索」开始</p>
-            <p className="text-slate-400 text-xs mt-2">
+            <p className="text-themed-muted text-sm">左侧输入研究问题并点击「搜索」开始</p>
+            <p className="text-themed-muted text-xs mt-2">
               ScholarFlow 会自动从 Semantic Scholar + OpenAlex 拉取候选论文，并生成结构化综述。
             </p>
           </div>

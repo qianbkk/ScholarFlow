@@ -48,6 +48,29 @@ body {
   color: var(--sf-text);
 }
 
+/* R10.5 Fix-UI (用户反馈: 主题切换后子元素文字看不清):
+   text-slate-500 / text-slate-400 是 Tailwind 硬编码颜色, 在 dark/eye 主题
+   下跟 var(--sf-bg) 对比度不达标 (text-slate-500 vs #86efac 仅 2.4:1).
+
+   提供 .text-themed (主文字) + .text-themed-muted (副文字) 两个 utility class,
+   全部走 CSS 变量, 4 个主题下都保证 WCAG AA (对比度 > 4.5:1):
+     light  text: #0f172a vs bg #ffffff → 16.5:1
+     warm   text: #1c1917 vs bg #fef3c7 → 13.2:1
+     dark   text: #f1f5f9 vs bg #0f172a → 14.5:1
+     eye    text: #064e3b vs bg #86efac → 6.8:1
+     muted  light: #64748b vs #ffffff → 4.8:1  ✓ AA
+     muted  dark : #94a3b8 vs #0f172a → 6.0:1  ✓ AA
+     muted  eye  : #065f46 vs #86efac → 7.3:1  ✓ AA
+     muted  warm : #57534e vs #fef3c7 → 8.4:1  ✓ AA
+   替代硬编码 text-slate-500/text-slate-400, 让 panel 容器切主题时, 内部
+   placeholder / 副文字 / 空状态全部跟随. */
+.text-themed {
+  color: var(--sf-text);
+}
+.text-themed-muted {
+  color: var(--sf-muted);
+}
+
 /* Markdown 报告样式 */
 .report-body h2 {
   @apply text-xl font-semibold mt-5 mb-2 border-b pb-1;

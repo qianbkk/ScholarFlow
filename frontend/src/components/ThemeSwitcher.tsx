@@ -88,7 +88,12 @@ export function ThemeSwitcher({ current, onChange }: Props) {
             aria-hidden="true"
           />
           <div
-            className="absolute right-0 mt-1 z-20 bg-white border border-slate-200 rounded-md shadow-lg overflow-hidden"
+            // R10.5 Fix-UI: 加 min-w-[260px] + whitespace-nowrap 防 dropdown
+            // 内部子项被父级窄宽度挤压成竖排.  之前每项只显示 1-2 字 ("亮" "色" "默"
+            // "认" ...), 根因是父级 inline-block 容器宽度受 toolbar 限制 (~80px),
+            // 子项 flex 容器继承此宽度, 4 段内容 (emoji + label + desc + contrast) 被
+            // 换行.  min-w 强制 dropdown 至少 260px 容纳完整 4 段.
+            className="absolute right-0 mt-1 z-20 min-w-[260px] bg-white border border-slate-200 rounded-md shadow-lg overflow-hidden"
             role="menu"
           >
             {(Object.keys(THEME_META) as ThemeId[]).map((id) => {
@@ -103,7 +108,7 @@ export function ThemeSwitcher({ current, onChange }: Props) {
                     onChange(id);
                     setOpen(false);
                   }}
-                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left hover:bg-slate-50 transition ${
+                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left whitespace-nowrap hover:bg-slate-50 transition ${
                     isActive ? 'bg-slate-100' : ''
                   }`}
                 >
@@ -114,15 +119,15 @@ export function ThemeSwitcher({ current, onChange }: Props) {
                   >
                     {m.emoji}
                   </span>
-                  <span className="flex-1">
+                  <span className="flex-1 min-w-0">
                     <span className="font-medium text-slate-800">{m.label}</span>
                     <span className="text-slate-500 ml-1.5">{m.desc}</span>
                   </span>
-                  <span className="text-[10px] font-mono text-slate-400">
+                  <span className="text-[10px] font-mono text-slate-400 shrink-0">
                     {m.contrast}
                   </span>
                   {isActive && (
-                    <span className="text-brand-600 text-xs" aria-label="当前">✓</span>
+                    <span className="text-brand-600 text-xs shrink-0" aria-label="当前">✓</span>
                   )}
                 </button>
               );

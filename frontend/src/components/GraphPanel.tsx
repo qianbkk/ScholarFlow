@@ -303,7 +303,7 @@ export function GraphPanel({ graph }: Props) {
       <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">引文关系图谱</h2>
         {graph && (
-          <span className="text-[10px] text-slate-500 dark:text-slate-400 font-mono">
+          <span className="text-[10px] text-themed-muted font-mono">
             {graph.metadata.total_papers}n / {graph.metadata.total_links}l
             {graph.metadata.community_count && graph.metadata.community_count > 1 && (
               <> · {graph.metadata.community_count} 社区</>
@@ -344,7 +344,7 @@ export function GraphPanel({ graph }: Props) {
               </p>
             )}
             {hovered.abstract && (
-              <p className="text-slate-400 text-[10px] mt-1.5 line-clamp-3 leading-relaxed">
+              <p className="text-themed-muted text-[10px] mt-1.5 line-clamp-3 leading-relaxed">
                 {hovered.abstract}
               </p>
             )}
@@ -352,8 +352,8 @@ export function GraphPanel({ graph }: Props) {
         )}
 
         {/* M-18: 4 类边图例 + community 颜色 */}
-        <div className="absolute bottom-2 left-2 bg-white/90 dark:bg-slate-800/90 backdrop-blur rounded p-2 text-[10px] text-slate-500 dark:text-slate-300 space-y-0.5">
-          <div className="font-medium text-slate-600 dark:text-slate-200">边类型 (M-18 4 类)</div>
+        <div className="absolute bottom-2 left-2 bg-[var(--sf-bg)]/90 backdrop-blur rounded p-2 text-[10px] text-themed-muted space-y-0.5">
+          <div className="font-medium text-themed">边类型 (M-18 4 类)</div>
           <div className="flex items-center gap-1.5">
             <span className="inline-block w-3 h-px" style={{ background: '#64748b' }} />
             <span>cites 直接引用</span>
@@ -379,8 +379,8 @@ export function GraphPanel({ graph }: Props) {
             />
             <span>author_overlap 共同作者</span>
           </div>
-          <div className="text-slate-400 pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
-          <div className="text-slate-400">click 节点 = 高亮 1 跳邻居</div>
+          <div className="text-themed-muted pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
+          <div className="text-themed-muted">click 节点 = 高亮 1 跳邻居</div>
         </div>
       </div>
     </aside>
