@@ -25,7 +25,7 @@ ScholarFlow 让用户输入一个复杂的学术研究问题，自动通过 **8 
 
 - **后端**: Python 3.11+ · LangGraph 0.2+ · FastAPI · httpx · Anthropic SDK · OpenAI SDK
 - **前端**: React 18 · TypeScript · Vite · D3.js v7 · Tailwind CSS · marked
-- **LLM**: Kimi K2.5 (Anthropic 协议, 可换 K2.6) · GLM-4.6 · Claude (官方) · DeepSeek (OpenAI 协议) · 内部 fallback (mock)
+- **LLM**: MiniMax M3 (Anthropic 协议, 默认) · Kimi K2.5 (Anthropic 协议, 可换 K2.6) · GLM-4.6 · Claude (官方) · DeepSeek (OpenAI 协议) · 内部 fallback (mock)
 - **数据源**: Semantic Scholar Graph API · OpenAlex API
 
 ---
@@ -70,7 +70,7 @@ cp .env.example .env
 
 MOCK 模式特点：
 - LLM 调用走预置响应（query 分解、相关性评分、综述生成、查询改写）
-- 学术 API 返回 ~58 篇真实存在的代表性论文（Transformer / BERT / GPT-3 / Llama 2 / GraphRAG 等）
+- 学术 API 返回约 57 篇真实存在的代表性论文（Transformer / BERT / GPT-3 / Llama 2 / GraphRAG 等）
 - 流水线完整 8 节点全部跑通，输出可观察
 
 ### 2. 启动后端
@@ -83,7 +83,8 @@ PYTHONIOENCODING=utf-8 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ### 生产环境(可选):用 gunicorn 启动
 
 ```bash
-pip install gunicorn
+# gunicorn 已在 requirements-dev.txt (Fix 7 移入 — 是进程管理器不是运行时依赖)
+pip install -r requirements-dev.txt
 gunicorn backend.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
   --workers 2 \
