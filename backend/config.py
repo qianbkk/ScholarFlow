@@ -23,13 +23,44 @@ load_dotenv(override=False)  # Round 5 M-2: shell env 优先, .env 仅作默认�
 LLM_MOCK = os.getenv("LLM_MOCK", "true").lower() in ("1", "true", "yes")
 API_MOCK = os.getenv("API_MOCK", "true").lower() in ("1", "true", "yes")
 
+# R10.5 修复 (用户实测: Windows shell env 有大写 MINIMAX_API_KEY,
+# load_dotenv(override=False) 看到同名变量就不覆盖, 但 os.getenv
+# 大小写敏感 → 永远读到空). 而且 Windows os.environ 大小写不敏感
+# 会让 ANTHROPIC_BASE_URL 拿到 MINIMAX_BASE_URL 的值 (字段错乱).
+# 最稳修法: 不靠 load_dotenv + os.getenv, 用 dotenv_values() 显式读 .env 文件.
+from dotenv import dotenv_values as _dotenv_values  # type: ignore[import]
+
+_DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+_DOTENV = _dotenv_values(_DOTENV_PATH) or {}
+
+
+def _getenv_ci(name: str, default: str = "") -> str:
+    """大小写不敏感读 env: 先 .env 显式读 (priority), 再 os.environ fallback."""
+    # 1) 优先 .env (用户本地 source of truth)
+    if name in _DOTENV and _DOTENV[name]:
+        return _DOTENV[name]
+    if name.lower() in _DOTENV and _DOTENV[name.lower()]:
+        return _DOTENV[name.lower()]
+    if name.upper() in _DOTENV and _DOTENV[name.upper()]:
+        return _DOTENV[name.upper()]
+    # 2) Fallback 到 os.environ (K8s / Docker / shell)
+    v = os.getenv(name, "")
+    if v:
+        return v
+    target = name.upper()
+    for key, val in os.environ.items():
+        if key.upper() == target and val:
+            return val
+    return default
+
+
 # 如果没有任何 LLM key，自动开启 mock
 # R10 (M-16): 列出顺序按"演示默认 → 备选"排 (MiniMax → Kimi → GLM → Anthropic)
 _has_any_llm_key = any([
-    os.getenv("MiniMax_API_KEY", ""),
-    os.getenv("KIMI_API_KEY", ""),
-    os.getenv("GLM_API_KEY", ""),
-    os.getenv("ANTHROPIC_API_KEY", ""),
+    _getenv_ci("MiniMax_API_KEY"),
+    _getenv_ci("KIMI_API_KEY"),
+    _getenv_ci("GLM_API_KEY"),
+    _getenv_ci("ANTHROPIC_API_KEY"),
 ])
 if not _has_any_llm_key:
     LLM_MOCK = True
@@ -43,29 +74,29 @@ if not _has_any_llm_key:
 # 不同用户会切到不同 provider; 删了反而限制灵活性).
 
 # MiniMax (Anthropic-compatible) — 演示默认
-MiniMax_API_KEY = os.getenv("MiniMax_API_KEY", "")
-MiniMax_BASE_URL = os.getenv("MiniMax_BASE_URL", "https://api.minimaxi.com/anthropic")
-MiniMax_MODEL = os.getenv("MiniMax_MODEL", "MiniMax-M3")
-MiniMax_FAST_MODEL = os.getenv("MiniMax_FAST_MODEL", "MiniMax-M2.7")
+MiniMax_API_KEY = _getenv_ci("MiniMax_API_KEY")
+MiniMax_BASE_URL = _getenv_ci("MiniMax_BASE_URL", "https://api.minimaxi.com/anthropic")
+MiniMax_MODEL = _getenv_ci("MiniMax_MODEL", "MiniMax-M3")
+MiniMax_FAST_MODEL = _getenv_ci("MiniMax_FAST_MODEL", "MiniMax-M2.7")
 
 # Kimi / Moonshot
-KIMI_API_KEY = os.getenv("KIMI_API_KEY", "")
-KIMI_BASE_URL = os.getenv("KIMI_BASE_URL", "https://api.moonshot.cn/anthropic")
-KIMI_MODEL = os.getenv("KIMI_MODEL", "kimi-k2.5")
-KIMI_FAST_MODEL = os.getenv("KIMI_FAST_MODEL", "kimi-k2.5")
+KIMI_API_KEY = _getenv_ci("KIMI_API_KEY")
+KIMI_BASE_URL = _getenv_ci("KIMI_BASE_URL", "https://api.moonshot.cn/anthropic")
+KIMI_MODEL = _getenv_ci("KIMI_MODEL", "kimi-k2.5")
+KIMI_FAST_MODEL = _getenv_ci("KIMI_FAST_MODEL", "kimi-k2.5")
 
 # GLM / 智谱
-GLM_API_KEY = os.getenv("GLM_API_KEY", "")
+GLM_API_KEY = _getenv_ci("GLM_API_KEY")
 GLM_BASE_URL = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/anthropic")
 GLM_MODEL = os.getenv("GLM_MODEL", "glm-4.6")
 GLM_FAST_MODEL = os.getenv("GLM_FAST_MODEL", "glm-4.6-air")
 
 # Anthropic 官方
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_API_KEY = _getenv_ci("ANTHROPIC_API_KEY")
 ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
 
 # DeepSeek（兼容 OpenAI 协议）
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+DEEPSEEK_API_KEY = _getenv_ci("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 # ===== 学术 API =====
