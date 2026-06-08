@@ -236,8 +236,6 @@ ScholarFlow 还在积极迭代中，欢迎你参与！
 
 - 📋 [GitHub Discussions](https://github.com/qianbkk/ScholarFlow/discussions) — 提问 / 想法 / 学术反馈
 - 🐛 [Issue Tracker](https://github.com/qianbkk/ScholarFlow/issues) — Bug 报告
-- 🎓 [Academic Feedback](.github/ISSUE_TEMPLATE/academic_feedback.md) — 检索质量 / 综述准确度反馈
-- 💡 [Feature Requests](.github/ISSUE_TEMPLATE/feature_request.md) — 新功能建议
 - 📖 [Q&A](https://github.com/qianbkk/ScholarFlow/discussions/categories/q-a) — 使用问题 / 安装问题
 
 > R10+ 计划：把 Discussion categories 进一步细分（学术 / 工程 / 安全），目前先用 GitHub 内置 categories。

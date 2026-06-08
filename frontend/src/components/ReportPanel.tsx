@@ -168,6 +168,24 @@ export function ReportPanel({
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}
+
+        {/* M-19 (R10.5) UI 差异化: 综述末尾的"原始文献来源"表格 — 知网/Google Scholar/SS
+            都不生成可核查来源表. 用 amber 突出"全网唯一"信号, 让用户在实际使用中
+            看到 ScholarFlow 跟其他工具的差别, 而不是从 README 读"为什么用". */}
+        {!loading && report && html.includes('原始文献来源') && (
+          <div
+            className="mt-2 px-3 py-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md flex items-center gap-2"
+            data-testid="paper-anchors-different"
+            title="其他工具 (知网/Google Scholar/Semantic Scholar) 都不生成可核查的原始文献来源表"
+          >
+            <span className="text-base">📎</span>
+            <span>
+              <strong>全网唯一可核查</strong>:
+              综述末尾已自动附 15 篇原始文献来源表 (含 SS ID + 直链),
+              用户可逐条点开核对综述里说的"某论文 2017 年提出 Transformer"这类声明.
+            </span>
+          </div>
+        )}
       </div>
     </main>
   );
