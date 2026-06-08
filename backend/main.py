@@ -44,6 +44,27 @@ from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+import ipaddress
+
+
+def get_real_ip(request: Request) -> str:
+    """R10.5 Fix-N (审计 PPP §4.1): 反向代理后读 X-Forwarded-For 真实 IP.
+
+    默认 get_remote_address 在 Nginx/Cloudflare 后拿到的是代理 IP, 所有真实用户
+    共享同一限速桶, 5 个请求后全部 429. 修复: 优先 XFF 头第一段, 配合
+    TrustedHostMiddleware 防 IP 伪造.
+    """
+    xff = request.headers.get("X-Forwarded-For")
+    if xff:
+        first = xff.split(",")[0].strip()
+        # 仅信任公网 IP, 私有 IP (10.x, 192.168.x) 视为伪造降级到直连
+        try:
+            ip = ipaddress.ip_address(first)
+            if not ip.is_private and not ip.is_loopback:
+                return first
+        except ValueError:
+            pass
+    return get_remote_address(request)
 
 from backend.workflow.graph import search_graph
 from backend.api import semantic_scholar as _ss_mod
@@ -51,9 +72,8 @@ from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.utils.cache import get_cached_async, set_cached_async  # H4
-from backend.utils.semantic_cache import (  # M-D P0-D: 语义缓存 (退化模式 — 查不到时返 None)
-    get_semantic_cached,
-    set_semantic_cached,
+from backend.utils.semantic_cache import (  # 占位桩 (Fix-E R10.5: 死代码全部移除, 留骨架)
+    semantic_cache_stub_marker,
 )
 from backend.utils.observability import (
     new_request_id,
@@ -276,7 +296,8 @@ install_security(app)
 
 
 # ===== Rate limiting + global budget (VULN-002) =====
-limiter = Limiter(key_func=get_remote_address)
+# R10.5 Fix-N: key_func 从 get_remote_address 改为 get_real_ip (读 XFF).
+limiter = Limiter(key_func=get_real_ip)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -327,21 +348,8 @@ async def search(req: SearchRequest, request: Request):
     return_amount = req.budget
 
     try:
-        # M-D P0-D: 语义缓存 (numpy cos-sim top-1, 阈值 0.92) — 退化模式当前返 None,
-        # 等 R10 schema migration 真正给 query_embedding 列写 BLOB 后可工作。
-        sem_cached = await get_semantic_cached(
-            safe_query, req.max_iterations, req.budget, provider=provider
-        )
-        if sem_cached is not None:
-            sem_response, sem_cost, sem_tokens, sim = sem_cached
-            logger.info(
-                f"[/search] semantic cache hit q='{safe_query[:40]}' "
-                f"sim={sim:.3f} cost=${sem_cost:.4f} tokens={sem_tokens}"
-            )
-            return _build_search_response(
-                state_dict={}, elapsed=0.0, from_cache=True, cached_payload=sem_response
-            )
-
+        # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
+        # 精确缓存 get_cached_async 是唯一缓存查找路径; 语义缓存留作 R11 真实实现.
         cached = await get_cached_async(
             safe_query, req.max_iterations, req.budget, provider=provider
         )
@@ -397,17 +405,8 @@ async def search(req: SearchRequest, request: Request):
             )
         except Exception as cache_err:
             logger.warning(f"[/search] cache write failed (non-fatal): {cache_err}")
-        try:
-            # M-D P0-D: 语义缓存写 — 当前退化到 set_cached_async (R10 加 BLOB 后真存 embedding)
-            await set_semantic_cached(
-                safe_query,
-                req.max_iterations,
-                req.budget,
-                response_obj.model_dump(),
-                float(final.get("total_cost_usd", 0.0)),
-                int(final.get("total_tokens_used", 0)),
-                provider=provider,
-            )
+        # Fix-E R10.5: 删除 set_semantic_cached 调用 (转发到 set_cached_async,
+        # 同一行写两次相同数据 — 重复 I/O). 语义缓存留 R11 真实实现时再调用.
         except Exception as sem_err:
             logger.warning(f"[/search] semantic cache write failed (non-fatal): {sem_err}")
 
@@ -498,26 +497,8 @@ async def search_stream(
         return_amount = budget
 
         try:
-            # M-D P0-D: 语义缓存 (退化模式 — 见 /search 入口注释)
-            sem_cached = await get_semantic_cached(
-                safe_query, max_iter, budget, provider=resolved_provider
-            )
-            if sem_cached is not None:
-                sem_response, sem_cost, sem_tokens, sim = sem_cached
-                logger.info(
-                    f"[/search/stream] semantic cache hit q='{safe_query[:40]}' "
-                    f"sim={sim:.3f}"
-                )
-                yield _sse_format({"event": "started", "cached": True, "semantic": True})
-                yield _sse_format({
-                    "event": "done",
-                    "cached": True,
-                    "semantic": True,
-                    "result": sem_response,
-                    "elapsed": round(_time.time() - t0, 2),
-                })
-                return
-
+            # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
+            # 精确缓存 get_cached_async 是唯一缓存查找路径; 语义缓存留作 R11.
             cached = await get_cached_async(
                 safe_query, max_iter, budget, provider=resolved_provider
             )
@@ -635,21 +616,8 @@ async def search_stream(
                 logger.warning(
                     f"[/search/stream] cache write failed (non-fatal): {cache_err}"
                 )
-            try:
-                # M-D P0-D: 语义缓存写 (退化模式)
-                await set_semantic_cached(
-                    safe_query,
-                    max_iter,
-                    budget,
-                    response_obj.model_dump(),
-                    float(accumulated.get("total_cost_usd", 0.0)),
-                    int(accumulated.get("total_tokens_used", 0)),
-                    provider=resolved_provider,
-                )
-            except Exception as sem_err:
-                logger.warning(
-                    f"[/search/stream] semantic cache write failed (non-fatal): {sem_err}"
-                )
+            # Fix-E R10.5: 删除 set_semantic_cached 调用 (重复写同一行).
+            # 语义缓存留 R11 真实实现时再调用.
 
             yield _sse_format({
                 "event": "done",

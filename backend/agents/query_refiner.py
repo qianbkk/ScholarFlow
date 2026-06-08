@@ -2,6 +2,7 @@
 节点 ⑤ — 自适应查询优化
 分析当前结果不足，生成补充查询词。
 """
+import asyncio
 import logging
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
@@ -54,13 +55,18 @@ JSON output:
     ]
 }}"""
 
-    text, usage = await call_llm(
-        prompt,
-        task_type="refine_strategy",
-        system=isolation_system_suffix(),
-        max_tokens=400,
-        json_mode=True,
-        provider=state.get("provider"),
+    # R10.5 Fix-P: 节点级 30s 上限, refine 循环里如果 hang 住会放大成本
+    # (max_iter=3 × 30s = 90s 仅 query_refine 就耗尽 endpoint 480s).
+    text, usage = await asyncio.wait_for(
+        call_llm(
+            prompt,
+            task_type="refine_strategy",
+            system=isolation_system_suffix(),
+            max_tokens=400,
+            json_mode=True,
+            provider=state.get("provider"),
+        ),
+        timeout=30.0,
     )
 
     new_queries: list[str] = []

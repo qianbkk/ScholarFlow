@@ -19,12 +19,14 @@ from slowapi.util import get_remote_address
 
 from backend.config import LLM_PROVIDER
 from backend.api.services.providers import _get_providers_with_keys
+from backend.main import get_real_ip  # R10.5 Fix-N: XFF 代理 IP
 
 router = APIRouter(tags=["health"])
 # R9: /providers enumeration-vector 防护 — 该端点暴露 provider 拓扑 + has_key 状态,
 # 高频调用可推断基础设施. 加 30/minute 限流, 前端模型选择器轮询不会触发, 但阻断
 # 自动化 enumeration. /health 保留不限流 (k8s/load-balancer 健康检查场景).
-limiter = Limiter(key_func=get_remote_address)
+# R10.5 Fix-N: key_func 改 get_real_ip (XFF 优先).
+limiter = Limiter(key_func=get_real_ip)
 # FastAPI 0.115+ compatibility: include_router accesses on_startup/on_shutdown
 # directly; ensure defaults exist (this is a no-op on older versions where
 # they're already class-level defaults).

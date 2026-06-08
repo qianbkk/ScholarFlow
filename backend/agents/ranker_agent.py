@@ -54,17 +54,36 @@ _VENUE_BONUS = {
 }
 
 
-def _authority_score(citation_count: int, venue: str = "") -> float:
-    """基于引用数 + venue 计算权威性（不消耗 token）。"""
-    thresholds = [
-        (1000, 9.0), (500, 8.5), (200, 8.0), (100, 7.5),
-        (50, 7.0), (20, 6.0), (10, 5.0), (5, 4.0), (1, 3.0),
+def _authority_score(citation_count: int, venue: str = "", year: int = 0) -> float:
+    """基于引用数 + venue + 年份 计算权威性（不消耗 token）。
+
+    R10.5 Fix-I + Fix-J (审计 PPP §3.3 + QQQ §3.1):
+      旧版无年份因子, 2017 Transformer (95000 引) 9.0 vs 2024 GraphRAG
+      (850 引) 6.0 — 系统性偏向老论文. 改用年均引用数 + 新发表加成.
+
+    R10.5 Fix-I (QQQ §3.1): 旧版 rel<4 才压制, 但 mock 兜底 rel=5.0/6.0
+      高于阈值, 无关高引论文进 Top 25. 提到 rel<5.5 压制, 兜底论文挡得住.
+    """
+    from datetime import datetime
+    current_year = datetime.now().year
+    age = max(1, current_year - year) if year and year > 2000 else 10
+    annual_citations = citation_count / age
+
+    # 年均引用数分段 (阈值降以适应新论文)
+    annual_thresholds = [
+        (300, 9.0), (100, 8.5), (50, 8.0), (20, 7.5),
+        (10, 7.0), (5, 6.0), (2, 5.0), (0.5, 4.0),
     ]
     base = 2.0
-    for threshold, score in thresholds:
-        if citation_count >= threshold:
+    for threshold, score in annual_thresholds:
+        if annual_citations >= threshold:
             base = score
             break
+
+    # 新发表加成: 不足 2 年但已有 30+ 引用, 影响力正在爆发
+    if year and age <= 2 and citation_count >= 30:
+        base = min(10.0, base + 0.8)
+
     bonus = _VENUE_BONUS.get(venue, 0.0)
     return min(10.0, base + bonus)
 
@@ -109,7 +128,12 @@ Respond with JSON only, mapping paper index to BOTH scores:
   "2": {{"relevance": <0-10>, "consistency": <0-10>}},
   ...
 }}"""
-    text, usage = await call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True, provider=provider)
+    # R10.5 Fix-P: 节点级 60s 上限, 防 LLM 评分 hang 住.
+    # fast_score 35 篇/批理论上 <10s, 60s 留 6x buffer.
+    text, usage = await asyncio.wait_for(
+        call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True, provider=provider),
+        timeout=60.0,
+    )
     data = _extract_json_object(text)
     rel_scores: list[float] = []
     cons_scores: list[float] = []
@@ -253,11 +277,13 @@ async def rank_node(state: SearchState) -> SearchState:
     # (Round 2 PERF-006 跨迭代缓存)。
     for paper, rel, cons in zip(papers_to_score, rel_results, cons_results):
         paper.relevance_score = rel
-        paper.authority_score = _authority_score(paper.citation_count, paper.venue)
+        paper.authority_score = _authority_score(paper.citation_count, paper.venue, paper.year or 0)
         paper.consistency_score = cons
         final = rel * 0.5 + paper.authority_score * 0.3 + cons * 0.2
-        if rel < 4.0:
-            final = min(final, rel + 0.5)
+        # Fix-I R10.5: 阈值 4.0 → 5.5. 旧阈值在 mock 兜底 rel=5.0/6.0 时失效,
+        # 无关高引论文(alphafold 类) 拿到 6.4 污染 Top 25. 新阈值压制兜底.
+        if rel < 5.5:
+            final = min(final, rel * 0.8)
         paper.final_score = round(final, 2)
 
     # 把被过滤掉（c < 3）的论文追加在尾部，标 0 分
@@ -265,7 +291,7 @@ async def rank_node(state: SearchState) -> SearchState:
     for p in papers:
         if p.paper_id not in seen_ids:
             p.relevance_score = 0.0
-            p.authority_score = _authority_score(p.citation_count, p.venue)
+            p.authority_score = _authority_score(p.citation_count, p.venue, p.year or 0)
             p.consistency_score = 0.0
             p.final_score = 0.0
 

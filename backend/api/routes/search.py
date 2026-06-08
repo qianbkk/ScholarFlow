@@ -53,13 +53,15 @@ from backend.api.routes.models import (
     _build_search_response,
     _make_initial_state,
 )
+from backend.main import get_real_ip  # R10.5 Fix-N: XFF 代理 IP
 
 logger = logging.getLogger(__name__)
 
 
 # Each route gets its own limiter instance (slowapi requires module-level binding).
 router = APIRouter(tags=["search"])
-limiter = Limiter(key_func=get_remote_address)
+# R10.5 Fix-N: key_func 改 get_real_ip (XFF 优先), 避免反代后所有用户共享 5/min 限流桶.
+limiter = Limiter(key_func=get_real_ip)
 
 
 # ===== in-flight task table (Round 6 M2) =====

@@ -2,6 +2,8 @@
 节点 ① — 查询理解与分解
 将用户原始查询拆解为 4-5 个英文子查询，供后续多源并行搜索。
 """
+import asyncio
+
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
@@ -67,13 +69,18 @@ Rules:
 - Cover different angles, avoid repetition
 - If original query is Chinese, translate to academic English"""
 
-    text, usage = await call_llm(
-        prompt,
-        task_type="complex_reason",
-        system=SYSTEM + isolation_system_suffix(),
-        max_tokens=500,
-        json_mode=True,
-        provider=state.get("provider"),
+    # R10.5 Fix-P: 节点级 30s 上限, 防 query_decompose hang 住整个 pipeline.
+    # max_tokens=500 + 简单 prompt 实测 5-10s, 30s 留 3x buffer.
+    text, usage = await asyncio.wait_for(
+        call_llm(
+            prompt,
+            task_type="complex_reason",
+            system=SYSTEM + isolation_system_suffix(),
+            max_tokens=500,
+            json_mode=True,
+            provider=state.get("provider"),
+        ),
+        timeout=30.0,
     )
 
     sub_queries: list[str] = []

@@ -11,6 +11,9 @@ SEED_LIMIT=5 时一次扩展会同时触发 5 backward + 5 forward = 10 并发�
 极易触发 429 限流。引入 asyncio.Semaphore(4) 把**单 gather 批次**的并发
 限制在 4，向后+向前两个批次之间不阻塞（仍可同跑 8 个请求总并发峰值 8），
 确保单次扩展安全低于 100 req/5min 的限流。
+
+R10.5 Fix-F (审计 QQQ §1.2): 删模块级 _CITATION_SEMAPHORE 共享单例, 改
+expand_citations_node 内动态创建, 同 search_agent 修复.
 """
 import asyncio
 import logging
@@ -28,15 +31,13 @@ BACKWARD_LIMIT = 20         # 每篇 seed 取多少 references
 FORWARD_LIMIT = 10          # 每篇 seed 取多少 citers（citations 通常更稀疏）
 MAX_TOTAL_PAPERS = 50       # 扩展后总论文数上限（raw 之外的新增）
 
-# ===== SS API 限速：单批 backward/forward 并发上限 =====
-# SS 免费 tier 100 req/5min；SEED_LIMIT=5 触发 5+5=10 并发。
-# 限到 4 即可把单次扩展峰值从 10 降到 8（backward 与 forward 并行各 4）。
-_CITATION_SEMAPHORE = asyncio.Semaphore(4)
+# 单批 gather 并发上限常量 (per-call, 不再 module singleton)
+_CITATION_BATCH_LIMIT = 4
 
 
-async def _throttled_call(coro):
-    """包装 SS API 调用，强制走 _CITATION_SEMAPHORE。"""
-    async with _CITATION_SEMAPHORE:
+async def _throttled_call(coro, semaphore: asyncio.Semaphore):
+    """包装 SS API 调用, 走 caller 传入的 semaphore (per-call 实例)."""
+    async with semaphore:
         return await coro
 
 
@@ -84,16 +85,25 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             "status": "ranking",
         }
 
+    # Fix-F (R10.5): per-call semaphore, 每个 expand_citations_node 独立 4-slot 桶
+    batch_semaphore = asyncio.Semaphore(_CITATION_BATCH_LIMIT)
+
     # ===== Backward: 取每篇 seed 的 references（限速） =====
     backward_tasks = [
-        _throttled_call(semantic_scholar.get_references(p.paper_id, limit=BACKWARD_LIMIT))
+        _throttled_call(
+            semantic_scholar.get_references(p.paper_id, limit=BACKWARD_LIMIT),
+            batch_semaphore,
+        )
         for p in top
     ]
     backward_results = await asyncio.gather(*backward_tasks, return_exceptions=True)
 
     # ===== Forward: 取每篇 seed 的 citers（限速，犀利评论 #8）=====
     forward_tasks = [
-        _throttled_call(semantic_scholar.get_citations(p.paper_id, limit=FORWARD_LIMIT))
+        _throttled_call(
+            semantic_scholar.get_citations(p.paper_id, limit=FORWARD_LIMIT),
+            batch_semaphore,
+        )
         for p in top
     ]
     forward_results = await asyncio.gather(*forward_tasks, return_exceptions=True)

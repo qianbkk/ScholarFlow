@@ -1,64 +1,38 @@
-"""utils.semantic_cache — 语义缓存 (numpy 余弦相似度 top-1 检索)
+"""utils.semantic_cache — 占位桩 (Fix-E R10.5)
 
-设计:
-  - 轻量 embedding: BM25 稀疏特征 + TF-IDF numpy 化 (无外部依赖, 生产版可换 sentence-transformers)
-  - 缓存键: query → 384 维 numpy float32 向量 (磁盘存 .npy 或 BLOB)
-  - 检索: SQLite 拉最近 200 条 query embedding, 余弦相似度 top-1
-  - 阈值: 0.92 视为命中
+R10.5 审计 (PPP §1.3, QQQ §2.1) 指出:
+  - get_semantic_cached() 永远返 None (退化模式) — 死代码
+  - set_semantic_cached() 仅转发到 set_cached_async() — 重复写
 
-并发安全:
-  - 复用 cache.py 的 _connect_with_wal() + busy_timeout=5s
-  - numpy 计算在主线程 (成本 <1ms per query)
+原 R10 设计目标: 384 维 numpy float32 embedding + SQLite BLOB + 余弦
+相似度 top-1 检索 (阈值 0.92). 实际从未真正实现 — query_embedding 列
+从未添加到 schema, get_xxx 也从未从 BLOB 读.
+
+R10.5 处置: 全部调用从 main.py 删除 (Fix-E commit 1).  本模块保留
+以避免破坏测试或外部引用, 但函数体已收缩成 explicit "未实现" 桩:
+
+  semantic_cache_stub_marker   - 强制依赖存在的 import-time 标记 (无副作用)
+  get_semantic_cached()        - 永远 return None (语义: 永远 miss)
+  set_semantic_cached()        - no-op, 只 logger.debug 一条记录
+
+R11+ 真实现路径:
+  1. cache.py: ALTER TABLE search_cache ADD COLUMN query_embedding BLOB
+  2. 这里 _embed_query() 改用 sentence-transformers (e.g. all-MiniLM-L6-v2, 384 dim)
+  3. get_xxx() 拉最近 N 条 entry, BLOB → numpy, 余弦相似度 top-1, 阈值 0.92
+  4. 取消对 main.py 的删除, 重新启用这两个调用
+
+保持签名稳定: 参数 / 返回值类型不变, 调用方代码改 0 行就能切换.
 """
 from __future__ import annotations
 
-import re
+import logging
 from typing import Optional
 
-import numpy as np
-
-from backend.utils.cache import _connect_with_wal, _init_db_once, _DB
-
-EMBED_DIM = 384
-SIMILARITY_THRESHOLD = 0.92  # 0.92 视为命中
+logger = logging.getLogger(__name__)
 
 
-def _tokenize(query: str) -> list[str]:
-    """简单分词: 英文 lowercase + 中文单字 + 数字 + 标点剥离。"""
-    # 提取所有 unicode letter / digit, 英文小写, 中文单字保留
-    return re.findall(r"[a-z0-9]+|[一-鿿]", query.lower())
-
-
-def _embed_query(query: str) -> np.ndarray:
-    """轻量 embedding: 词袋 + hash trick + L2 normalize。
-
-    不是真 embedding, 是个能用的近似, 用于 demo。生产版换 sentence-transformers。
-    """
-    vec = np.zeros(EMBED_DIM, dtype=np.float32)
-    tokens = _tokenize(query)
-    if not tokens:
-        return vec
-    for tok in tokens:
-        # FNV-1a hash trick, 映射到 [0, EMBED_DIM)
-        h = 2166136261
-        for c in tok.encode("utf-8"):
-            h ^= c
-            h = (h * 16777619) & 0xFFFFFFFF
-        vec[h % EMBED_DIM] += 1.0
-    # L2 normalize
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec /= norm
-    return vec
-
-
-def _serialize_embedding(emb: np.ndarray) -> bytes:
-    """float32 array → bytes (BLOB 存 SQLite)."""
-    return emb.astype(np.float32).tobytes()
-
-
-def _deserialize_embedding(blob: bytes) -> np.ndarray:
-    return np.frombuffer(blob, dtype=np.float32)
+# ===== 占位桩 marker (强制 import 存在, 让 Fix-E import 改动通过类型检查) =====
+semantic_cache_stub_marker: bool = True
 
 
 async def get_semantic_cached(
@@ -66,28 +40,13 @@ async def get_semantic_cached(
     max_iter: int,
     budget: float,
     provider: str | None = None,
-    threshold: float = SIMILARITY_THRESHOLD,
+    threshold: float = 0.92,
 ) -> Optional[tuple[dict, float, int]]:
-    """语义缓存检索。
+    """语义缓存检索 (R10.5 占位桩 — 永远 miss).
 
-    Returns:
-        None — 缓存 miss
-        (response, cost_usd, tokens, similarity) — 缓存命中
+    R11+ 真实现见模块顶 docstring.
     """
-    if not query:
-        return None
-    _init_db_once()
-    query_vec = _embed_query(query)
-    conn = _connect_with_wal()
-    try:
-        # 拉最近 200 条 cache entry (含 embedding)
-        # 现有 schema 没 embedding 字段 — 这次只返回 None 表示"暂无 embedding 索引"
-        # 真实部署需要 ALTER TABLE 加 query_embedding BLOB 列
-        # 留给 R10 schema migration
-        # 退化: 仍可工作, 只是退化成"精确匹配"路径
-        return None
-    finally:
-        conn.close()
+    return None  # 占位: 永远 cache miss, 调用方继续走精确缓存路径
 
 
 async def set_semantic_cached(
@@ -99,7 +58,12 @@ async def set_semantic_cached(
     tokens: int,
     provider: str | None = None,
 ) -> None:
-    """写入语义缓存 (R10 加 BLOB 后真存 embedding, 当前存 hash 兜底)。"""
-    # 当前实现跟 set_cached_async 一样, 留给 R10 加 embedding
-    from backend.utils.cache import set_cached_async
-    await set_cached_async(query, max_iter, budget, response, cost_usd, tokens, provider)
+    """语义缓存写入 (R10.5 占位桩 — no-op).
+
+    修复历史: 旧实现转发到 set_cached_async 造成双倍写入, 已删除.
+    R11+ 真实现见模块顶 docstring.
+    """
+    logger.debug(
+        "[semantic_cache] set_semantic_cached no-op (R10.5 stub); "
+        "query=%r provider=%s", query[:40], provider,
+    )

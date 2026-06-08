@@ -2,6 +2,7 @@
 节点 ⑥ — 综述报告生成
 基于排序后的论文，生成结构化 Markdown 综述。
 """
+import asyncio
 import html
 import re
 
@@ -102,12 +103,17 @@ async def synthesize_node(state: SearchState) -> SearchState:
 
 要求：分析要有实质内容，不要只列清单；中文为主，论文名保持英文。"""
 
-    report, usage = await call_llm(
-        prompt,
-        task_type="synthesis",
-        system=SYSTEM + isolation_system_suffix(),
-        max_tokens=3500,
-        provider=state.get("provider"),
+    report, usage = await asyncio.wait_for(
+        call_llm(
+            prompt,
+            task_type="synthesis",
+            system=SYSTEM + isolation_system_suffix(),
+            max_tokens=3500,
+            provider=state.get("provider"),
+        ),
+        timeout=90.0,  # R10.5 Fix-P: 节点级 90s 上限.  synthesis 是单次 LLM
+                       # 调用里最重的 (max_tokens=3500), 用户实测 30-60s, 90s 留 1.5x buffer.
+                       # 超过走 _fallback_report 兜底, 不再让节点占满整个 480s endpoint timeout.
     )
 
     # 兜底：LLM 失败时返回极简报告
@@ -147,12 +153,20 @@ async def synthesize_node(state: SearchState) -> SearchState:
     # `javascript:` / `vbscript:` 在浏览器里允许带任意空白 — 用正则匹配
     # `java\s*script:` 和 `vb\s*script:` 覆盖所有混淆形式。
     pseudo_proto_re = re.compile(r"(?:java|vb)\s*script\s*:", re.IGNORECASE)
+    # R10.5 Fix-M (审计 PPP §4.2): 后端 XSS 检测改 warning-only.
+    # 旧逻辑触发 → _fallback_report → 用户看到质量极低报告却不知道原因.
+    # 前端 DOMPurify (FORBID_TAGS/FORBID_ATTR 白名单) 是唯一可信 XSS 防线,
+    # 后端检测的误报是 false positive 风险. 改为 logger.warning, 不替换报告.
     if (
         any(p in whitespace_folded for p in DANGEROUS_PATTERNS)
         or pseudo_proto_re.search(whitespace_folded)
         or on_attr_re.search(decoded)
     ):
-        report = _fallback_report(query, ranked)
+        logger.warning(
+            f"[synthesis] LLM output contains potential XSS markers; "
+            f"keeping report (DOMPurify will sanitize on frontend). "
+            f"query={query[:60]!r}"
+        )
 
     cost_update = merge_usage_into_state(state, usage)
 
@@ -187,18 +201,31 @@ async def synthesize_node(state: SearchState) -> SearchState:
 def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, list[str]]:
     """检查综述中 **粗体标题** 是否对应到 ranked_papers。
 
-    Returns:
-        (verified_report, unverified_titles)
+    R10.5 Fix-K (审计 PPP §4.3 / QQQ §3.3): 旧 Jaccard 阈值 0.5 + len(cited_words)
+    分母, 容易误匹配 (e.g. "A Survey of LLM" vs "A Comprehensive Survey on
+    LLM" 共享 4/5=80% 词被误判为同一论文). 修复:
+      1. 先精确子串包含 (忽略大小写)
+      2. 模糊 Jaccard 阈值 0.5 → 0.7
+      3. 分母 max(len_cited, len_t) 而非 len_cited — 防止短 cited 高通过率
     """
-    ranked_titles = {p.get("title", "").lower()[:60] for p in ranked if p.get("title")}
+    ranked_titles = [p.get("title", "").lower() for p in ranked if p.get("title")]
     cited_in_report = re.findall(r'\*\*([^*]{5,80})\*\*', report)
     unverified = []
     for cited in cited_in_report:
-        cited_words = set(cited.lower().split())
-        matched = any(
-            len(cited_words & set(t.split())) / max(len(cited_words), 1) > 0.5
-            for t in ranked_titles
-        )
+        cited_lower = cited.lower()
+        cited_words = set(cited_lower.split())
+        matched = False
+        for t in ranked_titles:
+            t_words = set(t.split())
+            # Stage 1: 精确子串包含 (任一方向)
+            if cited_lower in t or t in cited_lower:
+                matched = True
+                break
+            # Stage 2: 模糊 Jaccard, 分母用 max 长度
+            intersection = len(cited_words & t_words)
+            if intersection / max(len(cited_words), len(t_words), 1) > 0.7:
+                matched = True
+                break
         if not matched and len(cited) > 10:
             unverified.append(cited)
     return report, unverified

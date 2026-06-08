@@ -8,4 +8,4 @@ httpx>=0.27.0,<1.0.0
 python-dotenv>=1.0.0,<2.0.0
 pydantic>=2.7.0,<3.0.0
 slowapi>=0.1.9,<1.0.0
-numpy>=1.26.0,<3.0.0  # semantic_cache.py 用 (向量余弦相似度); >=1.26 是 Python 3.12 wheel 起点
+numpy>=1.26.0,<3.0.0  # semantic_cache.py 占位桩保留 (R11 真实 embedding 实现用); >=1.26 是 Python 3.12 wheel 起点

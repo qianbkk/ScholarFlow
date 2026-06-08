@@ -165,6 +165,7 @@ export function GraphPanel({ graph }: Props) {
       .selectAll('g')
       .data(nodes)
       .join('g')
+      .attr('class', 'node')  // Fix-H: 标签 class 让独立 selected effect 能 selectAll 选中
       .style('cursor', 'pointer')
       .on('mouseover', (event, d) => {
         setHovered(d);
@@ -215,7 +216,8 @@ export function GraphPanel({ graph }: Props) {
         return ns.has(d.id) ? 1 : 0.15;
       });
 
-    // M-18: 高亮邻居时其余节点透明度降低
+    // M-18: 高亮邻居时其余节点透明度降低 (Fix-H 改由 selected 独立 effect 处理,
+    // 不再触发 simulation 重建 — 避免点击节点时位置重置 + CPU 峰值)
     if (selected) {
       node.style('opacity', (d) => (neighborSet(selected).has(d.id) ? 1 : 0.25));
       link.style('opacity', (d: any) => {
@@ -255,7 +257,43 @@ export function GraphPanel({ graph }: Props) {
     return () => {
       simulation.stop();
     };
-  }, [graph, selected]);
+    // Fix-H (R10.5): deps 只 [graph], 删 [selected].  selected 触发的样式更新
+    // 走下方独立 effect, 不再因点击节点重建 simulation (用户拖拽布局会丢失 + CPU 峰值).
+  }, [graph]);
+
+  // Fix-H (R10.5): 独立 selected effect — 改透明度/边 opacity, 不重建 simulation.
+  // 旧版: deps=[graph, selected], 用户点击节点 → effect 重跑 → svg.selectAll('*').remove()
+  //   + 重建 force simulation + 节点位置重置 + 100+ tick 重新收敛, 视觉抖动.
+  // 新版: simulation 走上面 [graph] effect, 此 effect 仅用 d3.select(svgRef.current) 改样式.
+  useEffect(() => {
+    if (!svgRef.current || !graph) return;
+    const svg = d3.select(svgRef.current);
+    // 邻居集合 (与 simulation effect 同样逻辑, 这里独立计算避免 ref 传复杂度)
+    const neighborOfSelected = (id: string) => {
+      const s = new Set<string>([id]);
+      for (const l of graph.links) {
+        const sId = typeof l.source === 'string' ? l.source : l.source.id;
+        const tId = typeof l.target === 'string' ? l.target : l.target.id;
+        if (sId === id) s.add(tId);
+        if (tId === id) s.add(sId);
+      }
+      return s;
+    };
+    const ns = selected ? neighborOfSelected(selected) : null;
+
+    // 节点 + 边 opacity 仅在 selected 存在时改; selected=null 时还原 baseline
+    svg
+      .selectAll<SVGGElement, SimNode>('g.node') // 节点 group 加 .node class 标记 (见 simulation effect)
+      .style('opacity', (d) => (ns ? (ns.has(d.id) ? 1 : 0.25) : null));
+    svg
+      .selectAll<SVGLineElement, any>('line')
+      .style('opacity', (d: any) => {
+        if (!ns) return null;
+        const sId = typeof d.source === 'string' ? d.source : d.source.id;
+        const tId = typeof d.target === 'string' ? d.target : d.target.id;
+        return sId === selected || tId === selected ? 0.9 : 0.05;
+      });
+  }, [selected, graph]);
 
   return (
     <aside className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full bg-[var(--sf-bg)] border-r lg:border-r-0 lg:border-l border-slate-200 dark:border-slate-700 flex flex-col">

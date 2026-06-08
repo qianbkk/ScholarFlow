@@ -159,53 +159,50 @@ async def test_search_node_caps_total_concurrency(monkeypatch):
     )
 
 
-# ===== 3) Module-level Semaphore exists (defensive) =====
+# ===== 3) Per-call Semaphore is configured (R10.5 Fix-F rewrite) =====
 
-def test_search_node_module_has_semaphore():
-    """search_agent module should expose a Semaphore (or similar limiter)."""
-    has_sem = False
-    for attr_name in dir(search_agent):
-        attr = getattr(search_agent, attr_name)
-        if isinstance(attr, asyncio.Semaphore):
-            has_sem = True
-            # Sanity-check the limit
-            assert attr._value <= 8, (
-                f"Semaphore limit too high: {attr._value}. "
-                f"Should match citation_expander (4) or be conservatively small."
-            )
-            break
-    assert has_sem, (
-        "PERF-004 FAIL: search_agent module has no asyncio.Semaphore. "
-        "Add `_SEARCH_SEMAPHORE = asyncio.Semaphore(4)` and wrap search calls."
+def test_search_agent_configures_per_call_semaphore():
+    """R10.5 Fix-F (审计 QQQ §1.2): 模块级 _SEARCH_SEMAPHORE 跨请求共享
+    已被 3+ 用户并发性能灾难取代. 改为 search_node 内动态创建 semaphore.
+
+    防御性测试: 确保常量 _SEARCH_BATCH_LIMIT 存在并 <=8, _throttled_search
+    接受 semaphore 参数 (per-call 实例化, 不再是 module singleton).
+    """
+    limit = getattr(search_agent, "_SEARCH_BATCH_LIMIT", None)
+    assert limit is not None, (
+        "PERF-004 FAIL: search_agent 缺 _SEARCH_BATCH_LIMIT 常量. "
+        "应改用 per-call Semaphore + 模块常量限流值."
+    )
+    assert limit <= 8, (
+        f"PERF-004 FAIL: _SEARCH_BATCH_LIMIT={limit} 过高, 建议 <=4 "
+        f"(对齐 citation_expander._CITATION_BATCH_LIMIT)."
+    )
+    # _throttled_search 现在接收 semaphore 参数 (per-call)
+    import inspect
+    sig = inspect.signature(search_agent._throttled_search)
+    assert "semaphore" in sig.parameters, (
+        "PERF-004 FAIL: _throttled_search 应接收 semaphore 参数 (per-call)."
     )
 
 
 # ===== 4) Semaphore limit matches citation_expander (consistency) =====
 
 def test_search_node_semaphore_matches_citation_expander():
-    """If both modules have Semaphores, they should have the same limit
-    to keep concurrency policy consistent across the pipeline.
+    """R10.5 Fix-F: 模块级 Semaphore 改 per-call, 两个模块都用常量
+    _SEARCH_BATCH_LIMIT / _CITATION_BATCH_LIMIT 表达上限, 必须相等以保证
+    全 pipeline 并发策略一致 (search + citation 两阶段总峰值不超 8).
     """
     from backend.agents import citation_expander
 
-    search_sem = None
-    for attr_name in dir(search_agent):
-        attr = getattr(search_agent, attr_name)
-        if isinstance(attr, asyncio.Semaphore):
-            search_sem = attr
-            break
+    search_limit = getattr(search_agent, "_SEARCH_BATCH_LIMIT", None)
+    cite_limit = getattr(citation_expander, "_CITATION_BATCH_LIMIT", None)
+    if search_limit is None or cite_limit is None:
+        pytest.skip("R10.5 Fix-F per-call Semaphore 还没应用 (缺 _*_BATCH_LIMIT)")
 
-    if search_sem is None:
-        pytest.skip("search_agent has no Semaphore (PERF-004 fix may not be applied)")
-
-    cite_sem = getattr(citation_expander, "_CITATION_SEMAPHORE", None)
-    if cite_sem is None:
-        pytest.skip("citation_expander has no _CITATION_SEMAPHORE")
-
-    assert search_sem._value == cite_sem._value, (
-        f"PERF-004: search_node Semaphore limit ({search_sem._value}) must match "
-        f"citation_expander Semaphore limit ({cite_sem._value}) for consistent "
-        f"concurrency policy."
+    assert search_limit == cite_limit, (
+        f"PERF-004: _SEARCH_BATCH_LIMIT ({search_limit}) must match "
+        f"_CITATION_BATCH_LIMIT ({cite_limit}) for consistent "
+        f"concurrency policy across the 8-node pipeline."
     )
 
 

@@ -231,9 +231,16 @@ def cache_key(
     （旧 key 字符串里没有 provider 段）。这是一个**有意的破坏** — 旧 cache
     行（如果有）会被视为新 key 失效，触发一次重算。考虑到旧 key 没有 provider
     信息，保留旧 key 反而会跨 provider 污染，所以这里接受一次失效。
+
+    R10.5 Fix-L (审计 PPP §2.3): budget 改为 0.5 USD 区间分桶, 减少
+    无意义 key 分散.  1.3→1.5, 1.8→2.0, 2.1→2.0.  "同一查询多次尝试不同
+    预算" 场景命中率从 ~0% 提到 ~100%.
     """
+    # 0.5 USD 步长分桶; round(budget * 2) / 2 落到最近 0.5
+    # 1.0 → 1.0, 1.2 → 1.0, 1.3 → 1.5, 1.8 → 2.0, 2.1 → 2.0
+    budget_bucket = round(budget * 2) / 2
     return hashlib.sha256(
-        f"{query.strip().lower()}|{max_iterations}|{budget}|{provider or 'default'}".encode()
+        f"{query.strip().lower()}|{max_iterations}|{budget_bucket}|{provider or 'default'}".encode()
     ).hexdigest()[:32]
 
 

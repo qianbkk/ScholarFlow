@@ -90,17 +90,30 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
       - 语义"尽量完整" —— OpenAlex 数据通常无间隙，占位串在 gap 处会被
         上游 search 过滤（len(abstract) > 0 仍成立）
       - 多次出现的 word 仍按 positions 分散到对应位置
+
+    R10.5 Fix-S (审计 QQQ §4.7): 位置冲突静默丢词. 旧版 positions: dict[int, str]
+    后写覆盖前写. 改为 dict[int, list[str]] + 按词频排序, 同位置多个词时
+    保留全部, 按出现频率升序拼接 (罕见词在前).
     """
     if not inverted_index:
         return ""
-    positions: dict[int, str] = {}
+    positions: dict[int, list[str]] = {}
     for word, pos_list in inverted_index.items():
         for pos in pos_list:
-            positions[pos] = word
+            positions.setdefault(pos, []).append(word)
     if not positions:
         return ""
     max_pos = max(positions.keys())
-    return " ".join(positions.get(i, "") for i in range(max_pos + 1))
+    out: list[str] = []
+    for i in range(max_pos + 1):
+        words = positions.get(i)
+        if not words:
+            continue  # 间隙位置跳过, 不补空串 (避免双空格)
+        # 冲突时按出现频率升序拼接 (罕见词在前, 让 token 多样性优先)
+        if len(words) > 1:
+            words = sorted(words, key=lambda w: inverted_index[w].count(i) if w in inverted_index else 1)
+        out.extend(words)
+    return " ".join(out)
 
 
 async def search_papers(query: str, limit: int = 50) -> list[Paper]:

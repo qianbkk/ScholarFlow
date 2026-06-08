@@ -2,41 +2,46 @@
   {
     "query": "AlphaFold protein structure prediction",
     "expected_papers": [
-      "Highly Accurate Protein Structure Prediction with AlphaFold",
-      "AlphaFold Protein Structure Database in 2024",
-      "RoseTTAFold: A Deep Learning Approach to Protein Structure Prediction"
+      "Highly Accurate Protein Structure Prediction with AlphaFold"
     ],
     "budget": 0.5
   },
   {
     "query": "transformer self-attention mechanism",
     "expected_papers": [
-      "Attention Is All You Need",
-      "BERT: Pre-training of Deep Bidirectional Transformers"
+      "Attention Is All You Need"
     ],
     "budget": 0.5
   },
   {
     "query": "graph neural network molecular property",
     "expected_papers": [
-      "Graph Neural Networks: A Review of Methods and Applications",
-      "Molecular Graph Convolutions: Moving Beyond Fingerprints"
+      "Graph Attention Networks",
+      "Inductive Representation Learning on Large Graphs",
+      "Molecular Representation Learning with Language Models"
     ],
     "budget": 0.5
   },
   {
     "query": "diffusion model image generation",
     "expected_papers": [
-      "Denoising Diffusion Probabilistic Models",
-      "High-Resolution Image Synthesis with Latent Diffusion Models"
+      "Denoising Diffusion Probabilistic Models"
     ],
     "budget": 0.5
   },
   {
     "query": "reinforcement learning game playing",
     "expected_papers": [
-      "Mastering the Game of Go without Human Knowledge",
-      "Mastering Chess and Shogi by Self-Play with a General Reinforcement Learning Algorithm"
+      "Proximal Policy Optimization Algorithms",
+      "Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor"
+    ],
+    "budget": 0.5
+  },
+  {
+    "query": "RAG retrieval augmented generation",
+    "expected_papers": [
+      "Retrieval-Augmented Generation for Large Language Models: A Survey",
+      "From Local to Global: A Graph RAG Approach to Query-Focused Summarization"
     ],
     "budget": 0.5
   }

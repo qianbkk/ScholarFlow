@@ -14,7 +14,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 复制代码
 COPY backend/ ./backend/
-COPY .env.example .env
+# R10.5 Fix-G (审计 QQQ §4.2): 不再 COPY .env.example → .env.
+# 原因: 用户若在 .env.example 里填了真实 key 又忘替换, 会被打包进镜像
+# (docker history 可见).  生产应依赖运行时注入:
+#   docker run -e KIMI_API_KEY=xxx -e LLM_PROVIDER=kimi scholarflow-backend
+# 本地开发: 把项目根的 .env 通过 -v $PWD/.env:/app/.env 挂载, 或 docker-compose env_file.
 
 # R10 (M-20): 非 root user — 最小权限原则.
 # 容器进程不应该以 root 运行, 一旦被 RCE 入侵, 攻击者拿到的是普通用户权限,
