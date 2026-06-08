@@ -89,7 +89,7 @@ gunicorn backend.main:app \
   --worker-class uvicorn.workers.UvicornWorker \
   --workers 2 \
   --bind 0.0.0.0:8000 \
-  --timeout 240
+  --timeout 480
 ```
 
 验证：
@@ -114,7 +114,7 @@ npx vite --host 127.0.0.1 --port 5173
 >     proxy_pass http://127.0.0.1:8000/;   # 注意末尾斜杠：剥掉 /api 前缀
 >     proxy_set_header Host $host;
 >     proxy_set_header X-Real-IP $remote_addr;
->     proxy_read_timeout 300s;              # 大于后端 240s 超时 (8 节点 LLM + 双源检索最多需 180s+)
+>     proxy_read_timeout 600s;              # 大于后端 480s 超时 (Fix 10: max_iter=3 + 8 节点 LLM + 双源检索实测 ~157s/iter, 多次迭代可能逼近 480s)
 > }
 > ```
 

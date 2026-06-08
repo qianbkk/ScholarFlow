@@ -169,10 +169,13 @@ async def search(req: SearchRequest, request: Request):
 
         return response_obj
     except asyncio.TimeoutError:
-        logger.warning("[/search] timed out after 240s")
+        # R10.5 Fix 10: 240 → 480s. 用户实测 8 节点全跑要 157s, max_iter=3
+        # 多次迭代会逼近 240s; 480s 给 3 轮迭代 + 引文扩展留够余量.
+        # (60s × 8 节点上限) 实际最坏情况 ~480s, 这是 hard ceiling.
+        logger.warning("[/search] timed out after 480s")
         raise HTTPException(
             status_code=504,
-            detail="搜索超时（>240s）。建议缩小查询范围或降低 max_iterations。",
+            detail="搜索超时（>480s）。建议缩小查询范围或降低 max_iterations。",
         )
     except Exception as e:
         logger.error("[/search] error", exc_info=True)
@@ -260,7 +263,9 @@ async def search_stream(
             step_count = 0
 
             try:
-                async with asyncio.timeout(240.0):
+                # R10.5 Fix 10: 240 → 480s. 跟 /search 非流式 endpoint 对齐.
+                # 详见 /search 端的 TimeoutError 注释.
+                async with asyncio.timeout(480.0):
                     async for chunk in search_graph.astream(initial, stream_mode="updates"):
                         for node_name, state_update in chunk.items():
                             if not isinstance(state_update, dict):
@@ -304,14 +309,15 @@ async def search_stream(
                                 return_amount = max(0.0, budget - new_total)
                                 return
             except TimeoutError:
-                logger.warning("[/search/stream] timed out after 240s")
+                # R10.5 Fix 10: 240 → 480s 错误消息同步
+                logger.warning("[/search/stream] timed out after 480s")
                 await _return_budget(budget)
                 return_amount = 0.0
                 try:
                     yield _sse_format({
                         "event": "error",
                         "code": "timeout",
-                        "message": "搜索超时（>240s）。建议缩小查询范围或降低 max_iter。",
+                        "message": "搜索超时（>480s）。建议缩小查询范围或降低 max_iter。",
                     })
                 except Exception:
                     pass
