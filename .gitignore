@@ -56,14 +56,18 @@ playwright_runs/
 # ===== R10.5: 开发过程产生的辅助文件不入仓 (本地保留) =====
 # docs/ 是开发时写的笔记 / 架构 / 未来任务列表, 用户使用项目不需要
 docs/
-# tests/ 全部是开发用的测试代码, 不是使用项目必须的
-tests/
-# pytest.ini 是测试配置, 跟 tests/ 一起本地保留
-pytest.ini
+
+# tests/ 标准测试套件 (test_*.py + conftest.py) 入仓, CI 直接跑.
+# 但 tests/manual/ 是一次性 E2E 验证脚本 (需 Playwright + 真实 LLM key,
+# 不是 CI 自动测试), 排除不入仓.
+tests/manual/
+tests/__pycache__/
 
 # ===== 标准开源仓库标配 (入仓) =====
 # README.md / LICENSE / VERSION / CHANGELOG.md / CONTRIBUTING.md
 # / CODE_OF_CONDUCT.md / SECURITY.md / .env.example 全部保留入仓
 # .github/ 仓库协作模板 (issue templates + PR template + CODEOWNERS)
 # + CI workflow — 标准仓库必须有, R10.5 重新纳入跟踪
+# tests/ + pytest.ini 同步入仓 — CI 跑 'pytest tests/' 必须能定位到
+# 实际文件 + 配置 (testpaths + norecursedirs=manual).
 
