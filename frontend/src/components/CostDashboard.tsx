@@ -40,7 +40,7 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
             2) 次要 Stat (Token/Papers/Iterations) 加 hidden sm:flex, 只在 ≥640px
                显示 — 移动端腾出空间, 桌面端信息密度不变.
             3) 边距 px-6 → px-4 sm:px-6, 移动端让出左右 padding. */}
-      <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center gap-4 shadow-sm">
+      <header className="bg-[var(--sf-bg)] border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center gap-4 shadow-sm">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white font-bold text-sm">
             SF

@@ -95,7 +95,7 @@ export function ReportPanel({
   };
 
   return (
-    <main className="flex-1 bg-slate-50 overflow-y-auto">
+    <main className="flex-1 bg-[var(--sf-bg)] overflow-y-auto">
       <div className="max-w-3xl mx-auto p-6">
         <div className="mb-3 flex items-center justify-between gap-2">
           <div className="flex items-baseline gap-2">
@@ -164,7 +164,8 @@ export function ReportPanel({
 
         {!loading && report && (
           <article
-            className="report-body bg-white border border-slate-200 rounded-lg p-6 shadow-sm"
+            className="report-body border border-slate-200 rounded-lg p-6 shadow-sm"
+            style={{ backgroundColor: 'var(--sf-bg)', color: 'var(--sf-text)' }}
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}

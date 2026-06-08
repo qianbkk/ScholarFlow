@@ -102,7 +102,7 @@ export function QueryPanel({
   return (
     // Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
     // 高度也变 h-auto (移动端跟随内容) vs h-full (桌面 flex 子项填满).
-    <aside className="w-full lg:w-1/4 lg:min-w-[280px] h-auto lg:h-full bg-white border-r border-slate-200 flex flex-col">
+    <aside className="w-full lg:w-1/4 lg:min-w-[280px] h-auto lg:h-full bg-[var(--sf-bg)] border-r border-slate-200 flex flex-col">
       <div className="p-3 border-b border-slate-100">
         <h2 className="text-sm font-semibold text-slate-700 mb-2">研究查询</h2>
         <form onSubmit={submit} className="space-y-2">

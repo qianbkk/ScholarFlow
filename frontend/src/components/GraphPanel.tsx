@@ -258,7 +258,7 @@ export function GraphPanel({ graph }: Props) {
   }, [graph, selected]);
 
   return (
-    <aside className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full bg-white dark:bg-slate-900 border-r lg:border-r-0 lg:border-l border-slate-200 dark:border-slate-700 flex flex-col">
+    <aside className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full bg-[var(--sf-bg)] border-r lg:border-r-0 lg:border-l border-slate-200 dark:border-slate-700 flex flex-col">
       <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">引文关系图谱</h2>
         {graph && (
