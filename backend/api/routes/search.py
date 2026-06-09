@@ -53,7 +53,8 @@ from backend.api.routes.models import (
     _build_search_response,
     _make_initial_state,
 )
-from backend.main import get_real_ip  # R10.5 Fix-N: XFF 代理 IP
+# R10.5 Fix-P0-Audit-1.2: 从 utils.network 导入, 切断 search → main 循环依赖
+from backend.utils.network import get_real_ip
 
 logger = logging.getLogger(__name__)
 

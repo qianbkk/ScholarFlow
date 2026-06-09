@@ -46,25 +46,20 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 import ipaddress
 
+# R10.5 Fix-P0-Audit-1.2: get_real_ip 已迁移到 backend.utils.network
+# (health.py / search.py 反向 import main 会形成循环依赖).
+# 这里保留向后兼容 alias, 内部委托给新实现, 后续 R11+ 可直接删除.
+from backend.utils.network import get_real_ip as _get_real_ip_impl
+
 
 def get_real_ip(request: Request) -> str:
     """R10.5 Fix-N (审计 PPP §4.1): 反向代理后读 X-Forwarded-For 真实 IP.
 
-    默认 get_remote_address 在 Nginx/Cloudflare 后拿到的是代理 IP, 所有真实用户
-    共享同一限速桶, 5 个请求后全部 429. 修复: 优先 XFF 头第一段, 配合
-    TrustedHostMiddleware 防 IP 伪造.
+    委托给 backend.utils.network.get_real_ip (R10.5 Fix-P0-Audit-1.2
+    抽出避免循环导入). 保留 main.py 内副本是为了向后兼容
+    `from backend.main import get_real_ip` 之类的旧引用.
     """
-    xff = request.headers.get("X-Forwarded-For")
-    if xff:
-        first = xff.split(",")[0].strip()
-        # 仅信任公网 IP, 私有 IP (10.x, 192.168.x) 视为伪造降级到直连
-        try:
-            ip = ipaddress.ip_address(first)
-            if not ip.is_private and not ip.is_loopback:
-                return first
-        except ValueError:
-            pass
-    return get_remote_address(request)
+    return _get_real_ip_impl(request)
 
 from backend.workflow.graph import search_graph
 from backend.api import semantic_scholar as _ss_mod
@@ -325,8 +320,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 # ===== Mount low-risk health routes (probes + provider catalog) =====
 app.include_router(health_router)
-app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key
-app.include_router(auth_router)  # R10.5 Fix-P0-B: /auth/register + /auth/login + /auth/me
+app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/register + /login + /me)
 
 
 # ===== /search (kept inline — see module docstring) =====

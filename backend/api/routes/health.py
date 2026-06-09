@@ -19,7 +19,8 @@ from slowapi.util import get_remote_address
 
 from backend.config import LLM_PROVIDER
 from backend.api.services.providers import _get_providers_with_keys
-from backend.main import get_real_ip  # R10.5 Fix-N: XFF 代理 IP
+# R10.5 Fix-P0-Audit-1.2: 从 utils.network 导入, 切断 health → main 循环依赖
+from backend.utils.network import get_real_ip
 
 router = APIRouter(tags=["health"])
 # R9: /providers enumeration-vector 防护 — 该端点暴露 provider 拓扑 + has_key 状态,
