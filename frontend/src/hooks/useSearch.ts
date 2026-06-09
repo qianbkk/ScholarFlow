@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { SearchResult } from '../types';
-import { searchPapers } from '../services/api';
+import { searchPapers, fetchMe } from '../services/api';
 
 // 8 节点流水线步骤（用于进度反馈）
 // key 与后端 NODE_NAME_TO_STEP 映射保持一致（前端展示用）
@@ -55,10 +55,6 @@ interface SSENodeEvent {
 }
 
 // Round 4 U1: 节点级预算硬停止事件 (P0-1)
-// 后端 budget_service 在 cost >= budget 时推 event='budget_exceeded'，
-// 携带当前 cost_usd 和预算上限 budget_usd 用于 UI 提示。
-// 前端若不显式处理，会落进未匹配分支被静默丢弃，
-// 用户在预算耗尽时看不到明确提示反而以为是网络问题重试，触发再次 budget_exceeded。
 interface SSEBudgetExceededEvent {
   event: 'budget_exceeded';
   cost_usd?: number;
@@ -80,30 +76,15 @@ export function useSearch() {
   const esRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fallbackStartRef = useRef<number>(0);
-  // Round 5 S-5: 跟踪当前 SSE 流的 request_id, reset 时发给后端 /search/cancel
-  // 前端生成的短 UUID, 不用后端的 X-Request-ID (SSE EventSource 不暴露响应头)
   const requestIdRef = useRef<string | null>(null);
   // H6: generation counter — bumped on every search / reset.
-  // Captured per-call (`myGen`) so a late SSE event from a previous search
-  // (or a reset search) is recognized as stale and ignored.
   const genRef = useRef<number>(0);
-
-  // 启动假进度（fallback 用）。仅在 EventSource 不可用时启用。
-  const startFallbackProgress = useCallback(() => {
-    setCurrentStep(0);
-    setElapsedSec(0);
-    fallbackStartRef.current = Date.now();
-    if (fallbackTimerRef.current) clearInterval(fallbackTimerRef.current);
-    // Round 5 M-5: useSearch 假进度 setInterval 4Hz → 1Hz, 减少 75% setState 次数
-    // 之前 100s 流水线 × 4Hz × 2 setState = 800 re-render；现在 1Hz × 2 = 200，step 还要相等短路
-    fallbackTimerRef.current = setInterval(() => {
-      const sec = (Date.now() - fallbackStartRef.current) / 1000;
-      setElapsedSec(sec);
-      const step = Math.min(7, Math.floor(sec / 2));
-      // 相等就不更新，避免无谓 re-render
-      setCurrentStep((prev) => (prev === step ? prev : step));
-    }, 1000);
-  }, []);
+  // R10.5 Fix-X1: SSE 真实运行 30-180s, 浏览器 EventSource 在代理 60s 超时/网络抖动
+  // 时会自动重连, 重连中 onerror 触发, readyState=CONNECTING(0). 这种自动重连不
+  // 应被误判为用户错误. 之前旧代码 `if (readyState === CLOSED) return` 没覆盖
+  // CONNECTING, 走到 else 分支 setError('连接中断, 请重试') 覆盖 result, UI 看似
+  // 白屏. 修复: 显式识别 CONNECTING 是浏览器自动重连, 静默等待.
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopFallbackProgress = useCallback(() => {
     if (fallbackTimerRef.current) {
@@ -116,12 +97,16 @@ export function useSearch() {
   useEffect(() => {
     return () => {
       if (esRef.current) {
-        esRef.current.close();
+        try { esRef.current.close(); } catch { /* ignore */ }
         esRef.current = null;
       }
       if (fallbackTimerRef.current) {
         clearInterval(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
+      }
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
       }
     };
   }, []);
@@ -135,37 +120,30 @@ export function useSearch() {
       setCurrentStep(0);
       setElapsedSec(0);
 
-      // Round 5 S-5: 生成 request_id, 让 reset 时能告诉后端停哪条 in-flight pipeline
-      // 用 crypto.randomUUID 短前缀, 跟后端 SearchCancelRequest.request_id 字段对齐
+      // R10.5 Fix-X1: 生成 request_id, 让 reset 时能告诉后端停哪条 in-flight pipeline
       requestIdRef.current =
         (typeof crypto !== 'undefined' && 'randomUUID' in crypto
           ? crypto.randomUUID()
           : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
         ).replace(/-/g, '').slice(0, 12);
 
-      // H5: 关闭旧 EventSource（在 new EventSource 之前显式关掉，避免短暂重叠）
+      // H5: 关闭旧 EventSource
       if (esRef.current) {
         try { esRef.current.close(); } catch { /* ignore */ }
         esRef.current = null;
       }
 
-      // 先启动假进度（EventSource 第一次 message 到达后立即覆盖成真实进度）
-      // 这样 SSE 连接未建立的几百 ms 内 UI 不会卡在 0
+      // 乐观假进度
       setCurrentStep(0);
       fallbackStartRef.current = Date.now();
       if (fallbackTimerRef.current) clearInterval(fallbackTimerRef.current);
-      // Round 5 M-5: SSE 前乐观假进度同样 4Hz → 1Hz, 减少 setState 风暴
       fallbackTimerRef.current = setInterval(() => {
         const sec = (Date.now() - fallbackStartRef.current) / 1000;
         setElapsedSec(sec);
-        // SSE 没消息前，最多多推 1 步（"查询分解"），避免假进度走太远
         const step = Math.min(1, Math.floor(sec / 2));
-        // 相等就不更新，避免无谓 re-render
         setCurrentStep((prev) => (prev === step ? prev : step));
       }, 1000);
 
-      // 构造 SSE URL。Vite dev proxy: /api -> http://127.0.0.1:8000
-      // provider 是可选项 — 未传时后端走 LLM_PROVIDER env
       const params: Record<string, string> = {
         q: query,
         budget: String(budget),
@@ -173,47 +151,51 @@ export function useSearch() {
       };
       if (provider) params.provider = provider;
       const url = `/api/search/stream?` + new URLSearchParams(params).toString();
-      // R10.5 Fix-P0-B: 带 X-API-Key header (OPEN_MODE 时后端跳过)
-      const apiKey = (() => { try { return localStorage.getItem('sf-api-key'); } catch { return null; } })();
-      const sseHeaders: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
 
       let es: EventSource;
+      const myGen = genRef.current;
       try {
-        // EventSource 不支持自定义 headers — 走 ?api_key= query param 传
-        // (后端 search_stream 暂未支持 query param 模式, 但 OPEN_MODE 跳过 header 校验)
-        // 真实 auth: 让后端 SSE 端支持从 query 读 key, 或在生产用 cookie 认证
-        // 暂时: EventSource 走 query param 后缀, 后端需要兼容
-        const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(apiKey)}` : url;
-        es = new EventSource(finalUrl);
+        es = new EventSource(url);
       } catch (e: any) {
-        // 浏览器不支持 EventSource — 切到完整假进度 + 老 /search 接口
+        // 浏览器不支持 EventSource — 切到 /search POST + 假进度
         stopFallbackProgress();
-        startFallbackProgress();
-        return searchPapers(query, budget, maxIter, provider)
+        const fbTimer = setInterval(() => {
+          const sec = (Date.now() - fallbackStartRef.current) / 1000;
+          setElapsedSec(sec);
+          const step = Math.min(7, Math.floor(sec / 2));
+          setCurrentStep((prev) => (prev === step ? prev : step));
+        }, 1000);
+        fallbackTimerRef.current = fbTimer;
+        searchPapers(query, budget, maxIter, provider)
           .then((data) => {
+            if (myGen !== genRef.current) return;
             setResult(data);
             setCurrentStep(PIPELINE_STEPS.length - 1);
           })
-          .catch((err: any) => setError(err?.message || '搜索失败'))
+          .catch((err: any) => {
+            if (myGen !== genRef.current) return;
+            setError(err?.message || '搜索失败');
+          })
           .finally(() => {
-            stopFallbackProgress();
+            if (myGen !== genRef.current) return;
+            if (fallbackTimerRef.current === fbTimer) {
+              clearInterval(fbTimer);
+              fallbackTimerRef.current = null;
+            }
+            setLoading(false);
           });
+        return;
       }
 
       esRef.current = es;
-      // H5: 闭包内捕获本次 EventSource — cleanup / handler 通过这个常量引用，
-      // 不再读取 esRef.current（动态引用指向最新连接），避免跨连接误关。
       const myEs = es;
-      // H6: 闭包内捕获本次 generation — 任何后续 search/reset 都会 bump genRef，
-      // 这里的 myGen 仍持有旧值，handler 通过不等式检测出"陈旧事件"并直接 return。
-      const myGen = genRef.current;
       let receivedAnyEvent = false;
       let stopped = false;
+      let fallbackAttempted = false;
 
       const cleanup = () => {
         if (stopped) return;
         stopped = true;
-        // H5: 关的是本次创建的那条 es（闭包常量），不是 esRef.current 当前指向的对象
         if (myEs) {
           try { myEs.close(); } catch { /* ignore */ }
         }
@@ -224,19 +206,22 @@ export function useSearch() {
           clearInterval(fallbackTimerRef.current);
           fallbackTimerRef.current = null;
         }
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
       };
 
       es.onopen = () => {
-        // 连接建立，不做处理
+        // 连接建立, 不做处理
       };
 
       es.onmessage = (ev) => {
-        // H5: 陈旧事件 — 这条 es 已被新 search 替换为 esRef.current 的最新值
+        // H5/H6: 陈旧事件
         if (myEs !== esRef.current) return;
-        // H6: 陈旧事件 — 用户已 reset / 启动新 search，genRef 已被 bump
         if (myGen !== genRef.current) return;
         receivedAnyEvent = true;
-        // 收到第一条真实事件，关闭"乐观"假进度
+        // 收到第一条真实事件, 关闭乐观假进度
         if (fallbackTimerRef.current) {
           clearInterval(fallbackTimerRef.current);
           fallbackTimerRef.current = null;
@@ -245,12 +230,11 @@ export function useSearch() {
         try {
           payload = JSON.parse(ev.data) as SSEEvent;
         } catch {
-          return; // 忽略非 JSON 行
+          return;
         }
         if (!payload || !payload.event) return;
 
         if (payload.event === 'started') {
-          // 服务端确认开始
           setCurrentStep(0);
         } else if (payload.event === 'node_complete') {
           const stepIdx = NODE_NAME_TO_STEP[payload.node];
@@ -270,19 +254,12 @@ export function useSearch() {
           setLoading(false);
         } else if (payload.event === 'error') {
           setError(payload.message || '搜索失败');
-          // R10.5: 错误时也更新 elapsed, CostDashboard 显示"走到哪步失败"
-          // 之前不更新, 用户看到 0.0s 困惑"瞬间就失败?"
           if (fallbackStartRef.current) {
             setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
           }
           cleanup();
           setLoading(false);
         } else if (payload.event === 'budget_exceeded') {
-          // Round 4 U1: 节点级预算硬停止触发 — 闭环 P0-1
-          // 之前该事件未在 frontend SSE onmessage 中显式处理，
-          // 会落进未匹配分支被静默丢弃，用户在预算耗尽时看不到明确提示
-          // 反而会以为是网络问题重试，再次触发 budget_exceeded。
-          // 修复：给用户明确文案，并显式 cleanup() 关掉 SSE 连接。
           const costStr =
             typeof payload.cost_usd === 'number'
               ? payload.cost_usd.toFixed(4)
@@ -294,7 +271,6 @@ export function useSearch() {
           setError(
             `成本已达 $${costStr} >= 预算 $${budgetStr}。请降低 max_iterations 或 budget 后重试。`
           );
-          // R10.5: budget_exceeded 时也更新 elapsed (走到这一步花了多久)
           if (fallbackStartRef.current) {
             setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
           }
@@ -305,51 +281,101 @@ export function useSearch() {
       };
 
       es.onerror = () => {
-        // H5: 陈旧事件 — 这条 es 已被新 search 替换
+        // H5: 陈旧事件
         if (myEs !== esRef.current) return;
-        // H6: 陈旧事件 — 用户已 reset / 启动新 search，genRef 已被 bump
+        // H6: 陈旧事件
         if (myGen !== genRef.current) return;
-        // R10.5 关键修复: 区分"正常关闭"(done 后 cleanup) vs "真出错".
-        // EventSource 在 done 事件被处理后调 cleanup() 关 es, 浏览器立刻
-        // 触发 onerror 报告"流结束". 之前这段会走到 else 分支 setError
-        // '连接中断，请重试' 覆盖已设的 result, UI 上像"白屏" + 一条
-        // 误导错误. 修复: 若 es.readyState === CLOSED (2) 表示流正常结束
-        // (cleanup 主动 close), 不算错误, 静默 return.
-        if (myEs.readyState === EventSource.CLOSED) return;
-        // 用户主动 reset 也会触发 onerror (reset → es.close() → onerror),
-        // 此时 result 应为 null, 不应被 setError 覆盖 — stopped 已被
-        // cleanup 设 true, 静默 return.
+
+        const readyState = myEs.readyState;
+        // R10.5 Fix-X1 关键修复: 区分 4 种状态
+        // - readyState=0 (CONNECTING): 浏览器 EventSource 自动重连中 (代理 60s 超时/网络抖动)
+        //   → 静默等待, 不应误报"连接中断"覆盖 result
+        // - readyState=1 (OPEN): 流活跃, 浏览器在重连中(onerror 触发时为 0, 重连成功后回 1)
+        // - readyState=2 (CLOSED): 流已关闭, 通常是 cleanup() 主动 close() 或后端报错关闭
+        if (readyState === EventSource.CONNECTING) {
+          // 浏览器自动重连中, 静默 30s 等重连; 超时则当作真错
+          if (receivedAnyEvent) {
+            // 已收到过事件, 说明 LLM 已开始响应, 真在跑, 不应报"中断"
+            // 设一个 30s 兜底: 如果 30s 内没收到任何事件, 才报"连接中断"
+            if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+            reconnectTimerRef.current = setTimeout(() => {
+              if (myEs !== esRef.current) return;
+              if (myGen !== genRef.current) return;
+              if (myEs.readyState === EventSource.CONNECTING) {
+                cleanup();
+                setError('连接中断, 请重试 (浏览器自动重连超时 30s)');
+                setLoading(false);
+              }
+            }, 30000);
+          }
+          return;
+        }
+        if (readyState === EventSource.CLOSED) return;  // 正常关闭
         if (stopped) return;
-        // EventSource 出错：若从未收到任何事件（连接本身就失败），回退到 /search + 假进度
+
+        // 真出错: 走到这里说明 readyState=OPEN(1) 且非正常关闭
+        // 区分"从未收到事件"(SSE 端 401/405 等) vs "中途断流"
         if (!receivedAnyEvent) {
+          // R10.5 Fix-X1: 大概率是 401 (OPEN_MODE=false + 没 key) 或 5xx.
+          // EventSource 不暴露 HTTP status, 只能走 /auth/me fetch 验证或后端
+          // /search/cancel 失败. 先做一次 authMe 检查: 401 立即给用户明确错误.
+          if (fallbackAttempted) {
+            cleanup();
+            setError('连接失败, 请检查后端服务');
+            setLoading(false);
+            return;
+          }
+          fallbackAttempted = true;
           cleanup();
-          stopFallbackProgress();
-          startFallbackProgress();
-          searchPapers(query, budget, maxIter, provider)
-            .then((data) => {
-              // H6: 异步回填时再校一次 generation — 防止 reset 后又被新数据覆盖
+          // 用 fetchMe 验证, 区分 401 (无 key) vs 5xx (后端挂了)
+          void fetchMe()
+            .then((me) => {
               if (myGen !== genRef.current) return;
-              setResult(data);
-              setCurrentStep(PIPELINE_STEPS.length - 1);
+              if (me === null) {
+                setError('未认证: 请先调用 /auth/login 拿 API Key (或在 .env 设 OPEN_MODE=true)');
+                setLoading(false);
+                return;
+              }
+              // 有 key 但 SSE 仍失败 — 后端问题, 降级到 /search POST
+              const fbTimer = setInterval(() => {
+                const sec = (Date.now() - fallbackStartRef.current) / 1000;
+                setElapsedSec(sec);
+                const step = Math.min(7, Math.floor(sec / 2));
+                setCurrentStep((prev) => (prev === step ? prev : step));
+              }, 1000);
+              fallbackTimerRef.current = fbTimer;
+              return searchPapers(query, budget, maxIter, provider)
+                .then((data) => {
+                  if (myGen !== genRef.current) return;
+                  setResult(data);
+                  setCurrentStep(PIPELINE_STEPS.length - 1);
+                })
+                .catch((err: any) => {
+                  if (myGen !== genRef.current) return;
+                  setError(err?.message || '搜索失败');
+                })
+                .finally(() => {
+                  if (fallbackTimerRef.current === fbTimer) {
+                    clearInterval(fbTimer);
+                    fallbackTimerRef.current = null;
+                  }
+                  if (myGen === genRef.current) setLoading(false);
+                });
             })
-            .catch((err: any) => {
+            .catch(() => {
               if (myGen !== genRef.current) return;
-              setError(err?.message || '搜索失败');
-            })
-            .finally(() => {
-              if (myGen !== genRef.current) return;
-              stopFallbackProgress();
+              setError('后端服务未连通, 请检查 http://127.0.0.1:8000');
               setLoading(false);
             });
         } else {
-          // 已经收到过事件，说明中途断流 — 直接失败
+          // 已收到事件, 中途断流
           cleanup();
-          setError('连接中断，请重试');
+          setError('连接中断, 请重试');
           setLoading(false);
         }
       };
     },
-    [startFallbackProgress, stopFallbackProgress]
+    [stopFallbackProgress]
   );
 
   const search = useCallback(
@@ -358,8 +384,7 @@ export function useSearch() {
         setError('请输入研究问题');
         return;
       }
-      // H6: bump generation to invalidate any in-flight stale events
-      // from a previous (possibly still-completing) search.
+      // H6: bump generation
       genRef.current += 1;
       setLoading(true);
       try {
@@ -381,22 +406,20 @@ export function useSearch() {
       clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
-    // H6: bump generation so any in-flight fallback .then() / SSE late
-    // events from the cancelled search see a stale `myGen` and bail.
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    // H6: bump generation
     genRef.current += 1;
-    // Round 5 S-5: 真调 /search/cancel 端点, 让后端有机会停 in-flight pipeline
-    // 之前 reset 只关前端 EventSource, 后端 SSE 仍可能继续跑完整个 graph (浪费 cost)
-    // 现在 fire-and-forget 调 cancel 端点; 失败静默 (cancel 是 best-effort)
     if (requestIdRef.current) {
       const rid = requestIdRef.current;
       requestIdRef.current = null;
-      // 不 await: reset 应该是同步的, cancel 走后台
       void fetch('/api/search/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ request_id: rid }),
       }).catch((e) => {
-        // 网络错也静默, 用户体验上 cancel 是 best-effort
         console.warn('[/search/cancel] request failed:', e);
       });
     }
@@ -405,8 +428,6 @@ export function useSearch() {
     setLastQuery('');
     setCurrentStep(0);
     setElapsedSec(0);
-    // H6: clear loading — otherwise the submit button stays disabled
-    // and CostDashboard keeps pulsing after a mid-flight reset.
     setLoading(false);
   }, []);
 
