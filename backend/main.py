@@ -192,6 +192,14 @@ _in_flight_searches: dict[str, asyncio.Task] = {}
 async def lifespan(app: FastAPI):
     """应用生命周期：启动期预热代理缓存，关闭期释放连接池。"""
     setup_logging()
+    # 启动：DB schema 初始化 (R10.5 Fix-X2: 修复 /auth/login 早于 /search
+    # 调用时 users/budget_user 表不存在的 500 错). 旧实现: 依赖 cache 函数
+    # 懒调用 _init_db_once, 但 auth 端点直接连 DB, 不走 cache 路径, 导致
+    # 首次 /auth/login 报 'no such table: users'. 修复: lifespan 启动时
+    # 显式 _init_db_once, 保证所有表就绪后再接受请求.
+    from backend.utils.cache import _init_db_once
+    _init_db_once()
+    logger.info("[lifespan] DB schema initialized (users + budget_user + search_cache + budget_state)")
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_proxy)
@@ -316,15 +324,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         status_code=422,
         content={"detail": "Invalid request: 参数校验失败"},
     )
-
-
-# R10.5 Fix-P1-Audit-2.4: 注册 /auth router 独立 limiter 的 429 handler.
-# auth_limiter 是 router-level Limiter, 跟 main.app.state.limiter 是不同实例.
-# slowapi 默认在 raise RateLimitExceeded 时通过 app.state.limiter 找 handler,
-# 但 router-level limiter 不知道, 必须显式 add_exception_handler.
-from backend.api.routes.auth import auth_limiter
-app.state.limiter = auth_limiter  # 覆盖: auth 限流更严, 跟主 limiter 选严的
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 
 # ===== Mount low-risk health routes (probes + provider catalog) =====
