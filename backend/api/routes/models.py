@@ -56,6 +56,14 @@ def _make_initial_state(
         "error": None,
         "provider": provider,
         "request_id": get_request_id(),
+        # R10.5 Fix-P1-Audit-2.3: 补全 SearchState TypedDict 全部 Optional 字段.
+        # 旧实现缺这俩, 节点用 state.get("prev_iter_cost_usd", 0.0) 兜底能跑但:
+        #   1. LangGraph Checkpoint 反序列化时缺键报错 (R11+ checkpoint 续传前提)
+        #   2. 严格 TypedDict 运行时校验失败
+        #   3. 阅读代码时不确定 state 里到底有没有该字段
+        # 修复: 显式补 None, 跟 TypedDict 声明对齐.
+        "prev_iter_cost_usd": None,
+        "top5_summary_cache": None,
     }
 
 

@@ -318,6 +318,15 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# R10.5 Fix-P1-Audit-2.4: 注册 /auth router 独立 limiter 的 429 handler.
+# auth_limiter 是 router-level Limiter, 跟 main.app.state.limiter 是不同实例.
+# slowapi 默认在 raise RateLimitExceeded 时通过 app.state.limiter 找 handler,
+# 但 router-level limiter 不知道, 必须显式 add_exception_handler.
+from backend.api.routes.auth import auth_limiter
+app.state.limiter = auth_limiter  # 覆盖: auth 限流更严, 跟主 limiter 选严的
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
 # ===== Mount low-risk health routes (probes + provider catalog) =====
 app.include_router(health_router)
 app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/register + /login + /me)

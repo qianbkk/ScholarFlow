@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
+from slowapi import Limiter
 
 from backend.auth.dependencies import (
     OPEN_MODE,
@@ -22,12 +23,22 @@ from backend.auth.dependencies import (
     issue_key_for_email,
     _register_user,
 )
+# R10.5 Fix-P1-Audit-2.4: 从 utils.network 导入 (避免 health.py 同样循环依赖)
+from backend.utils.network import get_real_ip
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 # FastAPI 0.115+ compatibility: include_router accesses on_startup/on_shutdown
 router.on_startup = []  # type: ignore[attr-defined]
 router.on_shutdown = []  # type: ignore[attr-defined]
+
+# R10.5 Fix-P1-Audit-2.4: auth 端点限流 — 防自动化 enumeration + 写数据库滥用.
+# 跟 /search 端点 5/minute;20/hour 同一档, register/login 同样是有状态的
+# 写操作, 限流水平应当一致. 30/minute 是 /providers enumeration 防护档, 这里
+# 用更严的 5/minute;20/hour (因为 register/login 每次都触发 SQLite 写).
+# 不依赖 main.py 的全局 limiter — router 自己限流更稳定 (slowapi 要求
+# module-level binding, 跟 /providers 限流器同源).
+auth_limiter = Limiter(key_func=get_real_ip)
 
 
 # ===== 请求/响应模型 =====
@@ -54,7 +65,8 @@ class UserInfo(BaseModel):
 
 # ===== 端点 =====
 @router.post("/register", response_model=AuthResponse)
-async def register(req: RegisterRequest) -> AuthResponse:
+@auth_limiter.limit("5/minute;20/hour")
+async def register(req: RegisterRequest, request: Request) -> AuthResponse:
     """注册新用户, 返一次性 API Key (丢失需 /auth/login 重新拿)."""
     if OPEN_MODE:
         # OPEN_MODE 模式下不创建新 user, 返 dev-user 占位
@@ -72,7 +84,8 @@ async def register(req: RegisterRequest) -> AuthResponse:
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(req: RegisterRequest) -> AuthResponse:
+@auth_limiter.limit("5/minute;20/hour")
+async def login(req: RegisterRequest, request: Request) -> AuthResponse:
     """用 email 拿 key. 已有用户返新 key (旧 key 失效), 新用户自动注册.
 
     学术工具信任模型: 高校邮箱是身份凭据. 不实现密码 (SMTP / OAuth
