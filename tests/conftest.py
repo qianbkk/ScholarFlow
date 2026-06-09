@@ -7,11 +7,15 @@ and provides an autouse fixture that resets all process-global state
 truly isolated regardless of execution order.
 
 R8.2 修复 (reviewer feedback 3.4 - 测试隔离):
-  旧实现: 只有 test_budget_lifecycle.py 自己手动 limiter.reset() + cache DB tmp_path。
+  旧实现: 只有 test_budget_lifecycle.py自己手动 limiter.reset() + cache DB tmp_path。
   别的 test (request_id_propagation / search_node_semaphore) 共享同一个 limiter,
   跑过 5 次就 429, 失败表现"随机飘"而非稳定可复现。
   新实现: autouse fixture 强制所有测试在 setup/teardown 阶段 reset 全部进程级状态,
   不依赖具体 test 自己 reset。
+
+R10.5 Fix-P0-B: 测试期默认 OPEN_MODE=true (本地开发后门), 避免
+没 X-API-Key 头返 401. 显式设此 env, 等价 CI 跑 .env.example 的
+OPEN_MODE=true 默认值. 测 auth 行为的 test 会 monkeypatch 关掉.
 """
 import os
 import sys
@@ -20,6 +24,11 @@ import sys
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
+
+# R10.5 Fix-P0-B: 默认开启 OPEN_MODE, 让现有 16 个 budget lifecycle test
+# 不需要 X-API-Key header 也能跑 (R10.5 之前的设计).
+# test_auth_api_key.py 显式 monkeypatch 改 OPEN_MODE, 测认证分支.
+os.environ.setdefault("OPEN_MODE", "true")
 
 
 import pytest
