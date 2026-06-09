@@ -71,33 +71,30 @@ _CACHE_DIR.mkdir(exist_ok=True)
 # 升级路径 (env var 启用):
 #   - SCHOLARFLOW_DB_DIR=/path/to/dir  → 强制 3 类表分文件:
 #       search_cache.sqlite / budget.sqlite / auth.sqlite
-#   - SCHOLARFLOW_DB_FILE=/path/to.db  → 强制所有表进同一文件 (覆盖 dir 设置)
+#   - 是 K8s 横向扩展的前置条件 (不同表不再争同一写锁).
 #
 # 中期方案 (R10.6+): Redis 替代 budget/auth 状态, 保留 SQLite 只存 search_cache
 # 长期方案 (R11+): PostgreSQL 存 user/auth, 跨多实例共享.
-_DEFAULT_DB_FILE = _CACHE_DIR / "search_cache.sqlite"
+#
+# R10.5 simplify: 单源 filename table (避免两个 dict 重复); 路径在模块导入时
+# 一次性解析 + 缓存 (避免每次 _connect_with_wal 都 os.environ.get + mkdir).
+_FILENAMES = {"cache": "search_cache.sqlite", "budget": "budget.sqlite", "auth": "auth.sqlite"}
 
 
-def _resolve_db_path(role: str) -> Path:
-    """按 role 返回 DB 文件路径. role ∈ {"cache", "budget", "auth"}.
-
-    默认全用 search_cache.sqlite (向后兼容). 设置 SCHOLARFLOW_DB_DIR 后,
-    三类表分文件: cache 走 search_cache.sqlite, budget 走 budget.sqlite,
-    auth 走 auth.sqlite. 这样不同表不再争同一写锁, 是 K8s 横向扩展的前置条件.
-    """
+def _init_db_paths() -> dict[str, Path]:
+    """根据 env 一次性解析 3 类表路径. 模块导入时跑一次."""
     override_dir = os.environ.get("SCHOLARFLOW_DB_DIR")
     if override_dir:
         d = Path(override_dir)
         d.mkdir(parents=True, exist_ok=True)
-        return d / {
-            "cache": "search_cache.sqlite",
-            "budget": "budget.sqlite",
-            "auth": "auth.sqlite",
-        }[role]
-    return _DEFAULT_DB_FILE
+        return {role: d / filename for role, filename in _FILENAMES.items()}
+    default = _CACHE_DIR / _FILENAMES["cache"]
+    # 默认: 三类表共用 search_cache.sqlite (向后兼容)
+    return {role: default for role in _FILENAMES}
 
 
-_DB = _resolve_db_path("cache")
+_DB_PATHS: dict[str, Path] = _init_db_paths()
+_DB = _DB_PATHS["cache"]  # 兼容旧 _DB 引用 (tests/ monkeypatch)
 
 # 并发安全：5s 等待锁超时（Gunicorn 多 worker 写同一文件时不会立即抛 lock 错）
 _BUSY_TIMEOUT_MS = 5000
@@ -119,19 +116,20 @@ def _connect_with_wal(role: str | None = None) -> sqlite3.Connection:
 
     Args:
         role: 表角色. None (默认) = 用模块级 _DB 变量 (向后兼容, 测试可 monkeypatch).
-              "cache" = search_cache 表; "budget" = budget_user / budget_state 表;
-              "auth" = users 表. 仅当 SCHOLARFLOW_DB_DIR 设置后, role 参数才真正
-              决定 DB 路径, 三类表分文件 (K8s 横向扩展前置). 未设环境变量时, role
-              参数被忽略, 所有表共用 _DB (向后兼容).
+              "cache" / "budget" / "auth" = 查 _DB_PATHS 缓存. 路径在模块导入时
+              一次性解析 + 缓存, 这里只是 dict lookup.
 
     Returns:
         sqlite3.Connection — 每次返回新连接（避免跨线程持有同一连接）
     """
-    # 向后兼容: 未设 SCHOLARFLOW_DB_DIR 时, 所有表共用 _DB (测试可 monkeypatch 切到 tmp_path)
-    if os.environ.get("SCHOLARFLOW_DB_DIR") and role is not None:
-        db_path = _resolve_db_path(role)
+    # 向后兼容: 测试 monkeypatch cache_mod._DB (legacy fixture) 切到 tmp_path.
+    # 旧 _DB 引用反映 monkeypatch, _DB_PATHS 是模块导入时缓存的不可变副本.
+    # 当 _DB != _DB_PATHS["cache"] 时, 优先 _DB (test fixture 模式).
+    if role is not None and _DB == _DB_PATHS["cache"]:
+        # 生产: 走 _DB_PATHS (避免每次 env lookup)
+        db_path = _DB_PATHS[role]
     else:
-        # 兼容模式: 用模块级 _DB 变量
+        # 测试 fixture 模式 或 role=None: 用模块级 _DB 变量
         db_path = _DB
     conn = sqlite3.connect(str(db_path), timeout=_BUSY_TIMEOUT_MS / 1000)
     # WAL 模式是持久化的（写入数据库文件 header），只需设置一次

@@ -7,13 +7,18 @@ R10.5 Fix-X8: 集成 CircuitBreaker, 连续失败 3 次后 30s 内熔断,
 避免 SS/OpenAlex 持续故障时 5 子查询 × 30s 超时 = 150s 纯等待.
 调用方应 try/except CircuitOpenError 立即降级到 mock.
 
-R10.5 Fix-P2-CCC (审计 diff 报告 §"过度敏感" + CCC.txt 关键问题 2):
-  - 429 Too Many Requests 现在也触发退避重试 (CCC.txt 关键问题 2)
-  - 优先读 Retry-After header (SS/OA 标准), 退避最少 1s, 最多 30s
-  - 5xx 也重试 (网络瞬时错误)
+R10.5 Fix-P2-CCC (CCC.txt 关键问题 2): 429 Too Many Requests 触发退避重试
+  - 优先读 Retry-After header (SS/OA 标准, 含 delta-seconds + HTTP-date)
+  - delta cap 30s, 失败降级到指数退避
+  - 5xx 同样重试 (网络瞬时错误)
+
+R10.5 simplify: 修 sleep-before-try bug (旧实现 attempt 0 也 sleep 0.3s,
+  浪费每次 429 重试延迟 0.3s). 现在只在 attempt > 0 时 sleep.
 """
 import asyncio
 import logging
+import time
+from email.utils import parsedate_to_datetime
 
 import httpx
 
@@ -60,11 +65,13 @@ async def _get_with_retry(
                 f"circuit_breaker[{breaker.name}] OPEN, "
                 f"skip retry and degrade immediately"
             )
-        if delay:
+        # R10.5 simplify: 修 sleep-before-try bug.
+        # 旧实现在 attempt 0 也 sleep delay=0.3s, 即首次 429 也白白等 0.3s
+        # 才发第一次请求. 现在 attempt 0 不睡.
+        if attempt > 0 and delay:
             await asyncio.sleep(delay)
         try:
             resp = await client.get(url, params=params, headers=headers, timeout=timeout)
-            # 429/5xx 触发退避重试 (CCC.txt 关键问题 2)
             if resp.status_code in _RETRYABLE_STATUS:
                 # 优先 Retry-After header (SS/OA 标准遵守)
                 retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
@@ -101,12 +108,25 @@ async def _get_with_retry(
 
 
 def _parse_retry_after(value: str | None) -> float | None:
-    """解析 Retry-After header (秒数或 HTTP-date). 返 None 表示无法解析."""
+    """解析 Retry-After header (秒数或 HTTP-date). 返 None 表示无法解析.
+
+    RFC 9110 §10.2.3 允许两种格式:
+      - delta-seconds:  "120"  →  120s 后重试
+      - HTTP-date:      "Wed, 21 Oct 2015 07:28:00 GMT"  →  该时刻之后重试
+    """
     if not value:
         return None
+    # 优先尝试 delta-seconds (数字字符串)
     try:
         return max(0.0, float(value))
     except ValueError:
-        # HTTP-date 格式: "Wed, 21 Oct 2015 07:28:00 GMT" — 简化: 忽略
+        pass
+    # 回退: HTTP-date 解析 (stdlib email.utils.parsedate_to_datetime)
+    try:
+        dt = parsedate_to_datetime(value)
+        if dt is None:
+            return None
+        return max(0.0, dt.timestamp() - time.time())
+    except (TypeError, ValueError):
         return None
 
