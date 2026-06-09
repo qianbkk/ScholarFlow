@@ -135,7 +135,11 @@ async def search(req: SearchRequest, request: Request):
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task
         try:
-            final = await asyncio.wait_for(asyncio_task, timeout=240.0)
+            # R10.5 关键修复: 240s → 480s. 跟 main.py 跟 README 对齐.
+            # 之前 Fix-10 / X-3 都没改这处 (只改了 main.py 跟 stream 端),
+            # 文档承诺与实际行为再次不一致.  真实 LLM max_iter=3 67s+ 接近 240s,
+            # 多次迭代会撞墙.
+            final = await asyncio.wait_for(asyncio_task, timeout=480.0)
         finally:
             _in_flight_searches.pop(req_id, None)
         elapsed = time.time() - t0

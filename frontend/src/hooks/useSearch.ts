@@ -262,6 +262,11 @@ export function useSearch() {
           setLoading(false);
         } else if (payload.event === 'error') {
           setError(payload.message || '搜索失败');
+          // R10.5: 错误时也更新 elapsed, CostDashboard 显示"走到哪步失败"
+          // 之前不更新, 用户看到 0.0s 困惑"瞬间就失败?"
+          if (fallbackStartRef.current) {
+            setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
+          }
           cleanup();
           setLoading(false);
         } else if (payload.event === 'budget_exceeded') {
@@ -281,6 +286,10 @@ export function useSearch() {
           setError(
             `成本已达 $${costStr} >= 预算 $${budgetStr}。请降低 max_iterations 或 budget 后重试。`
           );
+          // R10.5: budget_exceeded 时也更新 elapsed (走到这一步花了多久)
+          if (fallbackStartRef.current) {
+            setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
+          }
           cleanup();
           setLoading(false);
           return;
@@ -299,6 +308,10 @@ export function useSearch() {
         // 误导错误. 修复: 若 es.readyState === CLOSED (2) 表示流正常结束
         // (cleanup 主动 close), 不算错误, 静默 return.
         if (myEs.readyState === EventSource.CLOSED) return;
+        // 用户主动 reset 也会触发 onerror (reset → es.close() → onerror),
+        // 此时 result 应为 null, 不应被 setError 覆盖 — stopped 已被
+        // cleanup 设 true, 静默 return.
+        if (stopped) return;
         // EventSource 出错：若从未收到任何事件（连接本身就失败），回退到 /search + 假进度
         if (!receivedAnyEvent) {
           cleanup();

@@ -412,10 +412,9 @@ async def search(req: SearchRequest, request: Request):
             )
         except Exception as cache_err:
             logger.warning(f"[/search] cache write failed (non-fatal): {cache_err}")
-        # Fix-E R10.5: 删除 set_semantic_cached 调用 (转发到 set_cached_async,
-        # 同一行写两次相同数据 — 重复 I/O). 语义缓存留 R11 真实实现时再调用.
-        except Exception as sem_err:
-            logger.warning(f"[/search] semantic cache write failed (non-fatal): {sem_err}")
+        # Fix-E R10.5: 删除 set_semantic_cached 调用 (重复 I/O 同一行写两次).
+        # 上面的 except Exception cache_err 已经捕获, 旧 L417-418 except sem_err
+        # 是死代码, 顺手删掉 (语义缓存留 R11 真实实现再调用).
 
         return response_obj
     except asyncio.TimeoutError:
