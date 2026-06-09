@@ -90,6 +90,9 @@ export interface SearchResult {
   // QueryPanel 据此显示警告 banner. 老 cache 数据可能缺这俩字段, 故 optional.
   is_degraded_response?: boolean;
   fallback_paper_count?: number;
+  // R10.5 P0: BibTeX / RIS 导出字符串, 一键导入 Zotero / Mendeley / EndNote
+  bibtex?: string;
+  ris?: string;
 }
 
 export interface SearchState {

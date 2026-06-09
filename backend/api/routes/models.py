@@ -22,6 +22,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
+from backend.utils.export import papers_to_bibtex, papers_to_ris  # R10.5 P0
 from backend.utils.observability import get_request_id
 
 
@@ -108,6 +109,11 @@ class SearchResponse(BaseModel):
     elapsed_seconds: float = 0.0
     is_degraded_response: bool = False
     fallback_paper_count: int = 0
+    # R10.5 P0 (用户反馈): BibTeX / RIS 导出字符串, 前端直接拿
+    # 给用户下载 (导入 Zotero / Mendeley / EndNote). 不需后端二次
+    # 调用, 也避免前端重复格式化逻辑.
+    bibtex: str = ""
+    ris: str = ""
 
 
 def _build_search_response(
@@ -166,4 +172,8 @@ def _build_search_response(
         elapsed_seconds=round(elapsed, 2),
         is_degraded_response=is_degraded,
         fallback_paper_count=fallback_count,
+        # R10.5 P0: 在响应构造时同步生成 BibTeX / RIS, 前端可直接下载
+        # 不用再调单独的 /export 端点. 论文列表为空时输出空串.
+        bibtex=papers_to_bibtex(ranked[:25]) if ranked else "",
+        ris=papers_to_ris(ranked[:25]) if ranked else "",
     )

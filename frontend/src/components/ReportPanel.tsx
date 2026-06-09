@@ -17,13 +17,19 @@ interface Props {
   errorMsg?: string | null;
   lastQuery?: string | null;
   onRetry?: (query: string) => void;
+  // R10.5 P0: BibTeX / RIS 字符串 (后端 SearchResponse 返)
+  // 用户一键导入 Zotero / Mendeley / EndNote
+  bibtex?: string;
+  ris?: string;
 }
 
 export function ReportPanel({
   report, loading, query,
   errorMsg = null, lastQuery = null, onRetry,
+  bibtex = '', ris = '',
 }: Props) {
   const [copied, setCopied] = useState(false);
+  const [exportedFormat, setExportedFormat] = useState<string | null>(null);
 
   const html = useMemo(() => {
     if (!report) return '';
@@ -90,9 +96,31 @@ export function ReportPanel({
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    // 延迟撤销: a.click() 触发下载是异步的, 立即撤销会导致 Firefox/Safari 下载失败
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
+
+  // R10.5 P0: BibTeX / RIS 下载, 一键导入 Zotero / Mendeley / EndNote
+  const handleExport = (format: 'bibtex' | 'ris') => {
+    const content = format === 'bibtex' ? bibtex : ris;
+    if (!content) return;
+    const mime = format === 'bibtex'
+      ? 'application/x-bibtex'
+      : 'application/x-research-info-systems';
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `scholarflow_papers.${format}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    setExportedFormat(format);
+    setTimeout(() => setExportedFormat(null), 1500);
+  };
+
+  // R10.5 P0: BibTeX/RIS 只有在有论文时才显示, 否则空字符串会下载空文件
+  const hasExport = !!(bibtex && bibtex.includes('@article'));
 
   return (
     <main className="flex-1 bg-[var(--sf-bg)] overflow-y-auto">
@@ -118,6 +146,25 @@ export function ReportPanel({
               >
                 Download
               </button>
+              {/* R10.5 P0: BibTeX / RIS 导出, 一键导入 Zotero / Mendeley / EndNote */}
+              {hasExport && (
+                <>
+                  <button
+                    onClick={() => handleExport('bibtex')}
+                    className="text-xs px-2.5 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-50 transition"
+                    title="导出 BibTeX (导入 Zotero / JabRef)"
+                  >
+                    {exportedFormat === 'bibtex' ? '✓ .bib' : '.bib'}
+                  </button>
+                  <button
+                    onClick={() => handleExport('ris')}
+                    className="text-xs px-2.5 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-50 transition"
+                    title="导出 RIS (导入 EndNote / Mendeley / RefMan)"
+                  >
+                    {exportedFormat === 'ris' ? '✓ .ris' : '.ris'}
+                  </button>
+                </>
+              )}
             </div>
           )}
         </div>

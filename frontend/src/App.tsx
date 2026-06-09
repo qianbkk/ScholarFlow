@@ -162,6 +162,8 @@ export default function App() {
           query={lastQuery}
           errorMsg={error}
           lastQuery={lastQuery}
+          bibtex={result?.bibtex ?? ''}
+          ris={result?.ris ?? ''}
           onRetry={(q) =>
             lastSearchOpts
               ? search(q, lastSearchOpts.budget, lastSearchOpts.maxIter, lastSearchOpts.provider)
