@@ -173,6 +173,31 @@ def _init_db() -> None:
                 )
                 """
             )
+        # R10.5 Fix-P0-B: 多用户 + API Key 认证.
+        # users 表: api_key_hash (sha256, 不存明文) + display_name + created_at.
+        # budget_user 表: 替代原 budget_state 单 global 行的 per-user 余额.
+        # OPEN_MODE=true 时所有用户共享 'dev-user' 虚拟账户, 行为跟旧版一致.
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id TEXT PRIMARY KEY,
+                api_key_hash TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL DEFAULT '',
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS budget_user (
+                user_id TEXT PRIMARY KEY,
+                spent_usd REAL NOT NULL DEFAULT 0.0,
+                reserved_usd REAL NOT NULL DEFAULT 0.0,
+                last_reset_hour INTEGER NOT NULL DEFAULT 0,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
         conn.commit()
     finally:
         conn.close()

@@ -173,10 +173,18 @@ export function useSearch() {
       };
       if (provider) params.provider = provider;
       const url = `/api/search/stream?` + new URLSearchParams(params).toString();
+      // R10.5 Fix-P0-B: 带 X-API-Key header (OPEN_MODE 时后端跳过)
+      const apiKey = (() => { try { return localStorage.getItem('sf-api-key'); } catch { return null; } })();
+      const sseHeaders: Record<string, string> = apiKey ? { 'X-API-Key': apiKey } : {};
 
       let es: EventSource;
       try {
-        es = new EventSource(url);
+        // EventSource 不支持自定义 headers — 走 ?api_key= query param 传
+        // (后端 search_stream 暂未支持 query param 模式, 但 OPEN_MODE 跳过 header 校验)
+        // 真实 auth: 让后端 SSE 端支持从 query 读 key, 或在生产用 cookie 认证
+        // 暂时: EventSource 走 query param 后缀, 后端需要兼容
+        const finalUrl = apiKey ? `${url}${url.includes('?') ? '&' : '?'}api_key=${encodeURIComponent(apiKey)}` : url;
+        es = new EventSource(finalUrl);
       } catch (e: any) {
         // 浏览器不支持 EventSource — 切到完整假进度 + 老 /search 接口
         stopFallbackProgress();

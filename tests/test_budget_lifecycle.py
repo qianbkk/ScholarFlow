@@ -186,7 +186,7 @@ def test_budget_returned_on_runtime_error(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -224,7 +224,7 @@ def test_budget_returned_on_value_error(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -258,7 +258,7 @@ def test_budget_returned_on_key_error(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -292,7 +292,7 @@ def test_budget_returned_on_generic_exception(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -326,7 +326,7 @@ def test_budget_returned_on_custom_exception(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -363,7 +363,7 @@ def test_budget_returned_on_timeout(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -399,7 +399,7 @@ def test_budget_return_on_success_returns_diff(client, monkeypatch):
 
     return_calls = []
 
-    async def fake_return_budget(amount):
+    async def fake_return_budget(amount, **kwargs):
         return_calls.append(amount)
         return None
 
@@ -755,10 +755,17 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
 
 
 def test_stream_source_has_budget_return_on_exception():
-    """[from sse_disconnect] Static guard: /search/stream's event_generator must call _return_budget on exception."""
+    """[from sse_disconnect] Static guard: /search/stream's event_generator must call _return_budget on exception.
+
+    R10.5 Fix-P0-B 兼容性: main.py 调 _return_budget 时传 user_id=
+    (per-user budget 隔离). 静态 guard 接受两种形态: 旧字面量
+    "_return_budget(budget)" 或 新 "_return_budget(budget, user_id=...)".
+    """
     from pathlib import Path
     src = Path(main_mod.__file__).read_text(encoding="utf-8")
-    assert "_return_budget(budget)" in src, (
+    has_legacy = "_return_budget(budget)" in src
+    has_new = "_return_budget(budget, user_id=" in src
+    assert has_legacy or has_new, (
         "CRITICAL-003 FAIL: main.py must have _return_budget(budget) call in the "
         "stream endpoint's exception handler."
     )

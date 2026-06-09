@@ -162,11 +162,11 @@ def _load_budget_state() -> None:
         logger.warning(f"[budget] failed to load state: {e}, starting fresh")
 
 
-async def _check_and_reserve_budget(estimated_cost: float) -> None:
-    """原子化地"检查 + 预留"全局预算（H1+H2+TOCTOU 修复）。
+async def _check_and_reserve_budget(estimated_cost: float, user_id: str = "dev-user") -> None:
+    """原子化地"检查 + 预留"per-user 预算（R10.5 Fix-P0-B: 多用户 budget 隔离）。
 
     H1: 整个 check + reserve 在 `_budget_lock` 临界区内完成，关闭进程内 TOCTOU 竞态。
-    H2: counter 状态存储在 SQLite WAL 中（budget_state 表），跨 worker 进程原子。
+    H2: counter 状态存储在 SQLite WAL 中（budget_user 表），跨 worker 进程原子。
     TOCTOU fix: 读-改-写 全程在 `BEGIN IMMEDIATE` 事务中，
         防止多 worker 进程间 SQLite 层面的 TOCTOU 竞态(普通 BEGIN 拿到的是
         共享锁,第二个 worker 进来时读到的仍是旧 total,会超额累加)。
@@ -174,25 +174,37 @@ async def _check_and_reserve_budget(estimated_cost: float) -> None:
 
     Args:
         estimated_cost: 本次请求愿意预留的最大开销（= `req.budget`，即用户上限）。
+        user_id: 多用户隔离 key. OPEN_MODE 模式统一传 "dev-user".
     """
     async with _budget_lock:
         # 从 DB 读最新值（避免任何缓存导致跨进程看到的旧 total）
-        total, reset_ts = _load_budget_from_db()
+        spent, reserved, reset_ts = _load_user_budget_from_db(user_id)
         now = _time.time()
         if now - reset_ts > 3600:
-            total = 0.0
+            spent = 0.0
+            reserved = 0.0
             reset_ts = now
-        if total + estimated_cost > get_global_hourly_budget():
-            raise HTTPException(503, detail="全局预算上限已达，请稍后重试")
+        # Per-user 隔离: 各自 hour 预算 = global 1/10 (5 美元),
+        # 高校部署可调. OPEN_MODE 时 dev-user 用 global.
+        if user_id == "dev-user":
+            hour_cap = get_global_hourly_budget()
+        else:
+            # 多用户: 每用户 5 美元/小时, 5 用户 = 25 美元共享
+            hour_cap = 5.0
+        if spent + estimated_cost > hour_cap:
+            raise HTTPException(
+                503,
+                detail=f"用户 {user_id} 本小时预算上限 ${hour_cap:.2f} 已达, 请稍后重试",
+            )
         # 在锁内完成预留 + 持久化（下一个 worker 读到的就是新 total）
-        new_total = total + estimated_cost
-        _save_budget_to_db(new_total, reset_ts)
-        # 进程内缓存 reset_ts，避免每个请求都读 DB
+        new_spent = spent + estimated_cost
+        new_reserved = reserved + estimated_cost
+        _save_user_budget_to_db(user_id, new_spent, new_reserved, reset_ts)
         set_budget_reset_ts(reset_ts)
 
 
-async def _return_budget(amount: float) -> None:
-    """归还实际开销与预留之间的差额(防止过度预留耗尽全局预算)。
+async def _return_budget(amount: float, user_id: str = "dev-user") -> None:
+    """归还实际开销与预留之间的差额(防止过度预留耗尽用户预算)。
 
     入口 `_check_and_reserve_budget` 预留的是 `req.budget`(用户上限),
     但实际 `total_cost_usd` 通常远低于上限。差额若不归还,会导致
@@ -208,23 +220,123 @@ async def _return_budget(amount: float) -> None:
         conn = _connect_with_wal()
         try:
             conn.execute("BEGIN IMMEDIATE")  # 立即获取写锁,防多 worker TOCTOU
-            row = conn.execute(
-                "SELECT total, reset_ts FROM budget_state WHERE key='global'"
-            ).fetchone()
-            if row is None:
-                return  # 表未初始化,无须归还
-            total = float(row[0])
-            reset_ts = float(row[1])
-            # 边界保护: 不能减到负数
-            new_total = max(0.0, total - amount)
-            conn.execute(
-                "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
-                (new_total, reset_ts),
-            )
+            if user_id == "dev-user":
+                # OPEN_MODE dev-user 走旧 budget_state 'global' (向后兼容)
+                row = conn.execute(
+                    "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+                ).fetchone()
+                if row is None:
+                    return
+                total = float(row[0])
+                reset_ts = float(row[1])
+                new_total = max(0.0, total - amount)
+                conn.execute(
+                    "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                    (new_total, reset_ts),
+                )
+            else:
+                # 多用户路径走 budget_user
+                try:
+                    row = conn.execute(
+                        "SELECT spent_usd, reserved_usd, last_reset_hour "
+                        "FROM budget_user WHERE user_id=?",
+                        (user_id,),
+                    ).fetchone()
+                except Exception:
+                    # 旧 test fixture 没 _init_db(), 表不存在
+                    conn.rollback()
+                    return
+                if row is None:
+                    return  # 用户不存在
+                spent = float(row[0])
+                reserved = float(row[1])
+                reset_ts = float(row[2])
+                new_spent = max(0.0, spent - amount)
+                new_reserved = max(0.0, reserved - amount)
+                conn.execute(
+                    "UPDATE budget_user SET spent_usd=?, reserved_usd=?, "
+                    "last_reset_hour=?, updated_at=? WHERE user_id=?",
+                    (new_spent, new_reserved, reset_ts, _time.time(), user_id),
+                )
             conn.commit()
             set_budget_reset_ts(reset_ts)
         finally:
             conn.close()
+
+
+# ===== R10.5 Fix-P0-B: per-user budget DB 助手 =====
+
+def _load_user_budget_from_db(user_id: str) -> tuple[float, float, float]:
+    """从 budget_user / budget_state 读 (spent, reserved, reset_ts). 无行返 (0, 0, now).
+
+    R10.5 Fix-P0-B 兼容: dev-user 走旧 budget_state 'global' 行 (向后兼容,
+    旧 test 期望 total 单字段, _save_user_budget_to_db 写到 budget_state
+    这里也读 budget_state 保持对称). 多用户走 budget_user 表.
+
+    旧 test fixture 用 _init_budget_table() 但没 _init_db() 时 budget_user
+    表不存在, 走默认.
+    """
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal()
+    try:
+        if user_id == "dev-user":
+            # 读 budget_state 'global' total (向后兼容旧 _load_budget_from_db)
+            try:
+                row = conn.execute(
+                    "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+                ).fetchone()
+            except Exception:
+                return 0.0, 0.0, _time.time()
+            if row is None:
+                return 0.0, 0.0, _time.time()
+            total = float(row[0])
+            reset_ts = float(row[1])
+            return total, total, reset_ts  # reserved == spent (没单独字段)
+        try:
+            row = conn.execute(
+                "SELECT spent_usd, reserved_usd, last_reset_hour "
+                "FROM budget_user WHERE user_id=?",
+                (user_id,),
+            ).fetchone()
+        except Exception:
+            return 0.0, 0.0, _time.time()
+        if row is None:
+            return 0.0, 0.0, _time.time()
+        return float(row[0]), float(row[1]), float(row[2])
+    finally:
+        conn.close()
+
+
+def _save_user_budget_to_db(
+    user_id: str, spent: float, reserved: float, reset_ts: float
+) -> None:
+    """持久化 per-user budget. 借用原 budget_state 表的 key='global' 行
+    给 dev-user 用, 避免双轨."""
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal()
+    try:
+        if user_id == "dev-user":
+            # OPEN_MODE dev-user 走旧 budget_state 'global' 行 (向后兼容)
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                (spent, reset_ts),
+            )
+        else:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                "INSERT INTO budget_user (user_id, spent_usd, reserved_usd, "
+                "last_reset_hour, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "spent_usd=excluded.spent_usd, "
+                "reserved_usd=excluded.reserved_usd, "
+                "last_reset_hour=excluded.last_reset_hour, "
+                "updated_at=excluded.updated_at",
+                (user_id, spent, reserved, reset_ts, _time.time()),
+            )
+        conn.commit()
+    finally:
+        conn.close()
 
 
 # 模块导入时自动加载一次（保持 main.py 旧行为：进程启动即恢复预算状态）

@@ -3,6 +3,31 @@ import type { SearchResult } from '../types';
 // Vite dev proxy 走 /api 前缀；生产环境可直接指向后端
 const API_BASE = '/api';
 
+// R10.5 Fix-P0-B: API Key 认证. 从 localStorage 读, OPEN_MODE 时后端跳过.
+const STORED_KEY = 'sf-api-key';
+
+function getApiKey(): string | null {
+  try {
+    return localStorage.getItem(STORED_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setApiKey(key: string | null): void {
+  try {
+    if (key) localStorage.setItem(STORED_KEY, key);
+    else localStorage.removeItem(STORED_KEY);
+  } catch {
+    // localStorage 不可用 (隐私模式) 静默
+  }
+}
+
+function authHeaders(): Record<string, string> {
+  const key = getApiKey();
+  return key ? { 'X-API-Key': key } : {};
+}
+
 export interface ProviderInfo {
   id: string;
   name: string;
@@ -29,8 +54,13 @@ export interface ProvidersResponse {
 }
 
 export async function fetchProviders(): Promise<ProvidersResponse> {
-  const resp = await fetch(`${API_BASE}/providers`);
-  if (!resp.ok) throw new Error('fetch providers failed');
+  const resp = await fetch(`${API_BASE}/providers`, {
+    headers: { ...authHeaders() },
+  });
+  if (!resp.ok) {
+    if (resp.status === 401) throw new Error('未认证: 请先登录拿 API Key');
+    throw new Error('fetch providers failed');
+  }
   return resp.json();
 }
 
@@ -44,7 +74,7 @@ export async function searchPapers(
   if (provider) body.provider = provider;
   const resp = await fetch(`${API_BASE}/search`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -53,13 +83,72 @@ export async function searchPapers(
       const err = await resp.json();
       detail = err.detail || detail;
     } catch {}
+    if (resp.status === 401) detail = '未认证: 请先登录拿 API Key';
     throw new Error(detail);
   }
   return resp.json();
 }
 
 export async function healthCheck(): Promise<{ status: string; service: string; version: string }> {
-  const resp = await fetch(`${API_BASE}/health`);
+  const resp = await fetch(`${API_BASE}/health`, {
+    headers: { ...authHeaders() },
+  });
   if (!resp.ok) throw new Error('Health check failed');
   return resp.json();
+}
+
+// ===== R10.5 Fix-P0-B: Auth 端点 =====
+export interface AuthResponse {
+  user_id: string;
+  display_name: string;
+  api_key: string;
+  open_mode: boolean;
+}
+
+export interface UserInfo {
+  user_id: string;
+  display_name: string;
+  created_at: number;
+  open_mode: boolean;
+}
+
+export async function registerOrLogin(
+  email: string,
+  displayName: string = ''
+): Promise<AuthResponse> {
+  const resp = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, display_name: displayName }),
+  });
+  if (!resp.ok) {
+    let detail = 'login failed';
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw new Error(detail);
+  }
+  const data: AuthResponse = await resp.json();
+  setApiKey(data.api_key);
+  return data;
+}
+
+export function logout(): void {
+  setApiKey(null);
+}
+
+export async function fetchMe(): Promise<UserInfo | null> {
+  const key = getApiKey();
+  if (!key) return null;
+  const resp = await fetch(`${API_BASE}/auth/me`, {
+    headers: { 'X-API-Key': key },
+  });
+  if (resp.status === 401) {
+    setApiKey(null);
+    return null;
+  }
+  if (!resp.ok) return null;
+  return resp.json();
+}
+
+export function hasApiKey(): boolean {
+  return !!getApiKey();
 }
