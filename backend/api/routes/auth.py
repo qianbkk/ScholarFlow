@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, Field
 
 from backend.auth.dependencies import (
     OPEN_MODE,
@@ -32,7 +32,9 @@ router.on_shutdown = []  # type: ignore[attr-defined]
 
 # ===== 请求/响应模型 =====
 class RegisterRequest(BaseModel):
-    email: EmailStr = Field(..., description="学术邮箱 (作为 user_id 来源)")
+    # email 用 str 而非 pydantic EmailStr, 避免 email-validator 依赖.
+    # 我们只用 email 派生 user_id, 格式校验在 issue_key_for_email 里做.
+    email: str = Field(..., min_length=3, max_length=254, description="学术邮箱 (作为 user_id 来源)")
     display_name: str = Field(default="", max_length=64, description="显示名")
 
 
