@@ -38,6 +38,8 @@ This section lists CVEs that **affect** this project but are **not yet patched**
 |----------------------|--------------------------|-------------------|------------------|--------------------|
 | PYSEC-2024-38        | langgraph                | 0.6.11            | Upgrade to 1.0.0 (breaking API change — full StateGraph rewrite needed) | **R11+ planned** |
 | GHSA-9hjg-9rjm-9j3p  | langgraph-checkpoint     | 3.0.1             | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
+| PYSEC-2026-83        | langgraph                | 0.6.11            | Upgrade to 1.0.10 (same breaking API change as PYSEC-2024-38) | **R11+ planned** |
+| CVE-2026-27794       | langgraph-checkpoint     | 3.0.1             | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
 
 CI runs `pip-audit` on every push with these CVEs explicitly whitelisted via `--ignore-vuln`. Any **new** CVE will fail the build. To upgrade: open a tracked issue, then remove the `--ignore-vuln` flag for that CVE.
 

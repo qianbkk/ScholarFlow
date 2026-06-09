@@ -48,10 +48,14 @@ jobs:
         # 白名单:
         #   PYSEC-2024-38: langgraph 0.6.11, 升级到 1.0 是破坏性 API 变更 (R11+ 评估)
         #   GHSA-9hjg-9rjm-9j3p: langgraph-checkpoint 3.0.1, 跟 langgraph 同
+        #   PYSEC-2026-83: langgraph 0.6.11, 同上 (新 CVE, 修复版本 1.0.10)
+        #   CVE-2026-27794: langgraph-checkpoint 3.0.1, 同上 (新 CVE, 修复版本 4.0.0)
         run: |
           pip-audit -r backend/requirements.txt \
             --ignore-vuln PYSEC-2024-38 \
-            --ignore-vuln GHSA-9hjg-9rjm-9j3p
+            --ignore-vuln GHSA-9hjg-9rjm-9j3p \
+            --ignore-vuln PYSEC-2026-83 \
+            --ignore-vuln CVE-2026-27794
 
   frontend:
     runs-on: ubuntu-latest
