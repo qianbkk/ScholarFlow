@@ -326,7 +326,14 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# ===== Mount low-risk health routes (probes + provider catalog) =====
+# ===== R10.5 Fix-P2-4-Audit-diff: API /v1 前缀 (向后兼容) =====
+# 新版客户端用 /api/v1/* (e.g. /api/v1/search, /api/v1/auth/login).
+# 旧版客户端继续用 /* (e.g. /search, /auth/login) — 不破坏现有集成.
+# 当未来引入 breaking change 时, 把 /api/v1/* 升到 /api/v2/*, 旧 /api/v1/* 仍跑 1 年.
+API_V1_PREFIX = "/api/v1"
+app.include_router(health_router, prefix=API_V1_PREFIX)
+app.include_router(auth_router, prefix=API_V1_PREFIX)
+# Deprecated alias: 旧客户端继续用无前缀路径
 app.include_router(health_router)
 app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/register + /login + /me)
 
@@ -677,6 +684,21 @@ async def search_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ===== R10.5 Fix-P2-4: /api/v1/search /search/stream /search/cancel aliases =====
+# Deprecated — 旧客户端继续用 /search; 新客户端用 /api/v1/search.
+# 当未来 v2 引入时, /api/v1/* 路径继续服务旧逻辑, 旧 /search 路径最终下线.
+app.add_api_route(
+    "/api/v1/search", search, methods=["POST"],
+    response_model=SearchResponse,
+)
+app.add_api_route(
+    "/api/v1/search/stream", search_stream, methods=["GET"],
+)
+app.add_api_route(
+    "/api/v1/search/cancel", cancel_search, methods=["POST"],
+)
 
 
 if __name__ == "__main__":

@@ -6,11 +6,6 @@ pytest-cov>=4.0.0
 # 安全
 pip-audit>=2.6.0
 
-# 生产部署 (gunicorn 拉 UvicornWorker 跑后端; 不在 backend/requirements.txt
-# 是因为它是进程管理器不是运行时依赖 — `pip install -r requirements-dev.txt`
-# 然后 `gunicorn backend.main:app` 即可, 见 README 快速开始).
-gunicorn>=21.0.0,<23.0.0
-
 # 类型检查 (R10 可选)
 mypy>=1.0.0
 

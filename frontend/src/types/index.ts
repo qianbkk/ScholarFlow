@@ -7,6 +7,9 @@ export interface Paper {
   citation_count: number;
   venue: string;
   url: string;
+  // R10.5 Fix-P1-Audit-diff: 后端 OpenAlex 返回 doi, 之前前端类型缺失导致
+  // BibTeX 导出拿不到 DOI. 改 ?string optional 防老 mock 数据无 doi 字段.
+  doi?: string;
   source: string;
   is_expanded: boolean;
   relevance_score: number;

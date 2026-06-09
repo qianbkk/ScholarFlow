@@ -9,3 +9,8 @@ python-dotenv>=1.0.0,<2.0.0
 pydantic>=2.7.0,<3.0.0
 slowapi>=0.1.9,<1.0.0
 numpy>=1.26.0,<3.0.0  # semantic_cache.py 占位桩保留 (R11 真实 embedding 实现用); >=1.26 是 Python 3.12 wheel 起点
+# R10.5 Fix-P5-CCC: gunicorn 是生产 WSGI/ASGI server, 移到生产依赖.
+# 之前在 requirements-dev.txt 是错的: dev 本地用 uvicorn --reload, 但生产
+# Docker / K8s 镜像必须 install 生产 deps, gunicorn 缺了会启动失败.
+# 配 UvicornWorker: `gunicorn backend.main:app -k uvicorn.workers.UvicornWorker -w 2`
+gunicorn>=21.0.0,<23.0.0
