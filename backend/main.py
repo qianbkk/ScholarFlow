@@ -529,7 +529,10 @@ async def search_stream(
             step_count = 0
 
             try:
-                async with asyncio.timeout(240.0):
+                # R10.5 关键修复: 240s → 480s. 跟 /search 端 480s 对齐, 跟 README 480s 对齐.
+                # 之前 main.py 注释/日志说 480s 但 asyncio.timeout 实际是 240s, 文档承诺与代码不符.
+                # 真实 LLM 8 节点 max_iter=3 实测 67s+ (MiniMax M3), 多次迭代会逼近 240s.
+                async with asyncio.timeout(480.0):
                     async for chunk in search_graph.astream(initial, stream_mode="updates"):
                         for node_name, state_update in chunk.items():
                             if not isinstance(state_update, dict):

@@ -292,6 +292,13 @@ export function useSearch() {
         if (myEs !== esRef.current) return;
         // H6: 陈旧事件 — 用户已 reset / 启动新 search，genRef 已被 bump
         if (myGen !== genRef.current) return;
+        // R10.5 关键修复: 区分"正常关闭"(done 后 cleanup) vs "真出错".
+        // EventSource 在 done 事件被处理后调 cleanup() 关 es, 浏览器立刻
+        // 触发 onerror 报告"流结束". 之前这段会走到 else 分支 setError
+        // '连接中断，请重试' 覆盖已设的 result, UI 上像"白屏" + 一条
+        // 误导错误. 修复: 若 es.readyState === CLOSED (2) 表示流正常结束
+        // (cleanup 主动 close), 不算错误, 静默 return.
+        if (myEs.readyState === EventSource.CLOSED) return;
         // EventSource 出错：若从未收到任何事件（连接本身就失败），回退到 /search + 假进度
         if (!receivedAnyEvent) {
           cleanup();
