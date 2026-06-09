@@ -43,7 +43,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: https:; "
             "connect-src 'self'; "
-            "frame-ancestors 'none'; "
+            "frame-ancestors 'none'"
         )
         return response
 
