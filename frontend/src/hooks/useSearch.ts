@@ -85,6 +85,9 @@ export function useSearch() {
   // CONNECTING, 走到 else 分支 setError('连接中断, 请重试') 覆盖 result, UI 看似
   // 白屏. 修复: 显式识别 CONNECTING 是浏览器自动重连, 静默等待.
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // R10.5 Fix-P0-2.2-b: 全局兜底超时 timer, 防止 SSE 真死锁时 (e.g. 401 / 后端卡死)
+  // 90s 仍无任何事件时强制报错, 不再让用户看 1000s loading.
+  const globalTimeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopFallbackProgress = useCallback(() => {
     if (fallbackTimerRef.current) {
@@ -150,6 +153,12 @@ export function useSearch() {
         max_iter: String(maxIter),
       };
       if (provider) params.provider = provider;
+      // R10.5 Fix-P0-2.2: EventSource 不支持自定义 header, 必须走 ?api_key= query param.
+      // 不传 api_key 后端 401, 浏览器 EventSource 自动重连 CONNECTING, 永远不发事件 → loading 死锁.
+      // 已知风险: api_key 进 URL → Nginx/浏览器历史/Referer 日志泄漏 (P0 审计 2.2).
+      // 中期方案 (P0-2): 改 fetch + ReadableStream + X-API-Key header. 当前先传 query param 解死锁.
+      const apiKey = (typeof localStorage !== 'undefined' && localStorage.getItem('sf-api-key')) || null;
+      if (apiKey) params.api_key = apiKey;
       const url = `/api/search/stream?` + new URLSearchParams(params).toString();
 
       let es: EventSource;
@@ -210,7 +219,28 @@ export function useSearch() {
           clearTimeout(reconnectTimerRef.current);
           reconnectTimerRef.current = null;
         }
+        // R10.5 Fix-P0-2.2-b: 清除全局超时兜底 timer
+        if (globalTimeoutTimerRef.current) {
+          clearTimeout(globalTimeoutTimerRef.current);
+          globalTimeoutTimerRef.current = null;
+        }
       };
+
+      // R10.5 Fix-P0-2.2-b: 全局兜底超时 (90s).
+      // 之前事件级 30s 兜底只在 receivedAnyEvent=true 时启动, 没收到任何事件时
+      // (e.g. 401 死锁 / SSE 端点永远不响应) 永远不触发, 加载 1000s 还是 loading.
+      // 90s 跟后端 480s 超时对齐: 给真实 LLM 完整跑完 + 后端 SSE 推 done/error 的窗口.
+      if (globalTimeoutTimerRef.current) clearTimeout(globalTimeoutTimerRef.current);
+      globalTimeoutTimerRef.current = setTimeout(() => {
+        if (myGen !== genRef.current) return;
+        if (stopped) return;
+        // 90s 仍没收到任何事件 → 后端真卡死 (e.g. 401 / 死锁 / 后端崩)
+        if (!receivedAnyEvent) {
+          cleanup();
+          setError('连接超时 (90s 未收到任何响应). 请检查后端服务 / API Key 有效性.');
+          setLoading(false);
+        }
+      }, 90000);
 
       es.onopen = () => {
         // 连接建立, 不做处理
@@ -378,6 +408,167 @@ export function useSearch() {
     [stopFallbackProgress]
   );
 
+  // R10.5 Fix-P0-2.2: fetch + ReadableStream 替代 EventSource.
+  // EventSource 浏览器 API 不支持自定义 header, 只能走 ?api_key= query param.
+  // 改 fetch + ReadableStream 后, X-API-Key header 走标准 HTTP 头,
+  // 不再泄漏到 URL → Nginx/浏览器历史/Referer/CDN 日志.
+  // 解析 SSE 格式 (data: {json}\n\n) 自管理, 跟 EventSource 等价.
+  //
+  // 当前实现: 默认走 fetch 路径; EventSource 路径保留作 fallback (老浏览器 / 调试).
+  // 修复 known caveat: X-Request-ID 头可在此处透传 (R10.5 已实现 request_id 注入).
+  // R10.5 Fix-P0-2.2 文档: 优先用 fetch, EventSource 是 fallback.
+  const searchWithFetchStream = useCallback(
+    async (
+      query: string,
+      budget: number,
+      maxIter: number,
+      provider: string | undefined
+    ): Promise<boolean> => {
+      const myGen = genRef.current;
+      const stoppedRef = { v: false };
+      const receivedAnyEvent = { v: false };
+
+      const params: Record<string, string> = {
+        q: query,
+        budget: String(budget),
+        max_iter: String(maxIter),
+      };
+      if (provider) params.provider = provider;
+      const url = `/api/search/stream?` + new URLSearchParams(params).toString();
+
+      const headers: Record<string, string> = {
+        Accept: 'text/event-stream',
+        'Cache-Control': 'no-cache',
+      };
+      // R10.5 Fix-P0-2.2: X-API-Key 通过 header 传, 不再进 URL.
+      // 后端 get_current_user 已支持从 Header 读取 (R10.5 Fix-P0-B).
+      const apiKey =
+        typeof localStorage !== 'undefined'
+          ? localStorage.getItem('sf-api-key')
+          : null;
+      if (apiKey) headers['X-API-Key'] = apiKey;
+
+      let resp: Response;
+      try {
+        resp = await fetch(url, { headers });
+      } catch (e: any) {
+        if (myGen !== genRef.current) return false;
+        setError(`网络错误: ${e?.message || 'fetch 失败'}`);
+        setLoading(false);
+        return false;
+      }
+      // 401 / 5xx: 给用户明确错误, 不再让 EventSource 静默死锁
+      if (!resp.ok) {
+        if (myGen !== genRef.current) return false;
+        if (resp.status === 401) {
+          setError('未认证: 请先 /auth/login 拿 API Key (或在 .env 设 OPEN_MODE=true)');
+        } else if (resp.status === 429) {
+          setError('请求过于频繁, 请稍后重试');
+        } else {
+          setError(`后端返回 ${resp.status} ${resp.statusText}`);
+        }
+        setLoading(false);
+        return false;
+      }
+      if (!resp.body) {
+        if (myGen !== genRef.current) return false;
+        setError('后端响应无 body');
+        setLoading(false);
+        return false;
+      }
+
+      // 收到第一条事件: 关闭乐观假进度
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      const dispatchEvent = (payload: SSEEvent): boolean => {
+        // 返 true 表示流结束 (done/error/budget_exceeded)
+        if (payload.event === 'started') {
+          setCurrentStep(0);
+          return false;
+        }
+        if (payload.event === 'node_complete') {
+          const stepIdx = NODE_NAME_TO_STEP[payload.node];
+          if (typeof stepIdx === 'number') setCurrentStep(stepIdx);
+          if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+          return false;
+        }
+        if (payload.event === 'done') {
+          setResult(payload.result);
+          setCurrentStep(PIPELINE_STEPS.length - 1);
+          if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+          return true;
+        }
+        if (payload.event === 'error') {
+          setError(payload.message || '搜索失败');
+          return true;
+        }
+        if (payload.event === 'budget_exceeded') {
+          const costStr = typeof payload.cost_usd === 'number' ? payload.cost_usd.toFixed(4) : '?';
+          const budgetStr = typeof payload.budget_usd === 'number' ? payload.budget_usd.toFixed(2) : '?';
+          setError(
+            `成本已达 $${costStr} >= 预算 $${budgetStr}。请降低 max_iterations 或 budget 后重试。`
+          );
+          return true;
+        }
+        return false;
+      };
+
+      const stopFallback = () => {
+        if (fallbackTimerRef.current) {
+          clearInterval(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+        if (globalTimeoutTimerRef.current) {
+          clearTimeout(globalTimeoutTimerRef.current);
+          globalTimeoutTimerRef.current = null;
+        }
+      };
+
+      try {
+        while (true) {
+          if (myGen !== genRef.current) break;
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // SSE 事件以 \n\n 分隔
+          const events = buffer.split('\n\n');
+          buffer = events.pop() ?? '';
+          for (const ev of events) {
+            if (myGen !== genRef.current) break;
+            const dataLine = ev.split('\n').find((l) => l.startsWith('data: '));
+            if (!dataLine) continue;
+            try {
+              const payload = JSON.parse(dataLine.slice(6)) as SSEEvent;
+              if (!payload || !payload.event) continue;
+              if (!receivedAnyEvent.v) {
+                receivedAnyEvent.v = true;
+                stopFallback();
+              }
+              const streamDone = dispatchEvent(payload);
+              if (streamDone) {
+                stoppedRef.v = true;
+                return true;
+              }
+            } catch {
+              // 忽略非 JSON 行 (heartbeat 等)
+            }
+          }
+        }
+      } catch (e: any) {
+        if (myGen !== genRef.current) return false;
+        setError(`流读取错误: ${e?.message || 'unknown'}`);
+        return false;
+      } finally {
+        try { reader.cancel(); } catch { /* ignore */ }
+        if (myGen === genRef.current) setLoading(false);
+      }
+      return true;
+    },
+    [setCurrentStep, setElapsedSec, setResult, setError, setLoading]
+  );
+
   const search = useCallback(
     async (query: string, budget = 2.0, maxIter = 3, provider?: string) => {
       if (!query.trim()) {
@@ -388,7 +579,7 @@ export function useSearch() {
       genRef.current += 1;
       setLoading(true);
       try {
-        await searchWithSSE(query, budget, maxIter, provider);
+        await searchWithFetchStream(query, budget, maxIter, provider);
       } catch (e: any) {
         setError(e?.message || '搜索失败');
         setLoading(false);

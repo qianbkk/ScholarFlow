@@ -67,7 +67,7 @@ def _register_user(display_name: str = "") -> tuple[User, str]:
     user_id = "u_" + uuid.uuid4().hex[:12]
     now = time.time()
 
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("auth")
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
@@ -97,7 +97,7 @@ def _lookup_user_by_key(raw_key: str) -> Optional[User]:
     if not raw_key:
         return None
     key_hash = _hash_key(raw_key)
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("auth")
     try:
         row = conn.execute(
             "SELECT user_id, display_name, created_at FROM users "
@@ -161,7 +161,7 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
         return None
 
     # 已注册? 返已有 key
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("auth")
     try:
         row = conn.execute(
             "SELECT api_key_hash FROM users WHERE user_id = ?",
@@ -173,7 +173,7 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
         # 已有用户 — 重新生成 key (旧 key 立即失效), 跟 R10.5 之前缓存架构类似
         new_key = _generate_key()
         new_hash = _hash_key(new_key)
-        conn = _connect_with_wal()
+        conn = _connect_with_wal("auth")
         try:
             conn.execute(
                 "UPDATE users SET api_key_hash = ? WHERE user_id = ?",
@@ -189,7 +189,7 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
     raw_key = _generate_key()
     key_hash = _hash_key(raw_key)
     now = time.time()
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("auth")
     try:
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(

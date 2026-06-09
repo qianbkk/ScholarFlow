@@ -86,7 +86,7 @@ def _init_budget_table() -> None:
     幂等：多次调用只会创建一次表、只插入一次 global 行（INSERT OR IGNORE）。
     """
     from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("budget")
     try:
         conn.execute(
             """
@@ -110,7 +110,7 @@ def _init_budget_table() -> None:
 def _load_budget_from_db() -> tuple[float, float]:
     """从 SQLite 读取 (total, reset_ts)。无行时返回 (0.0, now)。"""
     from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("budget")
     try:
         row = conn.execute(
             "SELECT total, reset_ts FROM budget_state WHERE key='global'"
@@ -129,7 +129,7 @@ def _save_budget_to_db(total: float, reset_ts: float) -> None:
     详细事务包裹逻辑见 _check_and_reserve_budget / _return_budget。
     """
     from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("budget")
     try:
         # BEGIN IMMEDIATE: 立即获取写锁,防止多 worker 间 TOCTOU 竞态
         conn.execute("BEGIN IMMEDIATE")
@@ -175,32 +175,97 @@ async def _check_and_reserve_budget(estimated_cost: float, user_id: str = "dev-u
     Args:
         estimated_cost: 本次请求愿意预留的最大开销（= `req.budget`，即用户上限）。
         user_id: 多用户隔离 key. OPEN_MODE 模式统一传 "dev-user".
+
+    R10.5 Fix-X4 (P1-3 审计 X.md/AAA.txt): 把"读+判断+写"全程在同一个
+    `BEGIN IMMEDIATE` 事务内完成, 杜绝多 worker 进程间 TOCTOU 竞态. 旧实现:
+    进程内 _budget_lock 保护, 但跨进程失效; `_load_*_from_db` 用普通 SELECT
+    (共享锁), `_save_*_to_db` 才开 BEGIN IMMEDIATE, 中间窗口另一个 worker
+    读到的仍是旧值, 两次 reserve 各自相加, 后写覆盖, total 偏小.
+    修复: 开一个连接, 整个 check + update 在单事务内, 写完 commit 再 close.
     """
     async with _budget_lock:
-        # 从 DB 读最新值（避免任何缓存导致跨进程看到的旧 total）
-        spent, reserved, reset_ts = _load_user_budget_from_db(user_id)
-        now = _time.time()
-        if now - reset_ts > 3600:
-            spent = 0.0
-            reserved = 0.0
-            reset_ts = now
-        # Per-user 隔离: 各自 hour 预算 = global 1/10 (5 美元),
-        # 高校部署可调. OPEN_MODE 时 dev-user 用 global.
-        if user_id == "dev-user":
-            hour_cap = get_global_hourly_budget()
-        else:
-            # 多用户: 每用户 5 美元/小时, 5 用户 = 25 美元共享
-            hour_cap = 5.0
-        if spent + estimated_cost > hour_cap:
-            raise HTTPException(
-                503,
-                detail=f"用户 {user_id} 本小时预算上限 ${hour_cap:.2f} 已达, 请稍后重试",
-            )
-        # 在锁内完成预留 + 持久化（下一个 worker 读到的就是新 total）
-        new_spent = spent + estimated_cost
-        new_reserved = reserved + estimated_cost
-        _save_user_budget_to_db(user_id, new_spent, new_reserved, reset_ts)
-        set_budget_reset_ts(reset_ts)
+        from backend.utils.cache import _connect_with_wal
+        conn = _connect_with_wal("budget")
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            # 1) 读 (在 IMMEDIATE 事务内, 其他 writer 排队)
+            if user_id == "dev-user":
+                row = conn.execute(
+                    "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+                ).fetchone()
+                spent = float(row[0]) if row else 0.0
+                reserved = 0.0  # 旧表无 reserved 字段, 兼容
+                reset_ts = float(row[1]) if row else _time.time()
+            else:
+                try:
+                    row = conn.execute(
+                        "SELECT spent_usd, reserved_usd, last_reset_hour "
+                        "FROM budget_user WHERE user_id=?",
+                        (user_id,),
+                    ).fetchone()
+                except Exception:
+                    conn.rollback()
+                    return  # 表不存在, R10.5 之前 fixture 兼容
+                if row is None:
+                    # 首次 reserve: 初始化 row
+                    spent = 0.0
+                    reserved = 0.0
+                    reset_ts = _time.time()
+                else:
+                    spent = float(row[0])
+                    reserved = float(row[1])
+                    reset_ts = float(row[2])
+            now = _time.time()
+            if now - reset_ts > 3600:
+                spent = 0.0
+                reserved = 0.0
+                reset_ts = now
+            # Per-user 隔离: 各自 hour 预算 = global 1/10 (5 美元)
+            if user_id == "dev-user":
+                hour_cap = get_global_hourly_budget()
+            else:
+                hour_cap = 5.0
+            if spent + estimated_cost > hour_cap:
+                # R10.5 Fix-X4: 抛错前先 rollback, 释放写锁
+                conn.rollback()
+                raise HTTPException(
+                    503,
+                    detail=f"用户 {user_id} 本小时预算上限 ${hour_cap:.2f} 已达, 请稍后重试",
+                )
+            # 2) 写 (在同事务内, 下一 worker 读到的是新值)
+            new_spent = spent + estimated_cost
+            new_reserved = reserved + estimated_cost
+            if user_id == "dev-user":
+                conn.execute(
+                    "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                    (new_spent, reset_ts),
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO budget_user (user_id, spent_usd, reserved_usd, "
+                    "last_reset_hour, updated_at) VALUES (?, ?, ?, ?, ?) "
+                    "ON CONFLICT(user_id) DO UPDATE SET "
+                    "spent_usd=excluded.spent_usd, "
+                    "reserved_usd=excluded.reserved_usd, "
+                    "last_reset_hour=excluded.last_reset_hour, "
+                    "updated_at=excluded.updated_at",
+                    (user_id, new_spent, new_reserved, reset_ts, _time.time()),
+                )
+            conn.commit()
+            set_budget_reset_ts(reset_ts)
+        except HTTPException:
+            raise
+        except Exception as e:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 async def _return_budget(amount: float, user_id: str = "dev-user") -> None:
@@ -217,7 +282,7 @@ async def _return_budget(amount: float, user_id: str = "dev-user") -> None:
         return
     async with _budget_lock:
         from backend.utils.cache import _connect_with_wal
-        conn = _connect_with_wal()
+        conn = _connect_with_wal("budget")
         try:
             conn.execute("BEGIN IMMEDIATE")  # 立即获取写锁,防多 worker TOCTOU
             if user_id == "dev-user":
@@ -277,7 +342,7 @@ def _load_user_budget_from_db(user_id: str) -> tuple[float, float, float]:
     表不存在, 走默认.
     """
     from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("budget")
     try:
         if user_id == "dev-user":
             # 读 budget_state 'global' total (向后兼容旧 _load_budget_from_db)
@@ -313,7 +378,7 @@ def _save_user_budget_to_db(
     """持久化 per-user budget. 借用原 budget_state 表的 key='global' 行
     给 dev-user 用, 避免双轨."""
     from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
+    conn = _connect_with_wal("budget")
     try:
         if user_id == "dev-user":
             # OPEN_MODE dev-user 走旧 budget_state 'global' 行 (向后兼容)

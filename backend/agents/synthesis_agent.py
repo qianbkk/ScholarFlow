@@ -39,8 +39,20 @@ def _fallback_report(query: str, ranked: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def synthesize_node(state: SearchState) -> SearchState:
-    """生成结构化 Markdown 综述报告。"""
+async def synthesize_node(state: SearchState, services=None) -> SearchState:
+    """生成结构化 Markdown 综述报告.
+
+    R10.5 P1-1: 加 services 可选参数 (P1-1 渐进式依赖注入).
+      - services=None: 用本模块 call_llm (旧测试 patch 仍生效)
+      - services=NodeServices(llm=MockLLM(...)): 测试可注入替身
+    """
+    # 解析 LLM client (向后兼容)
+    if services is not None and services.llm is not None:
+        llm_client = services.llm
+    else:
+        # 默认: 本模块级 call_llm 引用. 这跟旧行为完全一致,
+        # 也让 patch.object(synthesis_agent, "call_llm", mock) 仍能拦截.
+        llm_client = call_llm
 
     # M-A 修复 (P0-2 PER_ITER 语义): 入口透传 prev_iter_cost_usd。
     # synthesize 是 router 决定"不再 refine"后的终态节点, 此时 prev_iter_cost_usd
@@ -104,7 +116,7 @@ async def synthesize_node(state: SearchState) -> SearchState:
 要求：分析要有实质内容，不要只列清单；中文为主，论文名保持英文。"""
 
     report, usage = await asyncio.wait_for(
-        call_llm(
+        llm_client(
             prompt,
             task_type="synthesis",
             system=SYSTEM + isolation_system_suffix(),
