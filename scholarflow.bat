@@ -1,11 +1,11 @@
-﻿@echo off
+chcp 65001 >nul
+@echo off
 REM ============================================================
 REM   ScholarFlow 一键管理脚本
 REM   功能: 启动 / 停止 / 重启 / 状态 / 日志 / 安装 / 清理
 REM   支持: 本地模式 (uvicorn + vite) 与 Docker 模式
 REM   端口: 后端 8000  前端 5173
 REM ============================================================
-chcp 65001 >nul
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM 切到脚本所在目录 (无论从哪里双击)
