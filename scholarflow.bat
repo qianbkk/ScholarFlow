@@ -154,8 +154,8 @@ if "!PORT_USED!"=="1" (
 REM 健康检查
 echo.
 echo  === 健康检查 (curl) ===
-curl -s -o nul -w "    后端 /health  HTTP %%{http_code}  耗时 %%{time_total}s\n" "http://127.0.0.1:%BACKEND_PORT%/health" 2>nul
-if errorlevel 1 echo    后端 /health  [连接失败]
+curl -s -o nul -w "    后端 /api/v1/health  HTTP %%{http_code}  耗时 %%{time_total}s\n" "http://127.0.0.1:%BACKEND_PORT%/api/v1/health" 2>nul
+if errorlevel 1 echo    后端 /api/v1/health  [连接失败]
 curl -s -o nul -w "    前端 /        HTTP %%{http_code}  耗时 %%{time_total}s\n" "http://127.0.0.1:%FRONTEND_PORT%/" 2>nul
 if errorlevel 1 echo    前端 /        [连接失败]
 
@@ -276,7 +276,7 @@ set /a TRIES=0
 :wait_backend
 set /a TRIES+=1
 timeout /t 2 /nobreak >nul
-curl -s -o nul -w "" "http://127.0.0.1:%BACKEND_PORT%/health" 2>nul
+curl -s -o nul -w "" "http://127.0.0.1:%BACKEND_PORT%/api/v1/health" 2>nul
 if not errorlevel 1 (
     echo    [OK] 后端就绪
     goto :backend_ready
