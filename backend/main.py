@@ -533,6 +533,10 @@ async def search_stream(
 
     t0 = _time.time()
 
+    # R10.5 Fix-Cancel: SSE request_id 跟 X-Request-ID header 对齐,
+    # 前端 fetch 响应头拿 X-Request-ID, 取消时 POST /search/cancel 带回这个 id.
+    req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
+
     async def event_generator():
         return_amount = budget
 
@@ -562,10 +566,10 @@ async def search_stream(
             step_count = 0
 
             try:
-                # R10.5 关键修复: 240s → 480s. 跟 /search 端 480s 对齐, 跟 README 480s 对齐.
-                # 之前 main.py 注释/日志说 480s 但 asyncio.timeout 实际是 240s, 文档承诺与代码不符.
-                # 真实 LLM 8 节点 max_iter=3 实测 67s+ (MiniMax M3), 多次迭代会逼近 240s.
-                async with asyncio.timeout(480.0):
+                # R10.5 Fix-Timeout: 240s 够单次 8 节点真实 LLM (60-150s),
+                # 也允许 max_iter=3 refine 循环. 480s 太长, 用户等 8 分钟没意义,
+                # 应让超时 fail fast 提示用户降 max_iter 或换 provider.
+                async with asyncio.timeout(240.0):
                     async for chunk in search_graph.astream(initial, stream_mode="updates"):
                         for node_name, state_update in chunk.items():
                             if not isinstance(state_update, dict):
@@ -610,17 +614,25 @@ async def search_stream(
                                 return_amount = max(0.0, budget - new_total)
                                 return
             except TimeoutError:
-                logger.warning("[/search/stream] timed out after 480s")
+                logger.warning(f"[/search/stream] timed out after 240s, q='{safe_query[:40]}'")
                 await _return_budget(budget, user_id=user.user_id)
                 return_amount = 0.0
                 try:
                     yield _sse_format({
                         "event": "error",
                         "code": "timeout",
-                        "message": "搜索超时（>480s）。建议缩小查询范围或降低 max_iter。",
+                        "message": "搜索超时（>240s）。建议降低 max_iter 或更换 provider（minimax 当前可能限流）。",
                     })
                 except Exception:
                     pass
+                return
+            except asyncio.CancelledError:
+                # R10.5 Fix-Cancel: 用户主动取消, 优雅退出而非报"内部错误".
+                # 前端 /api/v1/search/cancel → 后端 task.cancel() → 走到这里.
+                logger.info(f"[/search/stream] cancelled by user req_id={req_id}")
+                await _return_budget(budget, user_id=user.user_id)
+                return_amount = 0.0
+                # 不发 error 事件 (前端已知道是取消); 但生成器需要 return 触发 finally
                 return
             except Exception:
                 logger.error("[/search/stream] error", exc_info=True)
@@ -668,6 +680,8 @@ async def search_stream(
                 "elapsed": round(elapsed, 2),
             })
         finally:
+            # R10.5 Fix-Cancel: 清理 _in_flight_searches, 防止 dict 累积死引用.
+            _in_flight_searches.pop(req_id, None)
             if return_amount > 0.01:
                 try:
                     await _return_budget(return_amount, user_id=user.user_id)

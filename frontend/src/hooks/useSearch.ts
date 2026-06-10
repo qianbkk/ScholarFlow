@@ -188,6 +188,18 @@ export function useSearch() {
         return false;
       }
 
+      // R10.5 Fix-Cancel: 从响应头抓 X-Request-ID, 存到 requestIdRef.
+      // 旧实现只声明 requestIdRef 永不赋值 → 取消按钮发的 /api/v1/search/cancel
+      // body 永远是 {request_id: null}, 后端查 _in_flight_searches 找不到任务,
+      // SSE 流实际没被中断 (只是 UI 隐藏了) → 下次搜索时前一个还在跑,
+      // LLM provider 限流 / asyncio 资源争用 → 480s timeout.
+      // 修复: 抓 X-Request-ID header (后端 request_id_middleware 写回的),
+      //   存到 ref → 取消时 fetch 带上真 id, 后端真能 cancel.
+      const rid = resp.headers.get('X-Request-ID');
+      if (rid) {
+        requestIdRef.current = rid;
+      }
+
       // 收到第一条事件: 关闭乐观假进度
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();

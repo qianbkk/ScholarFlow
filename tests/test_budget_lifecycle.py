@@ -475,9 +475,9 @@ def test_client_disconnect_returns_budget(client, monkeypatch):
     return_calls = []
     real_return = main_mod._return_budget
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return await real_return(amount)
+        return await real_return(amount, **kwargs)
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 
@@ -521,9 +521,12 @@ def test_cancelled_error_in_event_generator_returns_budget(monkeypatch):
     _mock_provider_list(monkeypatch, ["kimi"])
     return_calls = []
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return None
+        try:
+            return await real_return(amount, **kwargs)
+        except NameError:
+            return None
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 
@@ -560,9 +563,12 @@ async def test_event_generator_aclose_returns_budget(monkeypatch):
     _mock_provider_list(monkeypatch, ["kimi"])
     return_calls = []
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return None
+        try:
+            return await real_return(amount, **kwargs)
+        except NameError:
+            return None
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 
@@ -667,9 +673,12 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
     _mock_provider_list(monkeypatch, ["kimi"])
     return_calls = []
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return None
+        try:
+            return await real_return(amount, **kwargs)
+        except NameError:
+            return None
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 
@@ -807,9 +816,12 @@ def test_sse_emits_budget_exceeded_when_cost_spikes(client, monkeypatch):
 
     return_calls = []
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return None
+        try:
+            return await real_return(amount, **kwargs)
+        except NameError:
+            return None
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 
@@ -1015,9 +1027,12 @@ def test_search_handles_budget_exceeded_error(client, monkeypatch):
 
     return_calls = []
 
-    async def tracking_return_budget(amount):
+    async def tracking_return_budget(amount, **kwargs):
         return_calls.append(amount)
-        return None
+        try:
+            return await real_return(amount, **kwargs)
+        except NameError:
+            return None
 
     monkeypatch.setattr(main_mod, "_return_budget", tracking_return_budget)
 

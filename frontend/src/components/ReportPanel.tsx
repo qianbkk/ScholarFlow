@@ -218,7 +218,7 @@ export function ReportPanel({
         )}
 
         {/* M-19 (R10.5) UI 差异化: 综述末尾的"原始文献来源"表格 — 知网/Google Scholar/SS
-            都不生成可核查来源表. 用 amber 突出"全网唯一"信号, 让用户在实际使用中
+            都不生成可核查来源表. 用 amber 突出信号, 让用户在实际使用中
             看到 ScholarFlow 跟其他工具的差别, 而不是从 README 读"为什么用". */}
         {!loading && report && html.includes('原始文献来源') && (
           <div
@@ -228,8 +228,7 @@ export function ReportPanel({
           >
             <span className="text-base">📎</span>
             <span>
-              <strong>全网唯一可核查</strong>:
-              综述末尾已自动附 15 篇原始文献来源表 (含 SS ID + 直链),
+              综述末尾已自动附原始文献来源表 (含 SS ID + 直链),
               用户可逐条点开核对综述里说的"某论文 2017 年提出 Transformer"这类声明.
             </span>
           </div>

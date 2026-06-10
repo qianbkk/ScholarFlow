@@ -89,6 +89,10 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     batch_semaphore = asyncio.Semaphore(_CITATION_BATCH_LIMIT)
 
     # ===== Backward: 取每篇 seed 的 references（限速） =====
+    # R10.5 Fix-Timeout: 加 60s per-gather 上限, 防 SS 慢响应累计超时.
+    # 旧实现: SEED_LIMIT=5 × 30s SS timeout = 150s 纯等待, 加上 retry 可能 200s+,
+    # 单 expand 节点就吃光 240s 全局 budget, 下游节点全卡. 60s 截断:
+    # 部分 refs 拿不到就拿不到, 不阻塞整个 pipeline.
     backward_tasks = [
         _throttled_call(
             semantic_scholar.get_references(p.paper_id, limit=BACKWARD_LIMIT),
@@ -96,7 +100,14 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
-    backward_results = await asyncio.gather(*backward_tasks, return_exceptions=True)
+    try:
+        backward_results = await asyncio.wait_for(
+            asyncio.gather(*backward_tasks, return_exceptions=True),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[expand_citations] backward gather timed out after 60s, {len(top)} seeds")
+        backward_results = [TimeoutError("backward gather timeout")] * len(top)
 
     # ===== Forward: 取每篇 seed 的 citers（限速，犀利评论 #8）=====
     forward_tasks = [
@@ -106,7 +117,14 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
-    forward_results = await asyncio.gather(*forward_tasks, return_exceptions=True)
+    try:
+        forward_results = await asyncio.wait_for(
+            asyncio.gather(*forward_tasks, return_exceptions=True),
+            timeout=60.0,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(f"[expand_citations] forward gather timed out after 60s, {len(top)} seeds")
+        forward_results = [TimeoutError("forward gather timeout")] * len(top)
 
     # ===== 关键修复：构建 seed -> refs 反向映射（写回 Paper.references）=====
     seed_to_refs: dict[str, list[str]] = {}

@@ -90,14 +90,6 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
             <span className="text-themed-muted ml-1">
               · 累计 ${usageEntries.reduce((s, [, v]) => s + v.cost, 0).toFixed(4)}
             </span>
-            {/* M-19 (R10.5) UI 差异化: 唯一可见 per-model 成本面板, 实时反映"哪个模型在烧钱",
-               知网/Google Scholar/SS 都不显示. 用 amber 突出 "全网唯一" 信号. */}
-            <span
-              className="ml-2 text-amber-600 font-medium"
-              title="其他工具 (知网/Google Scholar/Semantic Scholar) 都不显示 per-model 成本"
-            >
-              全网唯一可见
-            </span>
           </summary>
           <div className="mt-1.5 grid gap-1">
             {usageEntries.map(([model, info]) => (

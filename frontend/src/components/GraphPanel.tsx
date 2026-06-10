@@ -166,7 +166,9 @@ export function GraphPanel({ graph }: Props) {
       .data(nodes)
       .join('g')
       .attr('class', 'node')  // Fix-H: 标签 class 让独立 selected effect 能 selectAll 选中
-      .style('cursor', 'pointer')
+      // cursor: move 提示节点可拖动 (d3.drag 已实现但旧版 cursor: pointer 让用户以为
+      // 只能点开链接), click 仍触发 1 跳邻居高亮 + 打开 URL (d3 drag 不会误触 click)
+      .style('cursor', 'move')
       .on('mouseover', (event, d) => {
         setHovered(d);
         setTooltipPos({ x: event.offsetX, y: event.offsetY });
@@ -196,10 +198,18 @@ export function GraphPanel({ graph }: Props) {
           })
           .on('end', (event, d) => {
             if (!event.active) simulation.alphaTarget(0);
-            d.fx = null;
-            d.fy = null;
+            // 旧版这里把 fx/fy 设 null, 节点松手后立刻被 simulation 推回去,
+            // 用户感觉"拖不动" — 实际是 d3 drag 工作了, 但视觉上没停留.
+            // 新版: 保留 fx/fy, 节点固定在拖放位置. 双击节点可解除固定.
+            // 注: simulation 不会动 fx/fy != null 的节点, 拖过的位置会"粘"住.
           })
-      );
+      )
+      // 双击节点: 解除固定 (fx/fy = null), 节点重新加入 simulation 自由布局
+      .on('dblclick', (_, d) => {
+        d.fx = null;
+        d.fy = null;
+        simulation.alpha(0.5).restart();
+      });
 
     // M-18: 社区填色 (按 community_id) OR 相关性颜色
     node
@@ -229,11 +239,27 @@ export function GraphPanel({ graph }: Props) {
 
     node
       .append('text')
-      .text((d) => (d.year ? String(d.year) : ''))
+      // 节点标签显示: 论文标题 (前 14 字, 截断 + …) + 年份 (副)
+      // 之前只显示年份, 10+ 节点全是一串数字, 不点开 tooltip 根本认不出
+      // 哪篇是哪篇; 改双行: 主行短标题, 副行小字年份.
       .attr('font-size', 9)
       .attr('text-anchor', 'middle')
-      .attr('dy', 3)
+      .attr('dy', (d) => (d.size > 0 ? -d.size - 6 : -10))
       .attr('fill', '#0f172a')
+      .attr('font-weight', 600)
+      .attr('pointer-events', 'none')
+      .text((d) => {
+        const t = d.title || '';
+        return t.length > 14 ? t.slice(0, 13) + '…' : t;
+      });
+
+    node
+      .append('text')
+      .text((d) => (d.year ? String(d.year) : ''))
+      .attr('font-size', 8)
+      .attr('text-anchor', 'middle')
+      .attr('dy', (d) => (d.size > 0 ? -d.size + 3 : -2))
+      .attr('fill', '#64748b')
       .attr('pointer-events', 'none');
 
     node
@@ -381,6 +407,8 @@ export function GraphPanel({ graph }: Props) {
           </div>
           <div className="text-themed-muted pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
           <div className="text-themed-muted">click 节点 = 高亮 1 跳邻居</div>
+          <div className="text-themed-muted">拖动节点 = 重新布局 / 固定位置</div>
+          <div className="text-themed-muted">双击节点 = 解除固定</div>
         </div>
       </div>
     </aside>
