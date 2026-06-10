@@ -197,15 +197,27 @@ async def _check_and_reserve_budget(estimated_cost: float, user_id: str = "dev-u
                 reserved = 0.0  # 旧表无 reserved 字段, 兼容
                 reset_ts = float(row[1]) if row else _time.time()
             else:
+                # R10.5 code-review-X4: 区分"表不存在"(R10.5 之前 fixture 兼容)
+                # 和"其他 DB 错误"(production 应暴露 500). 旧实现裸 except Exception
+                # 早 return → 表不存在时 silently 让请求通过, cap 完全失效 (隐藏 config bug).
                 try:
                     row = conn.execute(
                         "SELECT spent_usd, reserved_usd, last_reset_hour "
                         "FROM budget_user WHERE user_id=?",
                         (user_id,),
                     ).fetchone()
-                except Exception:
+                except Exception as e:
                     conn.rollback()
-                    return  # 表不存在, R10.5 之前 fixture 兼容
+                    # OperationalError "no such table" → fixture 兼容: 让请求通过 (无 budget 跟踪)
+                    # 其他 sqlite3.Error → production 错: 抛出 500 让 ops 知道
+                    err_msg = str(e)
+                    if "no such table" in err_msg or "no such column" in err_msg:
+                        logger.warning(
+                            f"[budget] budget_user 表/列不存在, 跳过 cap 检查 (likely 测试 fixture): {err_msg}"
+                        )
+                        return  # 不抛, 让请求继续
+                    logger.error(f"[budget] DB 错误: {err_msg}")
+                    raise HTTPException(503, detail=f"预算系统暂时不可用: {err_msg[:100]}")
                 if row is None:
                     # 首次 reserve: 初始化 row
                     spent = 0.0

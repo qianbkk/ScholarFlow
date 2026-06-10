@@ -43,15 +43,18 @@ async def _get_with_retry(
     timeout: float = 30.0,
     breaker: CircuitBreaker | None = None,
 ) -> httpx.Response | None:
-    """HTTP GET with exponential backoff (3 attempts) + optional CircuitBreaker.
+    """HTTP GET with exponential backoff (4 attempts total: 1 initial + 3 retries) + optional CircuitBreaker.
 
     行为：
       - breaker=given: 受熔断器保护, OPEN 状态直接抛 CircuitOpenError
       - 成功（任意 status code）→ 返回 Response 对象, 熔断器记录 success
       - httpx.TimeoutException / NetworkError / RemoteProtocolError → 指数退避重试
       - 429/5xx 状态码 → 指数退避 + Retry-After 退避 (优先)
-      - 3 次都失败 → 记 error log 并返回 None, 熔断器记录 failure
+      - 用完所有 attempt → 记 error log 并返回 None (网络异常) 或最后响应 (状态码)
       - 3 次连续 failure 触发熔断 (failure_threshold=3)
+
+    注: 调用方必须检查返回值, 不要假设 None = 失败. 状态码路径返回 Response
+    (可能 status != 200), 由调用方决定是否降级到 mock.
 
     调用方约定:
       - 业务流 (search_papers / get_references / get_citations) 调此函数

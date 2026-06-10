@@ -231,7 +231,7 @@ export function QueryPanel({
                 现在 loading 时:
                   - 按钮文案 '搜索中…' → '取消'
                   - 颜色 brand-600 → rose-600 (语义化危险动作)
-                  - 行为 onClick(onReset) → 触发 useSearch.reset → POST /api/search/cancel
+                  - 行为 onClick(onReset) → 触发 useSearch.reset → POST /api/v1/search/cancel
                 注意 type='button' (不是 'submit'), 避免点取消时误触发表单 submit.
                 Round 6 S4': 加 title/aria-label 中文 hover 提示 + 加载中文文案统一化. */}
             {loading ? (

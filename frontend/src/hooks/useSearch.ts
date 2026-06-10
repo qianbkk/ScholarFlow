@@ -141,7 +141,11 @@ export function useSearch() {
         max_iter: String(maxIter),
       };
       if (provider) params.provider = provider;
-      const url = `/api/search/stream?` + new URLSearchParams(params).toString();
+      // R10.5 P2-4: 用 /api/v1 前缀 (R10.5 Fix-P2-4-Audit-diff 加的).
+      // 旧 /api/search/stream 路径 production 部署 (无 vite proxy) 返 404.
+      // 旧 /search/stream 路径是 deprecated alias (alias 留在后端).
+      // 当前选 /api/v1/search/stream (新版客户端推荐).
+      const url = `/api/v1/search/stream?` + new URLSearchParams(params).toString();
 
       const headers: Record<string, string> = {
         Accept: 'text/event-stream',
@@ -318,7 +322,7 @@ export function useSearch() {
     if (requestIdRef.current) {
       const rid = requestIdRef.current;
       requestIdRef.current = null;
-      void fetch('/api/search/cancel', {
+      void fetch('/api/v1/search/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ request_id: rid }),
