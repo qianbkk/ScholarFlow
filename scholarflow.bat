@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 REM ============================================================
 REM   ScholarFlow 一键管理脚本
 REM   功能: 启动 / 停止 / 重启 / 状态 / 日志 / 安装 / 清理
@@ -27,6 +27,11 @@ set "FRONTEND_TITLE=ScholarFlow-Frontend"
 REM 首次运行: 建 .run 和 logs 目录
 if not exist "%RUN_DIR%" mkdir "%RUN_DIR%"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+
+REM 关键: 跳过下面的所有函数定义, 直接跳到主菜单入口.
+REM 否则脚本会 fall-through 到 :print_banner 块, 打印 banner 后 goto :eof
+REM 直接结束, 表现为双击闪退 (用户看到的 banner 闪一下就关了).
+goto :menu
 
 REM ===== 工具函数 =====
 :print_banner
