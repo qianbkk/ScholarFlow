@@ -36,9 +36,9 @@ RUN mkdir -p /app/backend/.cache \
 
 EXPOSE 8000
 
-# R10 (M-20): 健康检查 — endpoint /health (后端 health.py 加了 SQLite 写权限验证)
+# R10 (M-20): 健康检查 — endpoint /api/v1/health (后端 health.py 加了 SQLite 写权限验证)
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/api/v1/health || exit 1
 
 # R10 (M-20): 切到非 root 用户运行
 USER scholarflow

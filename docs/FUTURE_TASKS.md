@@ -19,7 +19,7 @@
 | **总计 commit** | 25 | — |
 | **本次会话新增** | 14 项待办 | 本文档 |
 
-**仓库状态**: 58 tracked files, working tree clean, 27/27 测试通过, backend / health 200 + /search 200 + /search/stream SSE 9 事件按序。
+**仓库状态 (R10.5.1 同步)**: ~70 tracked files, working tree clean, **230 tests passed / 1 skipped / 0 failed** (~95s; 见 [HANDOFF.md §0](HANDOFF.md)), backend `/api/v1/health` 200 + `/api/v1/search` 200 + `/api/v1/search/stream` SSE 9 事件按序。
 
 ---
 
@@ -118,12 +118,10 @@
 
 ### 1.6 部署与运维(3 条)
 
-#### [OPTIONAL] #12 Dockerfile + docker-compose
-- **位置**: 项目根
-- **触发条件**: 新用户希望"一键启动"或 CI/CD 需要标准化环境时
-- **影响**: README 已给 `uvicorn` + nginx 完整指引,demo 项目不阻塞;但 docker 化后跨平台一致性更好
-- **何时重做**: 出现"用户 fork 后跑不起来"或需要 CI 时
-- **修复成本**: 30 行 Dockerfile + 40 行 docker-compose.yml
+#### [DONE] #12 Dockerfile + docker-compose
+- **位置**: Dockerfile.backend + Dockerfile.frontend + docker-compose.yml (R8.2 交付)
+- **完成**: R8.2 commits 交付, R10.5.1 健康检查改 `/api/v1/health`
+- **状态**: 详见 §5「已处理历史」
 
 #### [SKIP] #13 结构化 JSON 日志
 - **位置**: `backend/main.py:32` (logger 配置)
@@ -211,7 +209,7 @@
 
 | 触发信号 | 优先重做的项 |
 |---------|-------------|
-| 新用户反馈"跑不起来" | #12 Docker + #14 CI |
+| 新用户反馈"跑不起来" | #14 CI (Docker 已就绪, 见 §5) |
 | 反馈"手机上没法用" | #8 移动端响应式 |
 | 反馈"图谱颜色看不清" | #17 D3 颜色 + #7 doi 字段 |
 | mock 报告偶尔内容缺失 | #16 mock synthesis 改 LLM 结构化输出 |
@@ -233,7 +231,12 @@
 
 > 完成某条后,把它从上面 1-4 节移到这里,记录 commit SHA + 完成日期:
 
-(暂无)
+### [DONE] #12 Dockerfile + docker-compose (2026-06-10, R10.5.1)
+- **位置**: `Dockerfile.backend` + `Dockerfile.frontend` + `docker-compose.yml` (R8.2 交付, R10.5.1 健康检查改 `/api/v1/health`)
+- **原始** [OPTIONAL] 触发: 新用户希望"一键启动"或 CI/CD 需要标准化环境
+- **完成提交**: R8.2 系列 + R10.5.1 docs sync
+- **备注**: 项目根目录还提供 `scholarflow.bat` (Windows 一键管理脚本, R10.5.1 `d54eaa4`) — 完整 9 项 start/stop/restart/status/logs/install/clean/open/exit
+- **同步更新**: `docs/DEPLOYMENT.md` §1.1-1.3 单机 + §2 Docker Compose + §3 Nginx + §4 K8s 全部已就绪
 
 ---
 

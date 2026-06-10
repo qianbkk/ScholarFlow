@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-06-10
+
+R10.5 审计 + 修复周期 (20+ commits 覆盖 3 轮 bug 批处理 + 白屏修复 + code-review + scholarflow.bat).
+
+### Added
+- **scholarflow.bat** — Windows 一键管理脚本 (start/stop/restart/status/logs/install/clean) — `d54eaa4`
+- **docs/DEPLOYMENT.md** — 单机 (systemd) + Docker Compose + K8s 三种部署参考
+- **BibTeX / RIS 导出** — 报告页可下载参考文献 (21 测试覆盖)
+- **OPEN_MODE env** — `true` 跳过 API Key 校验 (dev 默认), `false` 强制多用户认证
+- **/api/v1 URL 前缀** — 所有路由同时挂 `/api/v1/*` 和 `/` (向后兼容)
+- **ErrorBoundary** — 前端顶层错误兜底 (白屏 P0 修复) — `f37b3c0`
+- **ThemeSwitcher** — 4 套主题 (light / warm / dark / eye-care)
+- **ALLOWED_HOSTS / EXPOSE_DOCS / SCHOLARFLOW_DB_DIR / DISABLE_HTTP_POOL / LOG_LEVEL** env — 接入 .env.example
+
+### Fixed
+- **P0 白屏** — 真实 LLM 搜索后白屏 (ErrorBoundary + EventSource 竞态) — `f37b3c0`
+- **重复 auth_router 注册 + health→main 循环导入** — `480cfe2`
+- **CVE 白名单 + SearchState 字段补全 + auth 限流** — `387917e`
+- **DB init 竞态 + user_id 派生不一致** — `fa50670`
+- **vite 代理 404** — rewrite 剥 /api + API_BASE 升 v1 — `84ac536`
+- **3 项 code-review 高努力审计修复** — 16 篇 fallback / 4.0 分 / 图谱交互 — `cf8322d`
+- **3 项 P0 审计后批** — 删营销文案 + 引文图谱改进 + 480s timeout — `a49943d`
+
+### Changed
+- 默认 LLM provider 文档对齐: `MiniMax-M3` (kimi-k2.6 / glm-5.1 / claude-sonnet-4-6 / deepseek-reasoner 可切换)
+- `.env.example` 补 5 env + 去重 CORS 段
+- `docs/ARCHITECTURE.md` /search timeout 240s → **480s** (SSE 240s 保持)
+- `docs/HANDOFF.md` HEAD `fa50670` → `d54eaa4`
+- `docs/FUTURE_TASKS.md` #12 (Dockerfile + docker-compose) 标记 [DONE] (R8.2 已交付)
+- gunicorn 从 `requirements-dev.txt` 迁入 `backend/requirements.txt` (生产 dep, 见 DEPLOYMENT §1.2)
+
+### Tests
+- 全量 **230 passed / 1 skipped** (R10.5 后审计基线)
+- 新增 21 个 BibTeX/RIS 导出测试
+
+[1.0.1]: https://github.com/qianbkk/ScholarFlow/compare/v1.0.0...v1.0.1
+
 ## [1.0.0] - 2026-06-07
 
 首个稳定 release。8 节点 LangGraph 流水线 (decompose → search → expand → rank → refine/synthesize → graph → cost) 历经 6 轮多 agent 审计+优化, ~165 commits (R1-R8.3)。

@@ -1,14 +1,14 @@
 # ScholarFlow R10.5+ AI 接手清单
 
 > **目的**: 把审计报告 XYZ + live 验证 + R10.5 已完成项整理成可交接清单,供其他 AI 继续执行。
-> **当前 HEAD**: `fa50670` (R10.5 X2+X3 修复,master 已 push)
-> **测试基线**: 220 passed / 2 skipped / 0 failed (~99s)
+> **当前 HEAD**: `d54eaa4` (R10.5.1 docs+config sync,master 已 push)
+> **测试基线**: 230 passed / 1 skipped / 0 failed (~95s)
 > **Build 基线**: tsc clean / vite build clean / 13 routes
 > **审计报告**: `D:\Users\桌面\ScholarFlow 架构审计报告XYZ.txt` (14 项问题)
 
 ---
 
-## 0. 当前状态 (2026-06-09)
+## 0. 当前状态 (2026-06-10)
 
 ### ✅ 已完成 (R10.5, 4 commits)
 | Commit | 内容 | 阻塞性 |
@@ -17,6 +17,22 @@
 | `480cfe2` | 删重复 auth_router 注册 + 切循环导入 health→main | P0 审计 1.1+1.2 |
 | `387917e` | CVE 白名单 + SearchState 字段补全 + auth 限流 | P0/P1 审计 1.3/2.3/2.4 |
 | `fa50670` | DB init 在 lifespan + register/login user_id 派生一致 | R10.5 X2+X3 (live 发现) |
+
+### ✅ 已完成 (R10.5.1, 12 commits since fa50670)
+| Commit | 内容 | 阻塞性 |
+|---|---|---|
+| `0e8dc91` | 移除误提交的 review 临时 diff 文件 | cleanup |
+| `cf8322d` | code-review 高努力 7 项深度审计修复 | 7-bug batch |
+| `defd9f5` | 16 篇 fallback 根因 + 4.0 分全一致 + 图谱交互 | 3-bug batch |
+| `a49943d` | 删营销文案 + 引文图谱改进 + 480s timeout 修复 | 3-task batch |
+| `84ac536` | vite 代理 404 修复 (rewrite 剥 /api + API_BASE 升 v1) | P0 dev |
+| `3625d65` | /code-review 高努力审计 3 项关键 bug 修复 | review-3 |
+| `f37b3c0` | 真实 LLM 搜索后白屏 (P0 e2e) | **P0 user-block** |
+| `810740e` | 4 agent findings 删冗余 + 修 sleep bug | simplify |
+| `d142ff6` | 第二轮审计 (CCC.txt + diff.md) 6 项 P0-P2 修复 | 2nd audit |
+| `61c41b1` | 全面修复审计 + 1000s loading 死锁 | final audit |
+| `9e76fde` | CI CVE 白名单 (PYSEC-2026-83 + CVE-2026-27794) | CI fix |
+| `d54eaa4` | scholarflow.bat 一键管理脚本 | ops |
 
 ### ✅ Live 端到端验证通过
 - /health 200

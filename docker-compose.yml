@@ -22,7 +22,8 @@ services:
       - /tmp:size=64m
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      # R10.5: /api/v1/health (所有路由挂到 /api/v1/*)
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
       interval: 30s
       timeout: 5s
       retries: 3

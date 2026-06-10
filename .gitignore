@@ -55,8 +55,9 @@ playwright_runs/
 .claude/memory/
 
 # ===== R10.5: 开发过程产生的辅助文件不入仓 (本地保留) =====
-# docs/ 是开发时写的笔记 / 架构 / 未来任务列表, 用户使用项目不需要
-docs/
+# docs/ 下的子目录 (notes / audit-logs / internal) 忽略, 但 ARCHITECTURE.md /
+# DEPLOYMENT.md / FUTURE_TASKS.md / HANDOFF.md 顶层 .md 是公共文档, 全部入仓
+# (上面 L47-51 已逐个列出子目录 ignore, 不需要 blanket docs/)
 
 # tests/ 标准测试套件 (test_*.py + conftest.py) 入仓, CI 直接跑.
 # 但 tests/manual/ 是一次性 E2E 验证脚本 (需 Playwright + 真实 LLM key,
