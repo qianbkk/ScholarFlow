@@ -271,19 +271,19 @@ if "!PORT_USED!"=="1" (
     )
 )
 
-REM 启动后端 (新窗口, 不阻塞)
+REM 启动后端 (R10.5.1 重写: 用单独 launcher .bat 避免嵌套引号)
 echo    [1/2] 启动后端 (uvicorn :%BACKEND_PORT%)...
-start "%BACKEND_TITLE%" /MIN cmd /k "cd /d ""%ROOT%"" && set PYTHONIOENCODING=utf-8 && title %BACKEND_TITLE% && %PYTHON% -m uvicorn backend.main:app --host 127.0.0.1 --port %BACKEND_PORT% > ""%BACKEND_LOG%"" 2>&1"
+start "%BACKEND_TITLE%" /MIN "%ROOT%\_start_backend.bat" "%ROOT%"
 
-REM 等后端就绪 (最多 30s)
-echo    [等待] 后端就绪检查...
+REM 等后端就绪 (最多 30s, 间隔 2s)
+echo    [等待] 后端就绪检查 (最多 30s)...
 set /a TRIES=0
 :wait_backend
 set /a TRIES+=1
-timeout /t 2 /nobreak >nul
+ping -n 2 127.0.0.1 >nul 2>&1
 curl -s -o nul -w "" "http://127.0.0.1:%BACKEND_PORT%/api/v1/health" 2>nul
 if not errorlevel 1 (
-    echo    [OK] 后端就绪
+    echo    [OK] 后端就绪 (用了 !TRIES! 次检查)
     goto :backend_ready
 )
 if !TRIES! GEQ 15 (
@@ -293,20 +293,19 @@ if !TRIES! GEQ 15 (
 goto :wait_backend
 :backend_ready
 
-REM 启动前端
+REM 启动前端 (同样的 launcher 模式)
 echo    [2/2] 启动前端 (vite :%FRONTEND_PORT%)...
-cd /d "%ROOT%\frontend"
-start "%FRONTEND_TITLE%" /MIN cmd /k "cd /d ""%ROOT%\frontend"" && title %FRONTEND_TITLE% && %NPX% vite --host 127.0.0.1 --port %FRONTEND_PORT% > ""%FRONTEND_LOG%"" 2>&1"
-cd /d "%ROOT%"
+start "%FRONTEND_TITLE%" /MIN "%ROOT%\_start_frontend.bat" "%ROOT%"
 
 REM 等前端就绪
+echo    [等待] 前端就绪检查 (最多 30s)...
 set /a TRIES=0
 :wait_frontend
 set /a TRIES+=1
-timeout /t 2 /nobreak >nul
+ping -n 2 127.0.0.1 >nul 2>&1
 curl -s -o nul -w "" "http://127.0.0.1:%FRONTEND_PORT%/" 2>nul
 if not errorlevel 1 (
-    echo    [OK] 前端就绪
+    echo    [OK] 前端就绪 (用了 !TRIES! 次检查)
     goto :frontend_ready
 )
 if !TRIES! GEQ 15 (
