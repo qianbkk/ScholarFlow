@@ -41,6 +41,7 @@ htmlcov/
 # Runtime state files
 backend/.budget_state.json
 backend/.cache/
+.run/
 
 # Personal notes & verification artifacts (not for public repo)
 # docs/ is intentionally narrow: only ignore internal scratch + audit logs.
