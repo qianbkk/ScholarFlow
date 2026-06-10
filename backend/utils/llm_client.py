@@ -328,7 +328,7 @@ def _mock_synthesis(prompt: str, ranked_count: int) -> str:
 针对查询「{query}」，ScholarFlow 从 Semantic Scholar + OpenAlex 汇总后返回 {ranked_count} 篇论文。
 
 ## 检索说明
-本次检索使用 ScholarFlow 8 节点流水线。注：当前为 mock 模式，且 prompt 中未识别到论文块，无法生成结构化 Top 列表。
+本次检索使用 ScholarFlow 8 节点流水线，论文数 = {ranked_count}。注：本次 synthesis 节点 LLM 调用失败或返回无法解析，已降级到本地模板。
 """
 
     # ===== 动态 Top 5 =====
@@ -411,7 +411,9 @@ def _mock_synthesis(prompt: str, ranked_count: int) -> str:
 ## 检索说明
 本次检索使用 ScholarFlow 8 节点流水线，数据源为 Semantic Scholar + OpenAlex，论文数 = {ranked_count}，评分方法为三维加权（相关性 50% + 权威性 30% + 一致性 20%）。
 
-> 注：当前为 mock 模式（LLM_MOCK=true），报告由本地模板基于真实 ranked_papers 动态生成。生产环境请配置 LLM_PROVIDER=kimi|glm|minimax 并设置 LLM_MOCK=false 启用真实 LLM。
+> 注：综述生成阶段 LLM 调用失败（可能是网络/限流/key 失效），已降级到本地模板报告。
+> 数据源论文 (Semantic Scholar + OpenAlex) 仍为真实 API 检索结果，模板仅负责组织文字。
+> 建议: 1) 检查 provider 余额/限流; 2) 缩小查询范围降低 LLM 输出长度; 3) 稍后重试。
 """
 
 

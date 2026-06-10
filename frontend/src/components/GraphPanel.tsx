@@ -56,6 +56,22 @@ export function GraphPanel({ graph }: Props) {
       return;
     }
 
+    // R10.5 Fix-Zoom: d3.zoom() 加到 svg, 滚轮缩放 + 拖动空白处平移.
+    // 旧版 svg 没 zoom 行为, 节点一多就挤一起看不见, 用户无法缩放/平移.
+    // 关键: zoom 必须作用在 root <g> 上, simulation 的 node 也在这个 <g> 里,
+    // 才能随 zoom transform 一起缩放/平移.
+    const root = svg.append('g').attr('class', 'zoom-root');
+    const zoom = d3
+      .zoom<SVGSVGElement, unknown>()
+      .scaleExtent([0.3, 4])  // 缩放范围 0.3x ~ 4x, 防缩太小看不见/太大溢出
+      .on('zoom', (event) => {
+        // event.transform 是 d3 计算好的 translate + scale, 直接 apply 到 root <g>
+        root.attr('transform', event.transform.toString());
+      });
+    // svg 调用 zoom (滚轮 + 拖动空白处平移); 节点上 d3.drag 会阻止事件冒泡
+    // 让节点拖动和 svg 平移共存, 互不干扰 (drag 有 subject 范围限定).
+    svg.call(zoom);
+
     // M-18: 计算邻居集合 (用于 click 高亮 1 跳邻居)
     const neighborSet = (id: string) => {
       const s = new Set<string>([id]);
@@ -139,8 +155,8 @@ export function GraphPanel({ graph }: Props) {
       .velocityDecay(0.6)
       .alphaMin(0.001);
 
-    // M-18: 4 类边颜色 + dasharray
-    const link = svg
+    // M-18: 4 类边颜色 + dasharray (R10.5 Fix-Zoom: append 到 root <g>, 跟随缩放)
+    const link = root
       .append('g')
       .selectAll('line')
       .data(links)
@@ -159,8 +175,8 @@ export function GraphPanel({ graph }: Props) {
         d.type === 'author_overlap' ? 'url(#arrow-both-start)' : null
       );
 
-    // Nodes
-    const node = svg
+    // Nodes (R10.5 Fix-Zoom: append 到 root <g>, 跟随缩放)
+    const node = root
       .append('g')
       .selectAll('g')
       .data(nodes)
@@ -178,15 +194,18 @@ export function GraphPanel({ graph }: Props) {
       })
       .on('mouseout', () => setHovered(null))
       .on('click', (_, d) => {
-        // M-18: click 节点高亮 1 跳邻居 (其余 dim)
+        // R10.5 Fix-Click-Conflict: 单击**只高亮**, 不跳 URL.
+        // 旧版单击直接 window.open 跳网页, 用户反馈"单击/双击功能失效",
+        // 因为单击立即跳转根本没机会触发双击. 新版单击 setSelected 高亮 1 跳
+        // 邻居, 跳 URL 改成双击 (符合常见图形交互约定: 单击=选中, 双击=打开).
         setSelected((prev) => (prev === d.id ? null : d.id));
-        if (d.url && /^https?:\/\//i.test(d.url)) {
-          window.open(d.url, '_blank', 'noopener,noreferrer');
-        }
       })
       .call(
         d3
           .drag<any, SimNode>()
+          // clickDistance 阈值 5px: 拖动距离 < 5px 算 click, 触发单击高亮;
+          // > 5px 算 drag, 走拖动布局逻辑. 防"想点结果拖了"误触.
+          .clickDistance(5)
           .on('start', (event, d) => {
             if (!event.active) simulation.alphaTarget(0.3).restart();
             d.fx = d.x;
@@ -200,12 +219,20 @@ export function GraphPanel({ graph }: Props) {
             if (!event.active) simulation.alphaTarget(0);
             // 旧版这里把 fx/fy 设 null, 节点松手后立刻被 simulation 推回去,
             // 用户感觉"拖不动" — 实际是 d3 drag 工作了, 但视觉上没停留.
-            // 新版: 保留 fx/fy, 节点固定在拖放位置. 双击节点可解除固定.
+            // 新版: 保留 fx/fy, 节点固定在拖放位置. 右键节点可解除固定.
             // 注: simulation 不会动 fx/fy != null 的节点, 拖过的位置会"粘"住.
           })
       )
-      // 双击节点: 解除固定 (fx/fy = null), 节点重新加入 simulation 自由布局
+      // 双击节点: 打开原始 URL (符合图形交互约定: 单击=选中, 双击=打开)
       .on('dblclick', (_, d) => {
+        if (d.url && /^https?:\/\//i.test(d.url)) {
+          window.open(d.url, '_blank', 'noopener,noreferrer');
+        }
+      })
+      // 右键节点: 解除固定 (fx/fy = null), 节点重新加入 simulation 自由布局.
+      // 之前这里用 dblclick, 但 dblclick 已被跳 URL 占用. 右键是更地道的"解除"操作.
+      .on('contextmenu', (event: MouseEvent, d) => {
+        event.preventDefault();
         d.fx = null;
         d.fy = null;
         simulation.alpha(0.5).restart();
@@ -406,9 +433,9 @@ export function GraphPanel({ graph }: Props) {
             <span>author_overlap 共同作者</span>
           </div>
           <div className="text-themed-muted pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
-          <div className="text-themed-muted">click 节点 = 高亮 1 跳邻居</div>
-          <div className="text-themed-muted">拖动节点 = 重新布局 / 固定位置</div>
-          <div className="text-themed-muted">双击节点 = 解除固定</div>
+          <div className="text-themed-muted">单击 = 高亮 1 跳邻居 · 双击 = 打开论文</div>
+          <div className="text-themed-muted">拖动 = 固定位置 · 右键 = 解除固定</div>
+          <div className="text-themed-muted">滚轮 = 缩放 · 空白处拖动 = 平移</div>
         </div>
       </div>
     </aside>

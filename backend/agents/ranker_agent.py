@@ -262,17 +262,23 @@ async def rank_node(state: SearchState) -> SearchState:
     cons_results: list[float] = []
     total_cost = 0.0
     total_tokens = 0
-    for batch, result in zip(batches, combined_batches):
+    for batch_idx, (batch, result) in enumerate(zip(batches, combined_batches)):
         if isinstance(result, Exception):
-            # 单批失败：记录 warning，用兜底分数填平（不污染其他批次的结果）
+            # 单批失败：用**每篇论文差异化**兜底分数填平（旧实现全 batch 给 5.0/6.0
+            # → 25 篇论文 final_score 全部 ~4.0, 用户反馈). 新版用论文自身属性
+            # (citation_count/venue/year) 计算差异化, 高引论文排得比冷门 mock 论文前.
             logger.warning(
                 f"[rank_node] batch scoring failed "
                 f"(batch_size={len(batch)}, err={type(result).__name__}: "
                 f"{scrub_sensitive(str(result))}); "
-                f"using fallback scores 5.0/6.0 for this batch"
+                f"using per-paper fallback scores (citation/venue/year based)"
             )
-            rel_results.extend([5.0] * len(batch))
-            cons_results.extend([6.0] * len(batch))
+            for paper in batch:
+                auth = _authority_score(paper.citation_count, paper.venue, paper.year or 0)
+                fallback_rel = round(4.5 + min(2.5, auth * 0.25), 1)
+                fallback_cons = round(6.0 + min(1.0, auth * 0.1), 1)
+                rel_results.append(fallback_rel)
+                cons_results.append(fallback_cons)
             continue
         rel_scores, cons_scores, usage = result
         rel_results.extend(rel_scores)
@@ -291,9 +297,11 @@ async def rank_node(state: SearchState) -> SearchState:
         # Fix-X13: 评完即打 _scored 标, 防止 refine 迭代二次评分 (rel=0 论文)
         paper._scored = True
         final = rel * 0.5 + paper.authority_score * 0.3 + cons * 0.2
-        # Fix-I R10.5: 阈值 4.0 → 5.5. 旧阈值在 mock 兜底 rel=5.0/6.0 时失效,
-        # 无关高引论文(alphafold 类) 拿到 6.4 污染 Top 25. 新阈值压制兜底.
-        if rel < 5.5:
+        # Fix-I R10.5 (修订): 阈值 4.0 → 5.5 加白名单. 旧实现 cap = rel*0.8 = 4.0
+        # 在 rel=5.0 mock 兜底时, 即使高引论文 authority=10, final=2.5+3+1.2=6.7
+        # 仍被 cap 到 4.0 → 25 篇全 4.0. 新增: 当 auth >= 6.0 (顶刊高引, 真实信号)
+        # 信任 authority 不 cap; 否则 cap 防 alphafold 类冷门论文污染.
+        if rel < 5.5 and paper.authority_score < 6.0:
             final = min(final, rel * 0.8)
         paper.final_score = round(final, 2)
 

@@ -334,6 +334,40 @@ export function QueryPanel({
                 本次搜索触发了 {fallbackPaperCount} 篇论文的后备 fallback
                 （可能因 LLM API 限流、key 失效或网络问题）。建议检查 provider 配置后重试。
               </p>
+              {/* R10.5 Fix-Diagnose: 自动检测常见 fallback 原因, 给用户可执行的修复建议.
+                  旧版只说"可能因限流/key/网络" 太空泛, 用户不知道具体哪里出问题.
+                  前端基于 providers 列表 + URL 反向检测给出 actionable hints. */}
+              <details className="mt-2 text-xs">
+                <summary className="cursor-pointer text-amber-700 hover:text-amber-900 select-none">
+                  查看诊断与修复建议
+                </summary>
+                <ul className="mt-1.5 space-y-1 pl-3 list-disc text-amber-700">
+                  {/* 检查 SS key: providers 列表里没有 semantic_scholar 直接标识,
+                      但 query 后端能识别. 简易检测: 如果 fallback_paper_count >= 10,
+                      强烈怀疑 SS rate-limit (免费 tier 5req/5min). */}
+                  {fallbackPaperCount >= 10 && (
+                    <li>
+                      <strong>Semantic Scholar 限流可能性高</strong>:
+                      无 SS API key 时免费配额 100 req/5min, 单次 max_iter=3 × 5 子查询 = 15+ 请求.
+                      修复: 在 <code className="bg-amber-100 px-1 rounded">.env</code> 设{' '}
+                      <code className="bg-amber-100 px-1 rounded">SEMANTIC_SCHOLAR_API_KEY=xxx</code>{' '}
+                      (申请: semanticscholar.org/product/api).
+                    </li>
+                  )}
+                  {/* LLM 失败: 总是显示, 因为 fallback 可能只是部分论文.
+                      模板报告 "当前为 mock 模式" 文本已被替换为更明确的提示. */}
+                  <li>
+                    <strong>LLM 失败降级</strong>:
+                    synthesis 节点 fallback 会让综述内容质量降低 (评分统一为 4.0 左右).
+                    可尝试: 1) 换 provider (kimi/glm 备选); 2) 降低 max_iterations 减少 LLM 调用次数.
+                  </li>
+                  <li>
+                    <strong>网络/代理</strong>:
+                    确认 <code className="bg-amber-100 px-1 rounded">get_proxy()</code> 探测到的代理可达
+                    (国内常见端口 7890/7897), SS/OpenAlex 走不通也会触发 fallback.
+                  </li>
+                </ul>
+              </details>
             </div>
           </div>
         )}
