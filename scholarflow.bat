@@ -12,9 +12,14 @@ REM 切到脚本所在目录 (无论从哪里双击)
 cd /d "%~dp0"
 
 REM ===== 全局常量 =====
+REM R10.5.1 fix: ROOT 去掉末尾反斜杠.
+REM 原因: 后续 start "..." cmd /k "cd /d ""%ROOT%""" 嵌套引号中,
+REM 末尾 \ 与闭合 " 形成 \" 逃逸序列, 让 cd 命令解析失败 → 启动静默挂掉.
+REM 解决: ROOT 不带尾 \, 所有引号包裹的路径用 %ROOT% 即可.
 set "ROOT=%~dp0"
-set "RUN_DIR=%ROOT%.run"
-set "LOG_DIR=%ROOT%logs"
+if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+set "RUN_DIR=%ROOT%\.run"
+set "LOG_DIR=%ROOT%\logs"
 set "BACKEND_PORT=8000"
 set "FRONTEND_PORT=5173"
 set "BACKEND_PID_FILE=%RUN_DIR%\backend.pid"
@@ -186,8 +191,8 @@ if /i not "!CHOICE!"=="n" (
     ) else (
         echo    [1/2] 安装后端依赖 (requirements.txt + dev)...
         %PYTHON% -m pip install --upgrade pip
-        %PYTHON% -m pip install -r "%ROOT%backend\requirements.txt"
-        %PYTHON% -m pip install -r "%ROOT%requirements-dev.txt"
+        %PYTHON% -m pip install -r "%ROOT%\backend\requirements.txt"
+        %PYTHON% -m pip install -r "%ROOT%\requirements-dev.txt"
     )
 )
 
@@ -197,7 +202,7 @@ if /i not "!CHOICE!"=="n" (
         echo    [错误] 未找到 npm 命令, 请先安装 Node.js 18+
     ) else (
         echo    [2/2] 安装前端依赖 (npm install)...
-        cd /d "%ROOT%frontend"
+        cd /d "%ROOT%\frontend"
         call npm install
         cd /d "%ROOT%"
     )
@@ -209,7 +214,7 @@ if /i "!CHOICE!"=="y" (
         echo    [错误] 未找到 docker, 跳过
     ) else (
         echo    [3/3] 拉取/构建 Docker 镜像...
-        %DC% -f "%ROOT%docker-compose.yml" build
+        %DC% -f "%ROOT%\docker-compose.yml" build
     )
 )
 
@@ -290,8 +295,8 @@ goto :wait_backend
 
 REM 启动前端
 echo    [2/2] 启动前端 (vite :%FRONTEND_PORT%)...
-cd /d "%ROOT%frontend"
-start "%FRONTEND_TITLE%" /MIN cmd /k "cd /d ""%ROOT%frontend"" && title %FRONTEND_TITLE% && %NPX% vite --host 127.0.0.1 --port %FRONTEND_PORT% > ""%FRONTEND_LOG%"" 2>&1"
+cd /d "%ROOT%\frontend"
+start "%FRONTEND_TITLE%" /MIN cmd /k "cd /d ""%ROOT%\frontend"" && title %FRONTEND_TITLE% && %NPX% vite --host 127.0.0.1 --port %FRONTEND_PORT% > ""%FRONTEND_LOG%"" 2>&1"
 cd /d "%ROOT%"
 
 REM 等前端就绪
@@ -332,7 +337,7 @@ if not defined DOCKER (
     pause & goto :menu
 )
 echo    [1/1] docker compose up -d ...
-%DC% -f "%ROOT%docker-compose.yml" up -d --build
+%DC% -f "%ROOT%\docker-compose.yml" up -d --build
 echo.
 echo    [完成] Docker 容器已启动
 echo.
@@ -388,7 +393,7 @@ if defined DOCKER (
     if not errorlevel 1 (
         set /p CHOICE="    [Docker] 检测到 scholarflow 容器, 是否一起停止? [y/N]: "
         if /i "!CHOICE!"=="y" (
-            %DC% -f "%ROOT%docker-compose.yml" down
+            %DC% -f "%ROOT%\docker-compose.yml" down
         )
     )
 )
@@ -458,11 +463,11 @@ if /i not "!CONFIRM!"=="y" (
     echo    [取消]
     pause & goto :menu
 )
-if exist "%ROOT%backend\.cache" rmdir /s /q "%ROOT%backend\.cache" 2>nul && echo    [OK] backend\.cache
-if exist "%ROOT%logs" (
-    del /q "%ROOT%logs\*.log" 2>nul && echo    [OK] logs\*.log
+if exist "%ROOT%\backend\.cache" rmdir /s /q "%ROOT%\backend\.cache" 2>nul && echo    [OK] backend\.cache
+if exist "%ROOT%\logs" (
+    del /q "%ROOT%\logs\*.log" 2>nul && echo    [OK] logs\*.log
 )
-if exist "%ROOT%frontend\dist" rmdir /s /q "%ROOT%frontend\dist" 2>nul && echo    [OK] frontend\dist
+if exist "%ROOT%\frontend\dist" rmdir /s /q "%ROOT%\frontend\dist" 2>nul && echo    [OK] frontend\dist
 echo.
 echo    [完成]
 echo.
