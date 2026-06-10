@@ -21,6 +21,7 @@ from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar
 from backend.utils.text_utils import deduplicate_papers
+from backend.utils.async_helpers import bounded_gather
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
@@ -100,14 +101,9 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
-    try:
-        backward_results = await asyncio.wait_for(
-            asyncio.gather(*backward_tasks, return_exceptions=True),
-            timeout=60.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"[expand_citations] backward gather timed out after 60s, {len(top)} seeds")
-        backward_results = [TimeoutError("backward gather timeout")] * len(top)
+    backward_results = await bounded_gather(
+        backward_tasks, label="expand_citations.backward", timeout=60.0,
+    )
 
     # ===== Forward: 取每篇 seed 的 citers（限速，犀利评论 #8）=====
     forward_tasks = [
@@ -117,14 +113,9 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
-    try:
-        forward_results = await asyncio.wait_for(
-            asyncio.gather(*forward_tasks, return_exceptions=True),
-            timeout=60.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"[expand_citations] forward gather timed out after 60s, {len(top)} seeds")
-        forward_results = [TimeoutError("forward gather timeout")] * len(top)
+    forward_results = await bounded_gather(
+        forward_tasks, label="expand_citations.forward", timeout=60.0,
+    )
 
     # ===== 关键修复：构建 seed -> refs 反向映射（写回 Paper.references）=====
     seed_to_refs: dict[str, list[str]] = {}

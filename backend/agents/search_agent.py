@@ -18,6 +18,7 @@ from backend.models.paper import Paper
 from backend.api import semantic_scholar, openalex
 from backend.utils.text_utils import deduplicate_papers
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+from backend.utils.async_helpers import bounded_gather  # VULN-004
 
 logger = logging.getLogger(__name__)
 
@@ -66,18 +67,11 @@ async def search_node(state: SearchState) -> SearchState:
         tasks.append(_throttled_search(openalex.search_papers(q, limit=10), batch_semaphore))
 
     # R10.5 Fix-Timeout: per-gather 60s 上限, 防 SS/OA 慢响应累计 timeout.
-    # 旧实现: 5 子查询 × 2 源 = 10 并发, SS timeout=30s, 加 retry × 1.5s = 45s/single,
-    # Semaphore(4) 串行化 → 4 批 × 45s = 180s, 加上 expand/synthesize 后面 6 节点,
-    # 8 节点全跑 max_iter=3 累计 540s+ 超 240s 全局 budget.
     # 60s 截断: 部分 sub_queries 拿不到结果就用空 list, 不阻塞 pipeline.
-    try:
-        results = await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=60.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning(f"[search_node] gather timed out after 60s, {len(tasks)} tasks pending")
-        results = [TimeoutError("search gather timeout")] * len(tasks)
+    # R10.5 Fix-Audit-Bounded-Gather: 用共享 bounded_gather 助手, 消 3x 复制粘贴.
+    results = await bounded_gather(
+        tasks, label="search_node", timeout=60.0,
+    )
 
     all_papers: list[Paper] = []
     for result in results:

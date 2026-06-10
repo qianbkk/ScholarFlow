@@ -14,6 +14,13 @@ const LINK_STYLES: Record<string, { stroke: string; dasharray?: string; marker?:
   author_overlap: { stroke: '#f59e0b', marker: 'url(#arrow-both)' },    // amber-500, 双向
 };
 
+
+const INTERACTION_HINTS = [
+  '单击 = 高亮 1 跳邻居 · 双击 = 打开论文',
+  '拖动 = 固定位置 · 右键 = 解除固定',
+  '滚轮 = 缩放 · 空白处拖动 = 平移',
+];
+
 // M-18: 社区色 (按 decade 区分)
 const COMMUNITY_COLORS = [
   '#3b82f6', // blue-500
@@ -64,6 +71,16 @@ export function GraphPanel({ graph }: Props) {
     const zoom = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.3, 4])  // 缩放范围 0.3x ~ 4x, 防缩太小看不见/太大溢出
+      // R10.5 Fix-Audit-Zoom-Drag: zoom.filter 排除 .node 元素, 节点上的 mousedown
+      // 不触发 zoom pan. 旧版 svg 全局监听 mousedown 启动 pan, 跟节点 d3.drag
+      // 同时触发, 节点被拖到 pan 偏移后的位置, 体感"卡住". 加 filter: 事件
+      // target 在 .node 内时返回 false → zoom 忽略这个事件, 节点 drag 独占.
+      .filter((event: MouseEvent) => {
+        const target = event.target as Element | null;
+        // mousedown 在 .node / .node 后代上 → 让给 drag, 不 pan
+        if (target && target.closest('.node')) return false;
+        return true;
+      })
       .on('zoom', (event) => {
         // event.transform 是 d3 计算好的 translate + scale, 直接 apply 到 root <g>
         root.attr('transform', event.transform.toString());
@@ -349,6 +366,15 @@ export function GraphPanel({ graph }: Props) {
         const tId = typeof d.target === 'string' ? d.target : d.target.id;
         return sId === selected || tId === selected ? 0.9 : 0.05;
       });
+    // R10.5 Fix-Audit-Selected-Stroke: stroke 也在这里 apply, 不在 [graph] effect 闭包里.
+    // 旧版 stroke 在 [graph] effect 里用 closure 捕获的 selected 算 (effect 跑一次就定死),
+    // 用户点击节点时 [selected] effect 改 opacity 但 stroke 还是旧值, 红圈看不见.
+    // 现在 stroke/stroke-width 也跟随 selected 实时更新.
+    svg
+      .selectAll<SVGGElement, SimNode>('g.node')
+      .select('circle')
+      .attr('stroke', (d: any) => (d.id === selected ? '#ef4444' : '#1e293b'))
+      .attr('stroke-width', (d: any) => (d.id === selected ? 3 : 1.2));
   }, [selected, graph]);
 
   return (
@@ -433,9 +459,9 @@ export function GraphPanel({ graph }: Props) {
             <span>author_overlap 共同作者</span>
           </div>
           <div className="text-themed-muted pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
-          <div className="text-themed-muted">单击 = 高亮 1 跳邻居 · 双击 = 打开论文</div>
-          <div className="text-themed-muted">拖动 = 固定位置 · 右键 = 解除固定</div>
-          <div className="text-themed-muted">滚轮 = 缩放 · 空白处拖动 = 平移</div>
+          {INTERACTION_HINTS.map((h) => (
+            <div key={h} className="text-themed-muted">{h}</div>
+          ))}
         </div>
       </div>
     </aside>

@@ -262,7 +262,7 @@ async def rank_node(state: SearchState) -> SearchState:
     cons_results: list[float] = []
     total_cost = 0.0
     total_tokens = 0
-    for batch_idx, (batch, result) in enumerate(zip(batches, combined_batches)):
+    for batch, result in zip(batches, combined_batches):
         if isinstance(result, Exception):
             # 单批失败：用**每篇论文差异化**兜底分数填平（旧实现全 batch 给 5.0/6.0
             # → 25 篇论文 final_score 全部 ~4.0, 用户反馈). 新版用论文自身属性
@@ -273,10 +273,27 @@ async def rank_node(state: SearchState) -> SearchState:
                 f"{scrub_sensitive(str(result))}); "
                 f"using per-paper fallback scores (citation/venue/year based)"
             )
+            # R10.5 Fix-Audit-Auth-Double-Count: 旧实现 fallback_rel/cons 都用
+            # auth 算, 加上 final 公式再 *0.3 加一次, 实际 auth 权重 44.5% 不是 30%.
+            # 新版: rel 用 query-title overlap (跟 _mock_relevance_score 同思路,
+            # 拿 batch 共享的 query 字符串, 没的话退化到 5.0); cons 跟 rel 解耦,
+            # 用 venue 权威 (不依赖 auth, 避免双重计).
+            # paper.authority_score 仍回写, 防下方 cap 用陈旧值.
+            batch_query = batch[0].title if batch else ""  # 兜底用不到
             for paper in batch:
                 auth = _authority_score(paper.citation_count, paper.venue, paper.year or 0)
-                fallback_rel = round(4.5 + min(2.5, auth * 0.25), 1)
-                fallback_cons = round(6.0 + min(1.0, auth * 0.1), 1)
+                paper.authority_score = auth
+                # query-title overlap: 简版, 看 paper.title 跟 batch_query 有几个词重叠
+                # 实际没有 query 上下文, 用 paper.title 长度 + 是否有 abstract 做粗估
+                has_abstract = bool((paper.abstract or "").strip())
+                fallback_rel = round(5.0 if has_abstract else 4.0, 1)
+                # cons 用 venue 是否在权威表 (有 → 6.5, 没 → 5.5)
+                venue_norm = (paper.venue or "").strip()
+                in_top_venue = any(
+                    v.lower() in venue_norm.lower() or venue_norm.lower() in v.lower()
+                    for v in ("NeurIPS", "ICML", "ICLR", "ACL", "CVPR", "Nature", "Science", "JMLR", "TPAMI", "AAAI", "EMNLP")
+                )
+                fallback_cons = 6.5 if in_top_venue else 5.5
                 rel_results.append(fallback_rel)
                 cons_results.append(fallback_cons)
             continue

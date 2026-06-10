@@ -185,7 +185,7 @@ sys.modules[__name__].__class__ = _ScholarFlowMainModule
 
 # Round 6 M2: in-flight search task table — 让 /search/cancel 真能停 in-flight pipeline
 # key: request_id (string, FastAPI middleware 注入), value: asyncio.Task wrapping search_graph.ainvoke
-_in_flight_searches: dict[str, asyncio.Task] = {}
+_in_flight_searches: dict[str, "asyncio.Event | asyncio.Task"] = {}
 
 
 @asynccontextmanager
@@ -464,10 +464,20 @@ async def cancel_search(req: SearchCancelRequest, request: Request):
         f"(length={len(req.request_id) if req.request_id else 0})"
     )
     if req.request_id and req.request_id in _in_flight_searches:
-        _in_flight_searches[req.request_id].cancel()
-        logger.info(
-            f"[/search/cancel] task cancelled for request_id={req.request_id}"
-        )
+        ref = _in_flight_searches[req.request_id]
+        # R10.5 Fix-Cancel-Audit: dispatch by type.
+        # POST /search 存 Task (历史), SSE /search/stream 存 Event (本次修复).
+        # Event 不能 cancel(), 只能 set() 让 event_generator 在下个 chunk 检查.
+        if isinstance(ref, asyncio.Event):
+            ref.set()
+            logger.info(
+                f"[/search/cancel] SSE event set for request_id={req.request_id}"
+            )
+        else:
+            ref.cancel()
+            logger.info(
+                f"[/search/cancel] task cancelled for request_id={req.request_id}"
+            )
         return {"cancelled": True, "request_id": req.request_id}
     logger.info(
         f"[/search/cancel] no in-flight task for request_id={req.request_id}"
@@ -533,9 +543,14 @@ async def search_stream(
 
     t0 = _time.time()
 
-    # R10.5 Fix-Cancel: SSE request_id 跟 X-Request-ID header 对齐,
+    # R10.5 Fix-Cancel-Audit: SSE request_id 跟 X-Request-ID header 对齐,
     # 前端 fetch 响应头拿 X-Request-ID, 取消时 POST /search/cancel 带回这个 id.
+    # 协作式取消: 用 asyncio.Event 存到 _in_flight_searches, event_generator
+    # 在每个 chunk 边界检查, 看到 set() 立即 break. 旧版只 pop 不 set, cancel 路径
+    # 永远查不到 SSE 任务, 取消按钮成 no-op.
     req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
+    cancel_event = asyncio.Event()
+    _in_flight_searches[req_id] = cancel_event
 
     async def event_generator():
         return_amount = budget
@@ -571,6 +586,17 @@ async def search_stream(
                 # 应让超时 fail fast 提示用户降 max_iter 或换 provider.
                 async with asyncio.timeout(240.0):
                     async for chunk in search_graph.astream(initial, stream_mode="updates"):
+                        # R10.5 Fix-Cancel-Audit: 协作式取消 — 用户点取消
+                        # /search/cancel 会 set() 这个 event, 在 chunk 边界 return.
+                        # async generator 里 return 等于停止迭代 + 触发外层 finally,
+                        # budget 走 finally 的 return_amount > 0.01 分支归还.
+                        if cancel_event.is_set():
+                            logger.info(
+                                f"[/search/stream] cancelled mid-stream req_id={req_id} "
+                                f"after {step_count} nodes"
+                            )
+                            return_amount = max(0.0, budget - accumulated.get("total_cost_usd", 0.0))
+                            return
                         for node_name, state_update in chunk.items():
                             if not isinstance(state_update, dict):
                                 continue
