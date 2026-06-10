@@ -7,10 +7,14 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
+      // R10.5 Fix-P0-vite-proxy: 后端 R10.5 Fix-P2-4-Audit-diff 引入了 /api/v1/* 前缀
+      // 路由, 旧 rewrite `path.replace(/^\/api/, '')` 会把 /api/v1/* 剥成 /v1/*,
+      // 但后端没有 /v1/* 路由 (注册的是 /api/v1/* 和 /search/* alias), 全部 404.
+      // 修复: 不做 rewrite, 路径原样转发, 后端 /api/v1/* 直接命中.
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        // rewrite 已移除 — 后端路由前缀包含 /api/v1, 不能再剥 /api.
       },
     },
   },

@@ -1,7 +1,9 @@
 import type { SearchResult } from '../types';
 
-// Vite dev proxy 走 /api 前缀；生产环境可直接指向后端
-const API_BASE = '/api';
+// R10.5 Fix-P0-vite-proxy: 改用 /api/v1 前缀 (跟后端 R10.5 Fix-P2-4-Audit-diff
+// 引入的版本化路由一致). 旧 /api 在 vite proxy 修复后仍会 404 (后端只有 /api/v1/*
+// 和裸 /* alias, 没有 /api/* 路径), useSearch.ts 已经用 /api/v1, 这里同步过来.
+const API_BASE = '/api/v1';
 
 // R10.5 Fix-P0-B: API Key 认证. 从 localStorage 读, OPEN_MODE 时后端跳过.
 const STORED_KEY = 'sf-api-key';
