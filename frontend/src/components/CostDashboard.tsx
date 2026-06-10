@@ -20,7 +20,13 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
   // (R8 已升级), 最后回退到老字段 result.model_usage 兼容旧 cache.
   const usage =
     modelUsageSummary ?? result?.model_usage_summary ?? result?.model_usage ?? {};
-  const usageEntries = Object.entries(usage).sort((a, b) => b[1].cost - a[1].cost);
+  // R10.5 Fix-P0-e2e: 后端 model_usage_summary schema 漂移: 旧实现只返 tokens 没 cost,
+  // 前端 info.cost.toFixed() 抛 TypeError → ErrorBoundary → 白屏. 防御: cost 缺省 0.
+  // 排序也防御: 旧 cache 或老后端可能给 cost=undefined, NaN 比较会导致 sort 行为
+  // 不确定, 显式 ?? 0 让排序稳定.
+  const usageEntries = Object.entries(usage)
+    .map(([k, v]) => [k, { tokens: v?.tokens ?? 0, cost: v?.cost ?? 0 }] as const)
+    .sort((a, b) => b[1].cost - a[1].cost);
 
   const statusColor = {
     idle: 'bg-slate-400',
@@ -103,10 +109,10 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
                   {model}
                 </span>
                 <span className="font-mono text-[11px] text-themed-muted w-20 sm:w-24 text-right">
-                  {info.tokens.toLocaleString()} tok
+                  {(info.tokens ?? 0).toLocaleString()} tok
                 </span>
                 <span className="font-mono text-[11px] text-brand-600 font-semibold w-16 sm:w-20 text-right">
-                  ${info.cost.toFixed(4)}
+                  ${(info.cost ?? 0).toFixed(4)}
                 </span>
               </div>
             ))}

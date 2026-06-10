@@ -163,8 +163,14 @@ def _build_search_response(
             return "query_planning"
         return "other"
 
+    # R10.5 Fix-P0-e2e: 必须同时复制 tokens + cost. 旧实现只复制 tokens,
+    # 前端 CostDashboard 在 ${info.cost.toFixed(4)} 抛 TypeError → ErrorBoundary
+    # 触发 → 真实 LLM 搜索后白屏. 修: 同时回填 cost 字段, 用 round 防精度爆炸.
     model_usage_summary = {
-        _public_model_label(k): {"tokens": int((v or {}).get("tokens", 0))}
+        _public_model_label(k): {
+            "tokens": int((v or {}).get("tokens", 0)),
+            "cost": round(float((v or {}).get("cost", 0.0)), 6),
+        }
         for k, v in (state_dict.get("model_usage") or {}).items()
     }
 

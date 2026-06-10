@@ -71,3 +71,5 @@ tests/__pycache__/
 # tests/ + pytest.ini 同步入仓 — CI 跑 'pytest tests/' 必须能定位到
 # 实际文件 + 配置 (testpaths + norecursedirs=manual).
 
+tests/e2e_screenshots/
+tests/e2e_*.py
