@@ -73,3 +73,4 @@ tests/__pycache__/
 
 tests/e2e_screenshots/
 tests/e2e_*.py
+recent_diff.txt
