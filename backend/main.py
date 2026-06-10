@@ -395,10 +395,21 @@ async def search(req: SearchRequest, request: Request):
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task
         try:
-            # Fix-X3: timeout 240 → 480s. 用户实测 8 节点全跑 157s,
-            # max_iter=3 多次迭代逼近 240s 上限.  注释/日志/错误消息同步.
-            # 同步搜索响应 routes/search.py 的 480s 跟 README 一致.
-            final = await asyncio.wait_for(asyncio_task, timeout=480.0)
+            # R10.5.1 V3-fix (HH.txt §1): 同步 /search 超时从 480s → 60s.
+            # 原 480s 是早期没有 SSE 时的妥协, 公网网关 (Cloudflare 100s, ALB 60s)
+            # 100% 会先一步切断. 现在已有 /search/stream (SSE), 推荐长查询走 SSE.
+            # 同步端点保留 60s, 用于短查询 (< max_iter) 仍能正常工作.
+            final = await asyncio.wait_for(asyncio_task, timeout=60.0)
+        except asyncio.TimeoutError:
+            # 超时仍要走 budget 归还, 不直接 raise 跳过
+            logger.warning(f"[/search] sync timeout after 60s, recommend client switch to /search/stream (SSE). request_id={req_id}")
+            # budget 归还: 由于 task 还没完成, 不知道花了多少, 全额还
+            return_amount = float(req.budget)
+            await _return_budget(return_amount, user_id=user.user_id)
+            raise HTTPException(
+                status_code=504,
+                detail="Sync search timeout. Use /api/v1/search/stream (SSE) for long queries.",
+            )
         finally:
             _in_flight_searches.pop(req_id, None)
         elapsed = _time.time() - t0
@@ -438,11 +449,15 @@ async def search(req: SearchRequest, request: Request):
 
         return response_obj
     except asyncio.TimeoutError:
-        logger.warning("[/search] timed out after 480s")
+        logger.warning("[/search] timed out after 60s")
         raise HTTPException(
             status_code=504,
-            detail="搜索超时（>480s）。建议缩小查询范围或降低 max_iterations。",
+            detail="同步搜索超时（>60s）。建议改用 /api/v1/search/stream (SSE) 端点。",
         )
+    except HTTPException:
+        # R10.5.1 V3-fix: 内部 try 已 raise HTTPException(504),
+        # 外层这里不能再 catch 后转 500, 否则 504 变 500 错误
+        raise
     except Exception as e:
         logger.error("[/search] error", exc_info=True)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")

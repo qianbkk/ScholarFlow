@@ -136,11 +136,14 @@ async def search(req: SearchRequest, request: Request):
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task
         try:
-            # R10.5 关键修复: 240s → 480s. 跟 main.py 跟 README 对齐.
-            # 之前 Fix-10 / X-3 都没改这处 (只改了 main.py 跟 stream 端),
-            # 文档承诺与实际行为再次不一致.  真实 LLM max_iter=3 67s+ 接近 240s,
-            # 多次迭代会撞墙.
-            final = await asyncio.wait_for(asyncio_task, timeout=480.0)
+            # R10.5.1 V3-fix (HH.txt §1): 同步 /search 超时 480s → 60s.
+            # 跟 main.py 同步. 长查询走 /search/stream (SSE).
+            final = await asyncio.wait_for(asyncio_task, timeout=60.0)
+        except asyncio.TimeoutError:
+            raise HTTPException(
+                status_code=504,
+                detail="Sync search timeout. Use /api/v1/search/stream (SSE) for long queries.",
+            )
         finally:
             _in_flight_searches.pop(req_id, None)
         elapsed = time.time() - t0
@@ -176,14 +179,16 @@ async def search(req: SearchRequest, request: Request):
 
         return response_obj
     except asyncio.TimeoutError:
-        # R10.5 Fix 10: 240 → 480s. 用户实测 8 节点全跑要 157s, max_iter=3
-        # 多次迭代会逼近 240s; 480s 给 3 轮迭代 + 引文扩展留够余量.
-        # (60s × 8 节点上限) 实际最坏情况 ~480s, 这是 hard ceiling.
-        logger.warning("[/search] timed out after 480s")
+        # R10.5.1 V3-fix (HH.txt §1): 480s → 60s. 跟 main.py 对齐.
+        # 详见 main.py 同位置注释. 长查询走 /api/v1/search/stream (SSE).
+        logger.warning("[/search] timed out after 60s")
         raise HTTPException(
             status_code=504,
-            detail="搜索超时（>480s）。建议缩小查询范围或降低 max_iterations。",
+            detail="同步搜索超时（>60s）。建议改用 /api/v1/search/stream (SSE) 端点。",
         )
+    except HTTPException:
+        # R10.5.1 V3-fix: 内部 try 已 raise HTTPException(504), 外层不能再转 500
+        raise
     except Exception as e:
         logger.error("[/search] error", exc_info=True)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
