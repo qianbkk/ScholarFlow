@@ -185,22 +185,25 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
 
     cost_update = merge_usage_into_state(state, usage)
 
-    # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
+    # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 =====
     # 旧实现: LLM 输出综述后无任何追溯, LLM 可发明 DOI / 混淆作者 / 拼凑虚构论文。
-    # 修复: (1) 在综述末尾追加可点击的原始来源锚点表 (paper_id + URL),
-    #       (2) 用 _verify_citations_in_report 检查 **粗体标题** 是否能在 ranked_papers 中
-    #           找到对应; 找不到的列入 ⚠️ 警告, 让用户自行核查。
-    # 即使 LLM 在 Top5 推荐段编造论文, 用户能看到警告 + 完整 ranked 列表, 避免被误导。
-    paper_anchors = _build_paper_anchors(ranked)
-    report = (report or "") + paper_anchors
+    # 修复: (1) 用 _verify_citations_in_report 检查 [N] / [text](url) 引用是否在
+    #       ranked_papers 集合中, 找不到的列入 ⚠️ 警告让用户自行核查.
+    # R10.5.10: 删 _build_paper_anchors() 自动追加的 "## 📎 原始文献来源" Markdown
+    # 块 — 跟前端 ReportPanel 末尾"来源一览" 列表重复 (用户在报告末尾看到两份一样
+    # 的论文列表). 警告逻辑保留, 引用追溯功能改由前端来源一览负责 (更多元数据:
+    # 年份 / 引用数 / final_score / SS 直链 / 单击跨组件聚焦 + 双击打开).
+    # 即使 LLM 在 Top5 推荐段编造论文, 警告 + 完整 ranked 列表仍能避免误导.
 
     _, unverified = _verify_citations_in_report(report, ranked)
     if unverified:
-        warning = (
-            "\n\n> ⚠️ **系统提示**: 以下引用未在检索结果中找到对应来源, 请自行核查:\n"
-            + "\n".join(f"> - {t}" for t in unverified[:5])
-        )
-        report += warning
+        # R10.5.10: 改用结构化警告, 只列真实越界/未匹配, 不再把所有加粗术语当未验证
+        warning_lines = [
+            "\n\n> ⚠️ **系统提示**: 以下引用未在检索结果中找到对应来源, 请自行核查:"
+        ]
+        for u in unverified[:8]:  # 上限 8 条, 太多刷屏
+            warning_lines.append(f"> - {u['value']} ({u['reason']})")
+        report += "\n".join(warning_lines)
 
     return {
         **state,
@@ -214,52 +217,88 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
 # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
 
 def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, list[str]]:
-    """检查综述中 **粗体标题** 是否对应到 ranked_papers。
+    """检查综述中引用的论文是否能在 ranked_papers 中找到对应。
 
-    R10.5 Fix-K (审计 PPP §4.3 / QQQ §3.3): 旧 Jaccard 阈值 0.5 + len(cited_words)
-    分母, 容易误匹配 (e.g. "A Survey of LLM" vs "A Comprehensive Survey on
-    LLM" 共享 4/5=80% 词被误判为同一论文). 修复:
-      1. 先精确子串包含 (忽略大小写)
-      2. 模糊 Jaccard 阈值 0.5 → 0.7
-      3. 分母 max(len_cited, len_t) 而非 len_cited — 防止短 cited 高通过率
+    R10.5.10 Fix (用户反馈 §4): 旧实现用 `**粗体**` 当"引用" → LLM 综述里所有
+    加粗术语 (e.g. **Transformer**、**注意力机制**) 都被误判为"未验证引用",
+    警告噪声巨大, 用户体验混乱. 修复:
+      1. 真正的"引用"是 `[N]` 数字引用 (LLM 综述里 1/2/3... 对应 ranked 列表)
+         或 SS paper_id (e.g. `arxiv:2401.12345`)
+      2. 数字引用 [N] 范围 1..len(ranked), 越界算"unverified"
+      3. 显式 markdown 链接 [text](url) 中 url 形如 semantic_scholar / arxiv 的,
+         提取 paper_id 比对 ranked 集合
+      4. 旧 `**粗体**` 模式直接删除 (语义错的)
+
+    Returns:
+        report: 原报告 (透传)
+        unverified: 列表, 每个元素是 dict {kind: 'index'|'id'|'text', value: ..., reason: ...}
     """
-    ranked_titles = [p.get("title", "").lower() for p in ranked if p.get("title")]
-    cited_in_report = re.findall(r'\*\*([^*]{5,80})\*\*', report)
-    unverified = []
-    for cited in cited_in_report:
-        cited_lower = cited.lower()
-        cited_words = set(cited_lower.split())
-        matched = False
-        for t in ranked_titles:
-            t_words = set(t.split())
-            # Stage 1: 精确子串包含 (任一方向)
-            if cited_lower in t or t in cited_lower:
-                matched = True
-                break
-            # Stage 2: 模糊 Jaccard, 分母用 max 长度
-            intersection = len(cited_words & t_words)
-            if intersection / max(len(cited_words), len(t_words), 1) > 0.7:
-                matched = True
-                break
-        if not matched and len(cited) > 10:
-            unverified.append(cited)
+    unverified: list[dict] = []
+
+    # 1) 数字引用 [N] / [N, M] / [N-M]
+    # LLM 综述里 [1] [2] [3] 引用 ranked 列表的论文 (R10.5.10 验证: 这是主要引用形式)
+    index_refs = re.findall(r'\[(\d{1,2}(?:\s*[,，\-]\s*\d{1,2})*)\]', report)
+    referenced_indices: set[int] = set()
+    for ref_group in index_refs:
+        # 拆 [1, 2, 3] 或 [1-3]
+        for part in re.split(r'[,，]', ref_group):
+            part = part.strip()
+            if '-' in part:
+                # 范围 [1-3]
+                try:
+                    a, b = part.split('-', 1)
+                    a, b = int(a.strip()), int(b.strip())
+                    for n in range(a, b + 1):
+                        if 1 <= n <= len(ranked):
+                            referenced_indices.add(n)
+                except (ValueError, TypeError):
+                    unverified.append({
+                        'kind': 'index',
+                        'value': part,
+                        'reason': '范围引用格式错误',
+                    })
+            else:
+                try:
+                    n = int(part)
+                    if 1 <= n <= len(ranked):
+                        referenced_indices.add(n)
+                    else:
+                        unverified.append({
+                            'kind': 'index',
+                            'value': str(n),
+                            'reason': f'越界 (1-{len(ranked)} 之外)',
+                        })
+                except ValueError:
+                    pass
+
+    # 2) 显式 markdown 链接 [text](url) — 提取 SS paper_id
+    # 旧实现: 任何 [text](url) 都算 "citation" → 噪声巨大 (脚注/参考链接都中招)
+    # 修复: 只匹配 semantic_scholar / arxiv 域名的 URL
+    ss_id_pattern = re.compile(
+        r'\[([^\]]+)\]\((https?://(?:www\.)?(?:semanticscholar\.org|arxiv\.org)/[^\)]+)\)'
+    )
+    referenced_ids: set[str] = set()
+    ranked_ids = {p.get('paper_id', '') for p in ranked if p.get('paper_id')}
+    for match in ss_id_pattern.finditer(report):
+        text = match.group(1)
+        url = match.group(2)
+        # 从 URL 末尾抽 paper_id (e.g. /paper/abc123, /abs/2401.12345)
+        path = url.rstrip('/').split('/')[-1]
+        if not path:
+            continue
+        paper_id = path.split('?')[0]  # 去 query string
+        if paper_id in ranked_ids:
+            referenced_ids.add(paper_id)
+        else:
+            unverified.append({
+                'kind': 'id',
+                'value': f'[{text}]({url[:60]}...)',
+                'reason': f'paper_id "{paper_id[:30]}" 不在 ranked_papers 集合中',
+            })
+
+    # 数字引用 vs ranked 列表的差集 = 未引用论文 (不是问题, 不报)
+    # unranked_indices (越界) 已加进 unverified
+    # ranker_paper 集合 vs referenced_ids: 集合差表示 ranked 中没被引用的
+    # (正常的综述不会引用全部 25 篇, 也不报警)
+
     return report, unverified
-
-
-def _build_paper_anchors(ranked: list[dict]) -> str:
-    """在综述末尾生成可点击的原始来源锚点表。
-
-    格式:
-      ## 📎 原始文献来源（可核查）
-      1. [Title 1](url) — SS ID: `xxx`
-      ...
-    """
-    if not ranked:
-        return ""
-    lines = ["\n\n---\n## 📎 原始文献来源（可核查）\n"]
-    for i, p in enumerate(ranked[:15], 1):
-        ss_id = p.get("paper_id", "unknown")
-        url = p.get("url", f"https://semanticscholar.org/paper/{ss_id}")
-        title = (p.get("title") or "Unknown").strip()
-        lines.append(f"{i}. [{title}]({url}) — SS ID: `{ss_id}`")
-    return "\n".join(lines)

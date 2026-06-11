@@ -357,40 +357,20 @@ export function ReportPanel({
           />
         )}
 
-        {/* M-19 (R10.5) UI 差异化: 综述末尾的"原始文献来源"表格提示.
-            Editorial 风格: 细线分隔 + mono 文字 + 缩进引用感. */}
-        {!loading && report && html.includes('原始文献来源') && (
-          <div
-            className="mt-8 pt-4 border-t flex items-start gap-3 text-[11px] font-ui"
-            data-testid="paper-anchors-different"
-            style={{ borderColor: 'var(--sf-border)' }}
-            title="其他工具 (知网/Google Scholar/Semantic Scholar) 都不生成可核查的原始文献来源表"
-          >
-            <span
-              className="font-mono text-base leading-none"
-              style={{ color: 'var(--sf-accent)' }}
-            >
-              ¶
-            </span>
-            <span style={{ color: 'var(--sf-muted)' }}>
-              <span className="font-semibold" style={{ color: 'var(--sf-accent)' }}>
-                原始文献来源表
-              </span>{' '}
-              已附在综述末尾 (含 SS ID + 直链),
-              您可逐条点开核对综述里诸如「某论文 2017 年提出 Transformer」之类的声明。
-            </span>
-          </div>
-        )}
-
-        {/* R10.5.5: 报告末尾的论文 quick-look 卡片网格
-            不依赖后端生成 (后端 marked 输出是固定 HTML 难以加 data-* 属性),
-            改用前端从 papers[] prop 渲染可点击的 paper_id 卡 → 跨组件聚焦 + 打开. */}
+        {/* R10.5.10: 删"原始文献来源表"提示 banner + 来源一览全显.
+            旧实现: 后端 synthesis_agent 在 report 末尾追加 "## 📎 原始文献来源（可核查）"
+            Markdown 块, 前端又加 "原始文献来源表" 提示, 再加 "来源一览 (12)" 截断列表
+            — 三处重复, 用户看到两份一样的论文列表. 修复:
+            1. 后端删 _build_paper_anchors() (注释保留追溯)
+            2. 前端删 "原始文献来源表" 提示 banner
+            3. 来源一览不再截断 12, 全显 (ranker 评 25 篇, 不再藏)
+            4. 提示信息移到标题 subline, 一行说清作用 */}
         {!loading && report && papers.length > 0 && onSelectPaper && (
           <div
             className="mt-8 pt-4 border-t"
             style={{ borderColor: 'var(--sf-border)' }}
           >
-            <div className="flex items-baseline gap-2 mb-3">
+            <div className="flex items-baseline gap-2 mb-1">
               <span
                 className="font-mono text-[10px] uppercase tracking-[0.18em]"
                 style={{ color: 'var(--sf-accent)' }}
@@ -404,8 +384,14 @@ export function ReportPanel({
                 来源一览 ({papers.length})
               </h3>
             </div>
+            <p
+              className="text-[10px] font-mono uppercase tracking-wider mb-3"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              单击 = 跨组件聚焦 · 双击 / Ctrl+单击 = 打开论文
+            </p>
             <ol className="space-y-1.5">
-              {papers.slice(0, 12).map((p, i) => {
+              {papers.map((p, i) => {
                 const isSelected = p.paper_id && p.paper_id === selectedPaperId;
                 return (
                   <li
@@ -422,7 +408,7 @@ export function ReportPanel({
                       }
                       if (p.paper_id) onSelectPaper(isSelected ? null : p.paper_id);
                     }}
-                    className="flex items-baseline gap-3 py-1.5 cursor-pointer transition-colors"
+                    className="flex items-baseline gap-3 py-1 cursor-pointer transition-colors"
                     style={{
                       color: 'var(--sf-text)',
                       paddingLeft: '10px',
@@ -453,14 +439,6 @@ export function ReportPanel({
                   </li>
                 );
               })}
-              {papers.length > 12 && (
-                <li
-                  className="text-[10px] font-mono uppercase tracking-[0.15em] text-center pt-2"
-                  style={{ color: 'var(--sf-muted)' }}
-                >
-                  · 还有 {papers.length - 12} 篇见左侧论文列表 ·
-                </li>
-              )}
             </ol>
           </div>
         )}

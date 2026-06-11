@@ -1,12 +1,14 @@
-"""Tests for M-2: synthesis_agent Grounding 验证 + 来源锚点表。
+"""Tests for M-2: synthesis_agent Grounding 验证 + 警告.
 
 R9 审计发现 P0-A (综述幻觉无追溯): 旧 synthesize_node 把 LLM 输出直接 return,
 没有任何 Grounding 验证或来源锚点, LLM 可发明 DOI / 混淆作者 / 拼凑虚构论文。
 
-修复:
-  1) _build_paper_anchors: 综述末尾追加可点击的原始来源锚点表 (paper_id + URL)
-  2) _verify_citations_in_report: 提取综述中 **粗体标题**, 跟 ranked_papers 词集合对比,
-     不匹配的列入 unverified 列表 → 综述末尾加 ⚠️ 警告提示用户核查
+R10.5.10 重构 (用户反馈 §4): 旧实现用 `**粗体**` 当"引用" → LLM 综述里所有
+加粗术语 (e.g. **Transformer**、**注意力机制**) 都被误判为"未验证引用",
+警告噪声巨大. 重写为检查 [N] 数字引用 + markdown 链接 paper_id 匹配:
+  1) 数字引用 [1] [2, 3] [1-3] 越界 (1..len(ranked) 之外) 算 unverified
+  2) SS/arXiv markdown 链接 [text](url) 中 paper_id 不在 ranked 集合 算 unverified
+  3) unverified 是 dict 列表, 每条 {kind, value, reason}
 
 本测试 mock call_llm, 让 LLM 走 mock 路径, 验证 Grounding 逻辑独立于 LLM 工作。
 """
@@ -66,159 +68,109 @@ def _make_state(ranked: list[dict] | None = None) -> SearchState:
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: _verify_citations_in_report
+# Unit tests: _verify_citations_in_report (R10.5.10 重写后)
 # ---------------------------------------------------------------------------
 
-def test_verify_citations_in_report_no_unverified():
-    """5 papers, all cited with **bold titles** matching ranked → empty unverified."""
+def test_verify_index_refs_in_range_no_unverified():
+    """5 papers, report cites [1] [2] [3] [4] [5] all in range → empty unverified."""
     ranked = [
-        {"title": "Deep Learning for Natural Language Processing"},
-        {"title": "Transformers in Computer Vision"},
-        {"title": "Graph Neural Networks Survey"},
-        {"title": "Reinforcement Learning for Robotics"},
-        {"title": "Federated Learning Privacy"},
+        {"title": f"Paper {i}", "paper_id": f"ss-{i}"} for i in range(1, 6)
     ]
     report = """
 ## 核心论文推荐
-1. **Deep Learning for Natural Language Processing** [2023] — 经典工作
-2. **Transformers in Computer Vision** [2023] — 重要进展
-3. **Graph Neural Networks Survey** [2023] — 综述
-4. **Reinforcement Learning for Robotics** [2023] — 应用
-5. **Federated Learning Privacy** [2023] — 隐私
+1. 这是首篇 [1] 的工作
+2. 第二篇 [2] 也很重要
+3. 第三篇 [3] 的发现
+4. 第四篇 [4] 的方法
+5. 第五篇 [5] 的应用
 """
     _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    assert unverified == [], f"Expected empty, got: {unverified}"
+
+
+def test_verify_index_refs_out_of_range_flagged():
+    """引用 [6] 越界 (5 篇) → unverified 标 '6', reason='越界'."""
+    ranked = [
+        {"title": f"Paper {i}", "paper_id": f"ss-{i}"} for i in range(1, 6)
+    ]
+    report = """
+## 综述
+前 5 篇都相关 [1] [2] [3] [4] [5]
+另提一篇 [6] (其实不存在)
+还有 [99] 也提到了
+"""
+    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    # [6] 和 [99] 越界
+    out_of_range = [u for u in unverified if u['kind'] == 'index' and '越界' in u['reason']]
+    values = [u['value'] for u in out_of_range]
+    assert '6' in values, f"Expected '6' flagged, got: {values}"
+    assert '99' in values, f"Expected '99' flagged, got: {values}"
+
+
+def test_verify_index_refs_compact_list():
+    """紧凑列表 [1, 2, 3] / 范围 [1-3] 都正确解析."""
+    ranked = [
+        {"title": f"Paper {i}", "paper_id": f"ss-{i}"} for i in range(1, 6)
+    ]
+    report = "研究 [1, 2, 3] 共同提出, 也参考 [4-5]."
+    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    assert unverified == [], f"Expected empty, got: {unverified}"
+
+
+def test_verify_markdown_link_in_ranked_no_unverified():
+    """markdown 链接指向 ranked 集合中的 paper_id → 不报警."""
+    ranked = [
+        {"title": "Real Paper", "paper_id": "abc-real-001"},
+    ]
+    report = "相关研究 [Real Paper](https://semanticscholar.org/paper/abc-real-001) 指出..."
+    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    assert unverified == [], f"Expected empty, got: {unverified}"
+
+
+def test_verify_markdown_link_hallucinated_flagged():
+    """markdown 链接指向不存在的 paper_id → 报警."""
+    ranked = [
+        {"title": "Real Paper", "paper_id": "abc-real-001"},
+    ]
+    report = "请参考 [Fabricated](https://arxiv.org/abs/9999.99999) 的工作."
+    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    # Fabricated paper_id 不在 ranked 集合
+    id_unverified = [u for u in unverified if u['kind'] == 'id']
+    assert len(id_unverified) >= 1, f"Expected id flagged, got: {unverified}"
+    assert any('9999.99999' in u['value'] for u in id_unverified)
+
+
+def test_verify_bold_terms_ignored():
+    """R10.5.10 Fix: 旧实现把 **Transformer** 当未验证引用, 现不再误报.
+    加粗术语 (术语标签, 不是引用) 应被忽略."""
+    ranked = [{"title": "Some Paper", "paper_id": "ss-1"}]
+    report = "**Transformer** 是 **注意力机制** 的一种实现, 见 [1]."
+    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
+    # 不应把 Transformer / 注意力机制 当 unverified
     assert unverified == [], (
-        f"Expected empty unverified list, got: {unverified}"
+        f"加粗术语不应被误判为未验证引用, got: {unverified}"
     )
 
 
-def test_verify_citations_in_report_with_hallucinated():
-    """5 papers, report cites a fabricated **Made Up Paper Title** → unverified contains it."""
-    ranked = [
-        {"title": "Deep Learning for Natural Language Processing"},
-        {"title": "Transformers in Computer Vision"},
-        {"title": "Graph Neural Networks Survey"},
-        {"title": "Reinforcement Learning for Robotics"},
-        {"title": "Federated Learning Privacy"},
-    ]
-    # "Made Up Paper Title" (4 words, 19 chars) has no overlap with any ranked title.
-    # "Another Fabricated Study" (3 words, 24 chars) similarly doesn't match.
-    report = """
-## 核心论文推荐
-1. **Deep Learning for Natural Language Processing** [2023]
-2. **Made Up Paper Title** [2023]
-3. **Another Fabricated Study** [2023]
-4. **Graph Neural Networks Survey** [2023]
-"""
-    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
-    # Both hallucinated titles should be flagged
-    assert "Made Up Paper Title" in unverified, (
-        f"Expected 'Made Up Paper Title' in unverified, got: {unverified}"
-    )
-    assert "Another Fabricated Study" in unverified, (
-        f"Expected 'Another Fabricated Study' in unverified, got: {unverified}"
-    )
-    # Real paper should NOT be flagged
-    assert "Deep Learning for Natural Language Processing" not in unverified
-    assert "Graph Neural Networks Survey" not in unverified
-
-
-def test_verify_citations_in_report_short_bold_ignored():
-    """Bold spans with length <= 10 are NOT added to unverified (avoids false positives on
-    short bolded phrases like **AI** or **CNN**)."""
-    ranked = [{"title": "Test paper"}]
-    # 5-char bold + 4-char bold both length < 10, so they shouldn't appear in unverified
-    report = "Some **AI** and **CNN** models are useful."
-    _, unverified = synthesis_agent._verify_citations_in_report(report, ranked)
-    # "AI" (2) and "CNN" (3) both < 10, so they're filtered out
-    assert unverified == [], f"Expected empty (short bolds ignored), got: {unverified}"
-
-
-def test_verify_citations_in_report_empty_inputs():
-    """Empty report and empty ranked should return empty unverified, no crash."""
+def test_verify_empty_inputs():
+    """空输入不崩."""
     _, unverified = synthesis_agent._verify_citations_in_report("", [])
     assert unverified == []
 
-    _, unverified = synthesis_agent._verify_citations_in_report("No bold here.", [])
+    _, unverified = synthesis_agent._verify_citations_in_report("No citations here.", [])
     assert unverified == []
 
 
 # ---------------------------------------------------------------------------
-# Unit tests: _build_paper_anchors
+# Integration: synthesize_node warning behavior
 # ---------------------------------------------------------------------------
 
-def test_build_paper_anchors_format():
-    """3 papers → output contains header + 3 numbered list lines + SS IDs."""
-    ranked = [
-        {"title": "Paper Alpha", "paper_id": "ss-alpha-001", "url": "https://example.com/a"},
-        {"title": "Paper Beta",  "paper_id": "ss-beta-002",  "url": "https://example.com/b"},
-        {"title": "Paper Gamma", "paper_id": "ss-gamma-003", "url": "https://example.com/c"},
-    ]
-    anchors = synthesis_agent._build_paper_anchors(ranked)
-    # Header check
-    assert "## 📎 原始文献来源（可核查）" in anchors, (
-        f"Expected anchor header, got:\n{anchors!r}"
-    )
-    # Numbered list lines
-    assert "1. [Paper Alpha]" in anchors
-    assert "2. [Paper Beta]" in anchors
-    assert "3. [Paper Gamma]" in anchors
-    # SS IDs in inline code
-    for ss_id in ["ss-alpha-001", "ss-beta-002", "ss-gamma-003"]:
-        assert f"SS ID: `{ss_id}`" in anchors, (
-            f"Expected SS ID {ss_id} in anchors, got:\n{anchors!r}"
-        )
-    # URLs
-    assert "https://example.com/a" in anchors
-    assert "https://example.com/b" in anchors
-    assert "https://example.com/c" in anchors
+def test_synthesize_node_clean_report_no_warning():
+    """LLM 报告引用全部 in-range → 不加 ⚠️ 警告."""
+    state = _make_state()  # 1 paper, paper_id="test-ss-id"
 
-
-def test_build_paper_anchors_empty_ranked():
-    """Empty ranked should return empty string (no crash, no spurious section)."""
-    assert synthesis_agent._build_paper_anchors([]) == ""
-    # Header should NOT appear when no papers
-    assert "## 📎 原始文献来源" not in synthesis_agent._build_paper_anchors([])
-
-
-def test_build_paper_anchors_missing_paper_id_falls_back_to_url():
-    """If paper has no URL, fall back to semanticscholar.org URL using paper_id."""
-    ranked = [
-        {"title": "Paper A", "paper_id": "abc123"},  # no url
-    ]
-    anchors = synthesis_agent._build_paper_anchors(ranked)
-    assert "https://semanticscholar.org/paper/abc123" in anchors
-    assert "SS ID: `abc123`" in anchors
-
-
-def test_build_paper_anchors_no_paper_id_unknown_fallback():
-    """If paper has no paper_id and no url, fall back to 'unknown' / generic SS URL."""
-    ranked = [
-        {"title": "Paper X"},  # no paper_id, no url
-    ]
-    anchors = synthesis_agent._build_paper_anchors(ranked)
-    assert "SS ID: `unknown`" in anchors
-    # URL falls back to semanticscholar.org/paper/unknown
-    assert "https://semanticscholar.org/paper/unknown" in anchors
-
-
-# ---------------------------------------------------------------------------
-# Integration: synthesize_node appends anchors + warning when needed
-# ---------------------------------------------------------------------------
-
-def test_synthesize_node_appends_anchors():
-    """Run synthesize_node with mock LLM returning a clean report; result["report"]
-    must contain the paper anchors section."""
-    state = _make_state()  # 1 paper: title="Test paper", paper_id="test-ss-id"
-
-    # Mock LLM returns a report that cites the actual ranked paper (no hallucination).
-    # Important: "Test paper" has length 10, which fails the `len(cited) > 10` check,
-    # so it WON'T be flagged as unverified. This keeps the test focused on anchors.
-    fake_llm_output = (
-        "## 研究概述\n本综述聚焦测试。\n\n"
-        "## 核心论文推荐（Top 5）\n"
-        "1. **A Different Long Title** [2024] — 相关性 7.0/10\n"
-    )
+    # 干净引用: [1] 在范围 (1..1)
+    fake_llm_output = "本综述讨论 [1] 的工作, 用 **Transformer** 模型."
     fake_usage = {
         "model": "mock", "provider": "mock",
         "input_tokens": 100, "output_tokens": 200, "cost_usd": 0.0,
@@ -230,27 +182,16 @@ def test_synthesize_node_appends_anchors():
         result = asyncio.run(synthesis_agent.synthesize_node(state))
 
     report = result["report"]
-    # Paper anchors section is appended
-    assert "## 📎 原始文献来源（可核查）" in report, (
-        f"Expected anchors header in report, got:\n{report[:500]!r}"
-    )
-    # Title of the ranked paper appears in the anchors
-    assert "Test paper" in report
-    # SS ID is in the anchors
-    assert "SS ID: `test-ss-id`" in report
+    # 无警告 (引用合法 + 无 hallucinated link)
+    assert "⚠️" not in report, f"Expected no warning, got:\n{report!r}"
 
 
-def test_synthesize_node_warns_on_hallucination():
-    """If LLM cites a title not in ranked_papers, a ⚠️ warning must be appended."""
-    state = _make_state()  # 1 paper: title="Test paper"
+def test_synthesize_node_warns_on_out_of_range_index():
+    """LLM 报告引用越界 [99] → 加 ⚠️ 警告."""
+    state = _make_state()  # 1 paper, range 1..1
 
-    # Mock LLM cites a hallucinated title: "Hallucinated Study Paper" (24 chars, 3 words)
-    # which has no overlap with "Test paper".
-    fake_llm_output = (
-        "## 研究概述\n本综述测试。\n\n"
-        "## 核心论文推荐（Top 5）\n"
-        "1. **Hallucinated Study Paper** [2024] — 引用 0\n"
-    )
+    # 引用 [1] (合法) + [99] (越界) + 加粗术语 (**Transformer** — R10.5.10 不再误判)
+    fake_llm_output = "本综述讨论 [1] 和 [99], **Transformer** 是核心."
     fake_usage = {
         "model": "mock", "provider": "mock",
         "input_tokens": 100, "output_tokens": 200, "cost_usd": 0.0,
@@ -262,21 +203,22 @@ def test_synthesize_node_warns_on_hallucination():
         result = asyncio.run(synthesis_agent.synthesize_node(state))
 
     report = result["report"]
-    # Warning block must be present
-    assert "⚠️" in report, f"Expected warning emoji in report, got:\n{report[:600]!r}"
+    # 警告出现
+    assert "⚠️" in report, f"Expected warning, got:\n{report!r}"
     assert "未在检索结果中找到对应来源" in report
-    # The hallucinated title appears in the warning
-    assert "Hallucinated Study Paper" in report
+    # [99] 被列出
+    assert "99" in report
 
 
-def test_synthesize_node_anchors_use_short_title_length_ok():
-    """When the only ranked paper has a short title like "Test paper" (10 chars),
-    the synthesize_node must still produce a valid anchor with the paper's title."""
-    state = _make_state()
-    fake_llm_output = "## 研究概述\n测试。\n"
+def test_synthesize_node_warns_on_hallucinated_link():
+    """LLM 报告 hallucinate 一个 SS 链接 → 加 ⚠️ 警告."""
+    state = _make_state()  # 1 paper, paper_id="test-ss-id"
+
+    # markdown 链接指向不存在的 paper_id
+    fake_llm_output = "参考 [Fake Study](https://semanticscholar.org/paper/fake-999) 的方法."
     fake_usage = {
         "model": "mock", "provider": "mock",
-        "input_tokens": 50, "output_tokens": 50, "cost_usd": 0.0,
+        "input_tokens": 100, "output_tokens": 200, "cost_usd": 0.0,
     }
     with patch.object(
         synthesis_agent, "call_llm",
@@ -285,22 +227,17 @@ def test_synthesize_node_anchors_use_short_title_length_ok():
         result = asyncio.run(synthesis_agent.synthesize_node(state))
 
     report = result["report"]
-    # The anchor header must be present
-    assert "## 📎 原始文献来源（可核查）" in report
-    # The ranked paper's title must appear
-    assert "Test paper" in report
-    # SS ID
-    assert "SS ID: `test-ss-id`" in report
-    # URL
-    assert "https://example.com/paper" in report
+    # 警告
+    assert "⚠️" in report
+    # 警告里含 fake-999
+    assert "fake-999" in report
 
 
 def test_synthesize_node_no_anchors_when_no_ranked():
-    """When ranked_papers is empty, synthesize_node returns early with a short message
-    and does NOT add anchors (which would be empty anyway)."""
+    """ranked_papers 空 → 早返回, 不加警告."""
     state = _make_state(ranked=[])
-    # Don't even patch call_llm — function should return before calling it.
     result = asyncio.run(synthesis_agent.synthesize_node(state))
     assert result["report"] == "未检索到相关论文。"
-    # No anchors section in the early-return path
+    assert "⚠️" not in result["report"]
+    # 旧 "## 📎 原始文献来源" 也确认不存在
     assert "## 📎 原始文献来源" not in result["report"]

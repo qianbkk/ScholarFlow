@@ -157,6 +157,19 @@ export function QueryPanel({
   const shouldCollapseForm = formCollapsed || (hasResults && !loading);
   const [showRecent, setShowRecent] = useState<boolean>(false);  // 最近搜索 popover
 
+  // R10.5.10 Fix: popover Esc 关闭 + 点外部关闭 (旧实现只有关闭 × 按钮, 用户
+  // 点了某项后 popover 收起 (useRecent 设 false), 但若不点项只外面看, 没法关).
+  useEffect(() => {
+    if (!showRecent) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowRecent(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showRecent]);
+
   return (
     // Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
     // R10.5.4 Editorial: 右侧用 var(--sf-border) 印刷线分隔, 内部用 Newsreader 论文列表
@@ -168,7 +181,7 @@ export function QueryPanel({
       }}
     >
       <div
-        className="p-3 border-b shrink-0"
+        className="px-3 py-2 border-b shrink-0"
         style={{ borderColor: 'var(--sf-border)' }}
         data-form-section
         data-collapsed={shouldCollapseForm ? 'true' : 'false'}
@@ -213,13 +226,13 @@ export function QueryPanel({
         </div>
         {/* 折叠态: 单行紧凑摘要 (回填内容 + 折叠后保留一个快搜图标按钮) */}
         {shouldCollapseForm ? (
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setFormCollapsed(false)}
               data-search-input
               tabIndex={-1}
-              className="flex-1 text-left font-body text-[13px] italic truncate px-2.5 py-1.5 transition-colors cursor-text"
+              className="flex-1 text-left font-body text-[12px] italic truncate px-2 py-1 transition-colors cursor-text"
               style={{
                 backgroundColor: 'var(--sf-bg-elev)',
                 color: query ? 'var(--sf-text)' : 'var(--sf-muted)',
@@ -235,13 +248,13 @@ export function QueryPanel({
               disabled={!query.trim() || loading}
               aria-label="重新检索"
               title="用当前 query 重新检索"
-              className="font-display italic font-semibold px-2.5 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              className="font-display italic font-semibold px-2 py-1 text-[12px] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               style={{
                 backgroundColor: 'var(--sf-accent)',
                 color: 'var(--sf-bg)',
               }}
             >
-              检索 →
+              ↻
             </button>
           </div>
         ) : (
@@ -482,15 +495,16 @@ export function QueryPanel({
           </div>
         )}
 
-        {/* 示例 — 单行紧凑, 只在 query 为空时显示 (有内容时省空间) */}
-        {!query && (
-          <div className="mt-2.5 flex flex-wrap gap-x-2 gap-y-1">
+        {/* 示例 — 只在表单未折叠 + query 为空时显示, 折起后论文列表占满
+            R10.5.10 Fix: 紧凑 padding, 论文列表可点更多行 */}
+        {!query && !shouldCollapseForm && (
+          <div className="mt-1.5 flex flex-wrap gap-x-1.5 gap-y-0.5">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => useSuggestion(s)}
-                className="text-[11px] font-body italic transition-colors border-b border-dashed"
+                className="text-[10px] font-body italic transition-colors border-b border-dashed"
                 style={{
                   color: 'var(--sf-muted)',
                   borderColor: 'var(--sf-border)',
@@ -505,7 +519,7 @@ export function QueryPanel({
                 }}
                 title={s}
               >
-                {s.length > 22 ? s.slice(0, 22) + '…' : s}
+                {s.length > 20 ? s.slice(0, 20) + '…' : s}
               </button>
             ))}
           </div>
@@ -672,9 +686,9 @@ export function QueryPanel({
             </div>
           </div>
         )}
-        {/* 论文列表标题 — Editorial 风格: 序号 + 衬线斜体 */}
+        {/* 论文列表标题 — Editorial 风格: 序号 + 衬线斜体 (R10.5.10: 紧凑) */}
         <div
-          className="px-4 py-2 sticky top-0 flex items-baseline justify-between border-b"
+          className="px-3 py-1.5 sticky top-0 flex items-baseline justify-between border-b"
           style={{
             backgroundColor: 'var(--sf-bg-elev)',
             borderColor: 'var(--sf-border)',
@@ -682,13 +696,13 @@ export function QueryPanel({
         >
           <div className="flex items-baseline gap-2">
             <span
-              className="font-mono text-[10px] uppercase tracking-[0.18em]"
+              className="font-mono text-[9px] uppercase tracking-[0.18em]"
               style={{ color: 'var(--sf-accent)' }}
             >
               § 2
             </span>
             <h3
-              className="font-display text-sm italic font-semibold"
+              className="font-display text-[13px] italic font-semibold"
               style={{ color: 'var(--sf-text)' }}
             >
               论文列表 {papers.length > 0 && `(${papers.length})`}
@@ -719,7 +733,7 @@ export function QueryPanel({
             return (
               <li
                 key={p.paper_id || i}
-                className="px-4 py-2.5 cursor-pointer transition-colors border-b"
+                className="px-3 py-2 cursor-pointer transition-colors border-b"
                 style={{
                   borderColor: 'var(--sf-border)',
                   backgroundColor: isSelected ? 'var(--sf-bg-elev)' : undefined,

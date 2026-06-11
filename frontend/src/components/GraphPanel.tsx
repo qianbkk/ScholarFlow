@@ -62,6 +62,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   // R10.5.5: 当前可见节点 / 总节点 (供工具栏显示)
   const [neighborCount, setNeighborCount] = useState<number | null>(null);
+  // R10.5.10: 全屏模式 (差异化功能) — 用户点 ⛶ 按钮或按 F 键, 整图盖到 viewport.
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+  // R10.5.10: 边类型图例折叠 — 默认折叠 (图例占左下角, 跟节点重叠时看不清)
+  // 点 "边类型" 标题或 ? 按钮展开
+  const [legendExpanded, setLegendExpanded] = useState<boolean>(false);
 
   const selected = selectedPaperId;
 
@@ -115,6 +120,32 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     // 750ms 平滑过渡 (普通 zoom 行为不带 transition, 用 selection.interrupt + transition)
     svg.transition().duration(750).call(zoomRef.current.transform, transform);
   }, []);
+
+  // R10.5.10: 全屏模式开关 — 切到全屏时 svg 重新 fit-to-view, Esc 退出
+  const toggleFullscreen = useCallback(() => {
+    setIsFullscreen((s) => !s);
+    // 切完触发 fit-to-view (在 [graph] effect 后, simulation 已就位)
+    requestAnimationFrame(() => fitToViewRef.current?.());
+  }, []);
+  // 用 ref 存最新 fitToView, 避免 toggleFullscreen deps 套娃
+  const fitToViewRef = useRef<(() => void) | null>(null);
+  fitToViewRef.current = fitToView;
+
+  // R10.5.10: 全屏 Esc 退出 + Shift+F 切全屏 (单 f 是适配视图, Shift+F 全屏)
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+        requestAnimationFrame(() => fitToViewRef.current?.());
+      } else if ((e.key === 'F' || e.key === 'f') && e.shiftKey && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        setIsFullscreen((s) => !s);
+        requestAnimationFrame(() => fitToViewRef.current?.());
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isFullscreen]);
 
   // R10.5 Fix-P0-MemoryLeak: 键盘事件 — 通过 ref 保存处理器引用, 组件卸载时精确移除.
   useEffect(() => {
@@ -484,13 +515,23 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   }, [selected, graph, neighborSet]);
 
   return (
+    // R10.5.10: 全屏模式 — fixed 覆盖 viewport, z-50 浮在所有组件之上.
+    // 关闭: Esc / 工具栏 ⤡. 内层 aside-like 容器 + 工具栏 + svg + 图例共用同一份 JSX.
     // R10.5.4 Editorial: 左侧分隔线 (跟 QueryPanel 右侧对齐), 无圆角, 无 border-r
     <aside
-      className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full flex flex-col"
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 flex flex-col'
+          : 'w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full flex flex-col'
+      }
       style={{
         backgroundColor: 'var(--sf-bg)',
-        borderLeft: '1px solid var(--sf-border)',
+        borderLeft: isFullscreen ? 'none' : '1px solid var(--sf-border)',
+        boxShadow: isFullscreen ? '0 0 0 1px var(--sf-border)' : undefined,
       }}
+      data-testid={isFullscreen ? 'graph-fullscreen' : undefined}
+      role={isFullscreen ? 'dialog' : undefined}
+      aria-label={isFullscreen ? '引文图谱 全屏模式' : undefined}
     >
       <div
         className="px-4 py-2.5 flex items-center justify-between border-b gap-2"
@@ -532,7 +573,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               )}
             </span>
           )}
-          {/* R10.5.5: 图谱工具栏 — fit-to-view + 重置缩放 + 清选中 */}
+          {/* R10.5.10: 图谱工具栏 — fit-to-view + 全屏 + 边类型图例 + 清选中 */}
           {graph && (
             <>
               <button
@@ -555,6 +596,28 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
                 }}
               >
                 ⊡
+              </button>
+              {/* R10.5.10: 全屏 — ScholarFlow 差异化功能, 用户全屏看引文网络 */}
+              <button
+                type="button"
+                onClick={toggleFullscreen}
+                title={isFullscreen ? '退出全屏 (Esc)' : '全屏看图 (Shift+F)'}
+                aria-label={isFullscreen ? '退出全屏' : '全屏看图'}
+                className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
+                style={{
+                  color: isFullscreen ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                  borderColor: isFullscreen ? 'var(--sf-accent)' : 'var(--sf-border)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--sf-accent)';
+                  e.currentTarget.style.borderColor = 'var(--sf-accent)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = isFullscreen ? 'var(--sf-accent)' : 'var(--sf-muted)';
+                  e.currentTarget.style.borderColor = isFullscreen ? 'var(--sf-accent)' : 'var(--sf-border)';
+                }}
+              >
+                {isFullscreen ? '⤡' : '⤢'}
               </button>
               {selected && onSelectPaper && (
                 <button
@@ -681,67 +744,91 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           </div>
         )}
 
-        {/* M-18: 4 类边图例 + community 颜色 — Editorial 极简风 */}
+        {/* M-18 + R10.5.10: 4 类边图例 + community 颜色 — Editorial 极简风
+            R10.5.10 优化: 旧版图例 9 行常驻, 占左下角 ~200x100px, 节点多时
+            挡视线. 改可折叠 — 默认只露 "边 ▾" 标题 (1 行), 点开看 4 色 + 提示.
+            全屏模式下默认展开 (反正空间够, 让用户一眼知道怎么读图). */}
         <div
-          className="absolute bottom-2 left-2 p-2 text-[10px] space-y-0.5 font-mono"
+          className="absolute bottom-2 left-2 text-[10px] font-mono transition-shadow"
           style={{
             backgroundColor: 'var(--sf-bg)',
             border: '1px solid var(--sf-border)',
             color: 'var(--sf-muted)',
+            minWidth: legendExpanded || isFullscreen ? '180px' : '88px',
+            boxShadow: legendExpanded
+              ? '0 2px 10px rgba(0,0,0,0.08)'
+              : '0 1px 3px rgba(0,0,0,0.04)',
           }}
+          data-testid="edge-legend"
         >
-          <div
-            className="font-semibold uppercase tracking-[0.15em] text-[9px]"
+          <button
+            type="button"
+            onClick={() => setLegendExpanded((s) => !s)}
+            aria-expanded={legendExpanded}
+            className="w-full flex items-center justify-between gap-2 px-2 py-1 transition-colors"
             style={{ color: 'var(--sf-text)' }}
+            title={legendExpanded ? '折叠图例' : '展开图例'}
           >
-            边类型
-          </div>
-          {/* R10.5.7 P1-3: 色盲友好图例 — 4 类边用 ColorBrewer Set1 (红/蓝/绿/紫)
-              旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识
-              R10.5.9 落地: 颜色用 CSS 变量 — 主题切换时图例色自动跟随 */}
-          <div className="flex items-center gap-1.5">
+            <span className="font-semibold uppercase tracking-[0.15em] text-[9px]">
+              边类型
+            </span>
             <span
-              className="inline-block w-3 h-px"
-              style={{ background: 'var(--sf-edge-cites)' }}
-            />
-            <span>cites</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block w-3 h-px"
-              style={{
-                background: 'transparent',
-                borderTop: '1px dashed var(--sf-edge-co-cited)',
-              }}
-            />
-            <span>co-cited</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block w-3 h-px"
-              style={{
-                background: 'transparent',
-                borderTop: '1px dotted var(--sf-edge-same-venue)',
-              }}
-            />
-            <span>same venue</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span
-              className="inline-block w-3 h-px"
-              style={{ background: 'var(--sf-edge-author-overlap)' }}
-            />
-            <span>author overlap</span>
-          </div>
-          <div
-            className="pt-0.5 mt-1 border-t"
-            style={{ borderColor: 'var(--sf-border)' }}
-          >
-            节点大小 = log(引用数) · 颜色 = 社区
-          </div>
-          {INTERACTION_HINTS.map((h) => (
-            <div key={h}>{h}</div>
-          ))}
+              className="font-display italic text-[10px] leading-none transition-transform"
+              style={{ transform: legendExpanded ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+            >
+              ▾
+            </span>
+          </button>
+          {(legendExpanded || isFullscreen) && (
+            <div className="px-2 pb-1.5 space-y-0.5">
+              {/* R10.5.7 P1-3: 色盲友好图例 — 4 类边用 ColorBrewer Set1 (红/蓝/绿/紫)
+                  旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识
+                  R10.5.9 落地: 颜色用 CSS 变量 — 主题切换时图例色自动跟随 */}
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="inline-block w-3 h-px"
+                  style={{ background: 'var(--sf-edge-cites)' }}
+                />
+                <span>cites</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="inline-block w-3 h-px"
+                  style={{
+                    background: 'transparent',
+                    borderTop: '1px dashed var(--sf-edge-co-cited)',
+                  }}
+                />
+                <span>co-cited</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="inline-block w-3 h-px"
+                  style={{
+                    background: 'transparent',
+                    borderTop: '1px dotted var(--sf-edge-same-venue)',
+                  }}
+                />
+                <span>same venue</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="inline-block w-3 h-px"
+                  style={{ background: 'var(--sf-edge-author-overlap)' }}
+                />
+                <span>author overlap</span>
+              </div>
+              <div
+                className="pt-0.5 mt-1 border-t"
+                style={{ borderColor: 'var(--sf-border)' }}
+              >
+                节点大小 = log(引用数) · 颜色 = 社区
+              </div>
+              {INTERACTION_HINTS.map((h) => (
+                <div key={h}>{h}</div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </aside>

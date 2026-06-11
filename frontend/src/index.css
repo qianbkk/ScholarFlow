@@ -28,7 +28,10 @@ html, body, #root {
   text-rendering: optimizeLegibility;
 }
 
-/* === 4 套主题 — Editorial Knowledge === */
+/* === 4 套主题 — Editorial Knowledge ===
+ * R10.5.10 调色:
+ *   midnight 不再 #0d0d0d 纯黑, 改 #1a1a1a + #222 浮层 (深夜炭灰, 护眼)
+ *   sage 不再 #e8e4d4 偏浅绿, 改 #d4ccb3 暗卡其绿, 让绿边 / 绿背景有明显分层 */
 :root,
 html.theme-parchment {
   --sf-bg: #faf6ed;            /* 暖米色羊皮纸 */
@@ -66,37 +69,41 @@ html.theme-kraft {
   --sf-edge-author-overlap: #581c87;
 }
 html.theme-midnight {
-  --sf-bg: #0d0d0d;            /* 深墨水黑 */
-  --sf-bg-elev: #1a1a1a;
+  /* R10.5.10: 不再 #0d0d0d 纯黑 — 改深夜炭灰 #1c1a1a, 浮层 #25231f (暖偏中性).
+     护眼 (OLED 像素不发光, 长时间阅读不刺眼) + 边色 + 文字对比度都更舒适. */
+  --sf-bg: #1c1a1a;            /* 深夜炭灰 — 不纯黑, 微暖色调 */
+  --sf-bg-elev: #25231f;
   --sf-text: #f5efe4;          /* cream */
   --sf-muted: #a8a29e;
-  --sf-border: #2a2a2a;
-  --sf-accent: #f97316;        /* bright orange */
-  --sf-accent-soft: #7c2d12;
-  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
-               0 4px 14px rgba(0, 0, 0, 0.4);
-  /* midnight 黑底: 边色提亮 (Set1 原色), 蓝紫尤其重要 — 旧 #377eb8
-     在 #0d0d0d 上几乎看不见 */
-  --sf-edge-cites: #f87171;        /* 亮红 */
+  --sf-border: #3a3835;        /* 浮层分隔, 比纯黑略亮 */
+  --sf-accent: #fb923c;        /* bright orange — 提饱和, 暗底更亮 */
+  --sf-accent-soft: #5a2e0f;
+  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.4),
+               0 4px 14px rgba(0, 0, 0, 0.5);
+  /* 暗底: 边色提亮 (ColorBrewer Set1 light 变体), 蓝紫尤其重要 */
+  --sf-edge-cites: #fb7185;        /* 亮红 */
   --sf-edge-co-cited: #60a5fa;     /* 亮蓝 */
   --sf-edge-same-venue: #86efac;   /* 亮绿 */
   --sf-edge-author-overlap: #c4b5fd; /* 亮紫 */
 }
 html.theme-sage {
-  --sf-bg: #e8e4d4;            /* sage 纸 */
-  --sf-bg-elev: #ddd6c0;
-  --sf-text: #1c1917;
-  --sf-muted: #57534e;
-  --sf-border: #cdb888;
+  /* R10.5.10: 不再 #e8e4d4 浅绿 — 改暗卡其 #c8c2a6, 浮层 #b8b294.
+     旧浅绿 + 绿边 (--sf-edge-same-venue) 冲背景, 绿边看不出"同会议".
+     新暗绿让绿/红/蓝/紫 4 边都有明显对比. 仍"护眼" (低饱和暖底). */
+  --sf-bg: #c8c2a6;            /* 暗卡其绿 */
+  --sf-bg-elev: #b8b294;
+  --sf-text: #1f1d18;          /* 略偏暖深, 跟绿底协调 */
+  --sf-muted: #4a4640;
+  --sf-border: #9a947a;        /* 中等分隔线 */
   --sf-accent: #7c2d12;        /* rust */
   --sf-accent-soft: #fde68a;
-  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
-               0 4px 12px rgba(124, 45, 18, 0.08);
-  /* sage 绿底: 绿边色加深到 #14532d, 蓝稍微提饱和, 避免冲背景 */
-  --sf-edge-cites: #991b1b;
-  --sf-edge-co-cited: #1e40af;
-  --sf-edge-same-venue: #14532d;   /* 深绿 — 跟 sage 底色明显分层 */
-  --sf-edge-author-overlap: #581c87;
+  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.08),
+               0 4px 12px rgba(124, 45, 18, 0.12);
+  /* 暗绿底: 绿边继续加深, 红/蓝/紫饱和度拉满, 4 色分层明显 */
+  --sf-edge-cites: #991b1b;         /* 深红 — 跟绿底对比度最高 */
+  --sf-edge-co-cited: #1e3a8a;      /* 深蓝 */
+  --sf-edge-same-venue: #14532d;    /* 极深绿 — 仍能跟暗绿底区分 */
+  --sf-edge-author-overlap: #581c87; /* 紫 */
 }
 
 body {
