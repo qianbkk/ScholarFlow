@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections import defaultdict, deque
+from collections import OrderedDict, defaultdict, deque
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -64,13 +64,52 @@ class UserInfo(BaseModel):
 #  - 单 worker 部署: 进程内 deque, 原子操作
 #  - 多 worker: 每个 worker 独立桶, 总容量 = N × limit. R11+ 上 Redis.
 # 防 enumeration 攻击核心是"防止短时间大量尝试", 进程内 N×limit 仍可控.
-_RATE_HISTORY: dict[str, deque[float]] = defaultdict(deque)
+# P0-3 fix (深度审计 §P0-3): _RATE_HISTORY 字典无界增长防护.
+# 字典 key 本身从不删除 → 攻击者用无限伪造 IP 使字典无限膨胀.
+# 改为 OrderedDict + LRU cap 1 万 + 定期清理 1 小时前的 stale key.
+_RATE_HISTORY: "OrderedDict[str, deque[float]]" = OrderedDict()
+_MAX_RATE_KEYS = 10_000
+_RATE_CLEANUP_INTERVAL = 300  # 每 5 分钟清理一次 stale keys
+_last_rate_cleanup: float = 0.0
+
+
+def _maybe_cleanup_rate_history() -> None:
+    """周期清理 1 小时前不活跃的 IP keys, 防止字典无界增长.
+    触发条件: 距上次清理 ≥ _RATE_CLEANUP_INTERVAL."""
+    global _last_rate_cleanup
+    now = time.time()
+    if now - _last_rate_cleanup < _RATE_CLEANUP_INTERVAL:
+        return
+    _last_rate_cleanup = now
+    cutoff = now - 3600
+    stale: list[str] = []
+    for ip, history in _RATE_HISTORY.items():
+        # 清空历史窗口外的旧时间戳
+        while history and history[0] < cutoff:
+            history.popleft()
+        if not history:  # deque 空了, IP 1 小时无活动
+            stale.append(ip)
+    for ip in stale:
+        _RATE_HISTORY.pop(ip, None)
+    # LRU cap: 超 1 万就删最老的
+    while len(_RATE_HISTORY) > _MAX_RATE_KEYS:
+        _RATE_HISTORY.popitem(last=False)
 
 
 def _check_rate_limit(client_ip: str, max_per_minute: int = 5, max_per_hour: int = 20) -> None:
-    """Sliding window 限流. 超限抛 429 (跟 slowapi 行为一致)."""
+    """Sliding window 限流. 超限抛 429 (跟 slowapi 行为一致).
+
+    P0-3 fix: 改用 OrderedDict + 定期清理, 防止字典无界增长.
+    """
     now = time.time()
-    history = _RATE_HISTORY[client_ip]
+    _maybe_cleanup_rate_history()
+    history = _RATE_HISTORY.get(client_ip)
+    if history is None:
+        history = deque()
+        _RATE_HISTORY[client_ip] = history
+    else:
+        # 移到末尾 (LRU 更新)
+        _RATE_HISTORY.move_to_end(client_ip)
     # 清掉窗口外的时间戳
     while history and now - history[0] > 3600:
         history.popleft()

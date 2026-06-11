@@ -4,11 +4,14 @@
 """
 import asyncio
 import html
+import logging
 import re
 
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM = (

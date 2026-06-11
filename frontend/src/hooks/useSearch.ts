@@ -299,15 +299,20 @@ export function useSearch() {
 
   const search = useCallback(
     async (query: string, budget = 2.0, maxIter = 3, provider?: string) => {
-      if (!query.trim()) {
+      const trimmed = query.trim();
+      if (!trimmed) {
         setError('请输入研究问题');
         return;
       }
+      // P0-1 fix (深度审计 §P0-1): 漏调 setLastQuery 导致 ReportPanel 永远显示空 query,
+      // 重试按钮 fallback 也会拿错. R10.5 SSE 重构时遗漏, 一直未恢复.
+      setLastQuery(trimmed);
+      setError(null);
       // H6: bump generation
       genRef.current += 1;
       setLoading(true);
       try {
-        await searchWithFetchStream(query, budget, maxIter, provider);
+        await searchWithFetchStream(trimmed, budget, maxIter, provider);
       } catch (e: any) {
         setError(e?.message || '搜索失败');
         setLoading(false);

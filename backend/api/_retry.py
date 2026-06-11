@@ -62,6 +62,8 @@ async def _get_with_retry(
       - 调用方应检查 resp.status_code, 非 200 时降级到 mock
     """
     last_exc: Exception | None = None
+    last_resp: httpx.Response | None = None
+    breaker_recorded_failure = False  # P0-4 fix: 整请求只 record 一次
     for attempt, delay in enumerate((0.0,) + _RETRY_DELAYS):
         if breaker is not None and breaker.state.value == "open":
             raise CircuitOpenError(
@@ -75,6 +77,7 @@ async def _get_with_retry(
             await asyncio.sleep(delay)
         try:
             resp = await client.get(url, params=params, headers=headers, timeout=timeout)
+            last_resp = resp
             if resp.status_code in _RETRYABLE_STATUS:
                 # 优先 Retry-After header (SS/OA 标准遵守)
                 retry_after = _parse_retry_after(resp.headers.get("Retry-After"))
@@ -90,9 +93,12 @@ async def _get_with_retry(
                     )
                     await asyncio.sleep(backoff)
                     continue
-                # 已用完所有 attempt, 返最后响应
-                if breaker is not None:
+                # 已用完所有 attempt, 整请求失败一次. P0-4 fix:
+                # 仅在所有重试都失败后 record 一次 (旧实现每次都记
+                # 导致 1 次请求 3 次重试超时直接熔断, 过于敏感).
+                if breaker is not None and not breaker_recorded_failure:
                     breaker._record_failure()
+                    breaker_recorded_failure = True
                 return resp
             if breaker is not None:
                 breaker._record_success()
@@ -103,11 +109,12 @@ async def _get_with_retry(
             httpx.RemoteProtocolError,
         ) as exc:
             last_exc = exc
-            if breaker is not None:
-                breaker._record_failure()
             logger.warning("retry %d/3 for %s: %s", attempt + 1, url, exc)
+    # 整请求所有 attempt 都失败 (网络异常), 统一 record 一次
+    if breaker is not None and not breaker_recorded_failure:
+        breaker._record_failure()
     logger.error("all retries failed for %s: %s", url, last_exc)
-    return None
+    return last_resp  # 状态码路径返最后响应 (如有), 异常路径返 None
 
 
 def _parse_retry_after(value: str | None) -> float | None:
