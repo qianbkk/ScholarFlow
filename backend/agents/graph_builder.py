@@ -14,8 +14,11 @@ R10.5.1 V3-fix (HH.txt 审计 §4): 图谱剪枝, 防止节点爆炸
 - metadata 加 pruned_count, 前端可显示 "隐藏 N 个节点" 提示
 """
 import math
+import logging
 from collections import defaultdict
 from backend.models.state import SearchState
+
+logger = logging.getLogger(__name__)
 
 # HH.txt §4 (P2) 防止 D3 渲染灾难的硬上限
 # 来源: HH.txt 建议"图谱规模强制控制在 100 节点以内"
@@ -25,10 +28,10 @@ GRAPH_SCORE_THRESHOLD = 8.0
 
 
 def detect_communities_modularity(
-    node_ids: list[str],
+    node_ids: list[str] | set[str],
     edges: list[tuple[str, str, str]],
 ) -> dict[str, int]:
-    """基于引文网络结构做真实社区发现 (R10.5.7 P1-2).
+    """基于引文网络结构做真实社区发现 (R10.5.7 P1-2, R10.5.8 code-review 修正).
 
     旧版 community_id 用 decade 分组 (1970s/1980s/...) — 只是按发表时间划
     块, 不是基于引文网络结构. 用户看图谱看不到"研究主题聚类", 失去社区
@@ -38,24 +41,37 @@ def detect_communities_modularity(
     贪心算法, O(N²logN) 但 N≤100 极快). 边权: cites=3 (最强), co_cited=2,
     same_venue=1, author_overlap=1.
 
-    边界:
-    - N < 3 → 单社区 (避免过分割)
-    - 无边 → 单社区 (graph 不连通)
-    - networkx 不可用 → 退化到单社区 (兜底)
+    边界 (R10.5.8 加 warning log, 不再静默退化):
+    - N < 3 → 单社区 (避免过分割) + warning
+    - 无边 → 单社区 (graph 不连通) + warning
+    - networkx 不可用 → 单社区 (兜底) + warning
+    - greedy_modularity 抛异常 → 单社区 + warning
     """
-    if len(node_ids) < 3:
-        return {nid: 0 for nid in node_ids}
+    # R10.5.8: node_ids 兼容 list/set, 内部转 set 加速 O(1) 成员检查
+    node_id_set = set(node_ids)
+
+    if len(node_id_set) < 3:
+        logger.warning(
+            f"[graph_builder] community detection skipped: only {len(node_id_set)} nodes "
+            f"(need ≥3 for meaningful modularity). Falling back to single community."
+        )
+        return {nid: 0 for nid in node_id_set}
     try:
         import networkx as nx
     except ImportError:
-        return {nid: 0 for nid in node_ids}
+        logger.warning(
+            "[graph_builder] networkx not installed, community detection disabled. "
+            "Install via `pip install networkx>=3.0` for real modularity clustering."
+        )
+        return {nid: 0 for nid in node_id_set}
 
     G = nx.Graph()
-    G.add_nodes_from(node_ids)
+    G.add_nodes_from(node_id_set)
     # 边权: cites=3 (最强结构信号), co_cited=2, same_venue=1, author_overlap=1
     edge_weights = {"cites": 3, "co_cited": 2, "same_venue": 1, "author_overlap": 1}
     for s, t, etype in edges:
-        if s in node_ids and t in node_ids and s != t:
+        # R10.5.8: O(1) 成员检查 (旧实现 list, O(N) 每次)
+        if s in node_id_set and t in node_id_set and s != t:
             w = edge_weights.get(etype, 1)
             if G.has_edge(s, t):
                 G[s][t]["weight"] += w
@@ -63,18 +79,27 @@ def detect_communities_modularity(
                 G.add_edge(s, t, weight=w)
 
     if G.number_of_edges() == 0:
-        return {nid: 0 for nid in node_ids}
+        logger.warning(
+            "[graph_builder] community detection skipped: no edges in graph. "
+            "Falling back to single community."
+        )
+        return {nid: 0 for nid in node_id_set}
 
     try:
         communities = nx.community.greedy_modularity_communities(G, weight="weight")
-    except Exception:
-        return {nid: 0 for nid in node_ids}
+    except Exception as e:
+        # R10.5.8: 加 warning, 不再静默
+        logger.warning(
+            f"[graph_builder] greedy_modularity_communities failed: {type(e).__name__}: {e}. "
+            f"Falling back to single community."
+        )
+        return {nid: 0 for nid in node_id_set}
 
     result: dict[str, int] = {}
     for cid, members in enumerate(communities):
         for m in members:
             result[m] = cid
-    for nid in node_ids:
+    for nid in node_id_set:
         if nid not in result:
             result[nid] = 0
     return result
@@ -230,7 +255,7 @@ def build_graph_node(state: SearchState) -> SearchState:
         all_edges.append((a, b, "same_venue"))
     for a, b in author_overlap_pairs:
         all_edges.append((a, b, "author_overlap"))
-    community_map = detect_communities_modularity(list(node_ids), all_edges)
+    community_map = detect_communities_modularity(node_ids, all_edges)
 
     nodes = []
     for i, p in enumerate(ranked):

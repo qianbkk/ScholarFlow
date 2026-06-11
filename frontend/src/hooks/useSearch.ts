@@ -110,21 +110,19 @@ export function useSearch() {
   const [budgetExceeded, setBudgetExceeded] = useState<BudgetExceeded | null>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>(loadRecent);
 
-  const esRef = useRef<EventSource | null>(null);
+  // R10.5 Fix-P0-MemoryLeak: 移除未使用的 esRef (EventSource 已废弃).
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fallbackStartRef = useRef<number>(0);
   const requestIdRef = useRef<string | null>(null);
   // H6: generation counter — bumped on every search / reset.
   const genRef = useRef<number>(0);
-  // R10.5 Fix-X1: SSE 真实运行 30-180s, 浏览器 EventSource 在代理 60s 超时/网络抖动
-  // 时会自动重连, 重连中 onerror 触发, readyState=CONNECTING(0). 这种自动重连不
-  // 应被误判为用户错误. 之前旧代码 `if (readyState === CLOSED) return` 没覆盖
-  // CONNECTING, 走到 else 分支 setError('连接中断, 请重试') 覆盖 result, UI 看似
-  // 白屏. 修复: 显式识别 CONNECTING 是浏览器自动重连, 静默等待.
-  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // R10.5 Fix-P0-2.2-b: 全局兜底超时 timer, 防止 SSE 真死锁时 (e.g. 401 / 后端卡死)
   // 90s 仍无任何事件时强制报错, 不再让用户看 1000s loading.
+  // R10.5.8 code-review 修复: 此 ref 之前从未被 setTimeout 赋值, 注释与行为不符.
+  // 新版: search() 启动时 setTimeout(GLOBAL_TIMEOUT_MS), reader.read 第一帧
+  // 收到任一 SSE 事件时由 stopFallbackProgress 清掉, 卸载/reset 也清掉.
   const globalTimeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const GLOBAL_TIMEOUT_MS = 90_000;
   // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff, 防止用户瞬时网络抖动
   // (WIFI 切换 / VPN 重连) 整次搜索直接失败. 重试仍失败才显示 error.
   const retryAttemptedRef = useRef<boolean>(false);
@@ -135,22 +133,25 @@ export function useSearch() {
       clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    // R10.5.8 code-review 修复: 同步清 globalTimeoutTimer (收到首个 SSE 事件后
+    // 兜底超时不再需要, 后续流程有 done/error/budget_exceeded 自行收尾).
+    if (globalTimeoutTimerRef.current) {
+      clearTimeout(globalTimeoutTimerRef.current);
+      globalTimeoutTimerRef.current = null;
+    }
   }, []);
 
   // 卸载时清理
   useEffect(() => {
     return () => {
-      if (esRef.current) {
-        try { esRef.current.close(); } catch { /* ignore */ }
-        esRef.current = null;
-      }
+      // R10.5 Fix-P0: 组件卸载时清理所有 timer 和引用, 防止内存泄漏.
       if (fallbackTimerRef.current) {
         clearInterval(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
-      if (reconnectTimerRef.current) {
-        clearTimeout(reconnectTimerRef.current);
-        reconnectTimerRef.current = null;
+      if (globalTimeoutTimerRef.current) {
+        clearTimeout(globalTimeoutTimerRef.current);
+        globalTimeoutTimerRef.current = null;
       }
       if (retryTimeoutRef.current) {
         clearTimeout(retryTimeoutRef.current);
@@ -166,9 +167,9 @@ export function useSearch() {
   // 不再泄漏到 URL → Nginx/浏览器历史/Referer/CDN 日志.
   // 解析 SSE 格式 (data: {json}\n\n) 自管理, 跟 EventSource 等价.
   //
-  // 当前实现: 默认走 fetch 路径; EventSource 路径保留作 fallback (老浏览器 / 调试).
-  // 修复 known caveat: X-Request-ID 头可在此处透传 (R10.5 已实现 request_id 注入).
-  // R10.5 Fix-P0-2.2 文档: 优先用 fetch, EventSource 是 fallback.
+  // R10.5.8 code-review 修复: 旧注释 "EventSource 路径保留作 fallback" 误导
+  // — 当前实现**只走 fetch + ReadableStream**, EventSource 已彻底删除,
+  // 不要再去找 EventSource fallback 路径. 抓 X-Request-ID 头给 cancel 用.
   const searchWithFetchStream = useCallback(
     async (
       query: string,
@@ -382,6 +383,20 @@ export function useSearch() {
       fallbackTimerRef.current = setInterval(() => {
         setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
       }, 200);
+      // R10.5.8 code-review 修复: 启动 90s 全局兜底超时, 防 SSE 真死锁
+      // (e.g. 后端卡死/连接挂起) 时用户看 1000s loading. 收到首个 SSE
+      // 事件后由 stopFallbackProgress 清掉, 正常流程不受影响.
+      if (globalTimeoutTimerRef.current) {
+        clearTimeout(globalTimeoutTimerRef.current);
+      }
+      const myGenAtStart = genRef.current;
+      globalTimeoutTimerRef.current = setTimeout(() => {
+        // 检查 gen: 用户可能已经在 90s 内启动新搜索, 旧 timer 不应报错
+        if (myGenAtStart !== genRef.current) return;
+        setError(`请求超时 (${GLOBAL_TIMEOUT_MS / 1000}s 无响应). 请检查网络或调高预算.`);
+        setLoading(false);
+        genRef.current += 1;  // 防止后续事件污染 result
+      }, GLOBAL_TIMEOUT_MS);
       // H6: bump generation
       genRef.current += 1;
       // R10.5.5: 重置重试标志 — 新搜索允许一次网络重试
@@ -427,17 +442,14 @@ export function useSearch() {
   }, []);
 
   const reset = useCallback(() => {
-    if (esRef.current) {
-      try { esRef.current.close(); } catch { /* ignore */ }
-      esRef.current = null;
-    }
+    // R10.5 Fix-P0: 清理所有 timer, 防止竞态条件下重复触发.
     if (fallbackTimerRef.current) {
       clearInterval(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
-    if (reconnectTimerRef.current) {
-      clearTimeout(reconnectTimerRef.current);
-      reconnectTimerRef.current = null;
+    if (globalTimeoutTimerRef.current) {
+      clearTimeout(globalTimeoutTimerRef.current);
+      globalTimeoutTimerRef.current = null;
     }
     // R10.5.5: 重置时清 retry timeout (取消重试中网络)
     if (retryTimeoutRef.current) {
@@ -446,16 +458,24 @@ export function useSearch() {
     }
     // H6: bump generation
     genRef.current += 1;
-    if (requestIdRef.current) {
-      const rid = requestIdRef.current;
-      requestIdRef.current = null;
-      void fetch('/api/v1/search/cancel', {
+    // R10.5 Fix-P0-RaceCondition: 组件卸载后不再发取消请求, 避免 fetch 在已卸载组件上执行.
+    const rid = requestIdRef.current;
+    requestIdRef.current = null;
+    if (rid) {
+      // 使用 AbortController 或简单的 fetch, 不阻塞主线程
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 5000);
+      fetch('/api/v1/search/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ request_id: rid }),
+        signal: controller.signal,
       }).catch((e) => {
-        console.warn('[/search/cancel] request failed:', e);
-      });
+        // 忽略取消请求的错误 (组件可能已卸载)
+        if (e.name !== 'AbortError') {
+          console.warn('[/search/cancel] request failed:', e);
+        }
+      }).finally(() => clearTimeout(timeout));
     }
     setResult(null);
     setError(null);

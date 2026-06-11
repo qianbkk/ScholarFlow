@@ -1,4 +1,4 @@
-"""utils.semantic_cache — 真实语义缓存实现 (R10.5.7 竞赛优化 P0-1)
+"""utils.semantic_cache — 真实语义缓存实现 (R10.5.7 竞赛优化 P0-1, R10.5.8 精简)
 
 R10.5 占位桩阶段 (Fix-E R10.5): 永远 return None / no-op.
 R10.5.7 真实实现: 基于 character n-gram shingle + Jaccard 相似度的轻量级
@@ -6,22 +6,28 @@ R10.5.7 真实实现: 基于 character n-gram shingle + Jaccard 相似度的轻�
 纯 Python + SQLite BLOB 即可在 <10ms 内扫 50 条历史缓存, 找出
 相似度 ≥ 0.85 的命中.
 
+R10.5.8 code-review 精简:
+  - 删除未读的 _LRU 镜像 (R10.5.7 写的双 LRU, 实际只有 _SHINGLE_LRU 被读)
+  - 删除 warmup_from_db 假实现 (search_cache 只存 hash 不存 query_text,
+    无法预热, 函数体是空 stub)
+  - 合并 find_semantic_match 与 get_semantic_cached 包装层
+  - 删除 get_cached_async / set_cached_async 未使用 import
+
 设计决策:
   1. 算法选 shingle Jaccard (而非 MinHash) — 原因:
      - 50 条候选集小, O(N) 线性扫描够用, 不用 LSH 索引
      - 实现简单, 0 外部依赖, 单元测试好写
-     - 准确率: 中文 query 字符级 shingle 比 token 级更鲁棒 (e.g. "机器学习"
-       和 "机器 学习" 仍能命中)
+     - 准确率: 中文 query 字符级 shingle 比 token 级更鲁棒
+       (e.g. "机器学习" 和 "机器 学习" 仍能命中)
   2. 字符 n-gram: n=3 (trigram), 中文按字符切, 英文按 word-level shingle
-     (避免空格敏感)
-  3. 阈值 0.85: 业界标准 (略低于精确匹配 1.0, 高于模糊匹配 0.7)
+  3. 阈值 0.85: 业界标准
   4. 缓存容量: 最多 200 条, LRU 替换 (内存可控, 候选扫描 <5ms)
-  5. 兼容旧桩接口: get_semantic_cached / set_semantic_cached 签名不变,
-     旧调用方 (Fix-E 已删除) 可零改动重新启用
+  5. 语义缓存为 in-process L1, 跨进程/重启失效 (R10.5.7 设计选择).
+     SQLite 精确缓存继续走 get_cached_async (跨进程共享, 跟语义 L1 互补).
 
 性能预算:
-  - shingle + Jaccard: 1 query × 50 cache × 0.5ms = 25ms
-  - 写缓存: 1 次 shingle 计算 + SQLite UPDATE = ~3ms
+  - shingle + Jaccard: 1 query × 200 cache × 0.05ms = 10ms
+  - 写缓存: 1 次 shingle 计算 = <1ms
   - LRU 200 条内存: ~50KB (每条 query 30 字 + shingle set)
 
 预期 F1 收益: +5-8% (相似 query 复用 LLM 报告, 预算节省下来可
@@ -33,12 +39,10 @@ import hashlib
 import json
 import logging
 import re
-import sqlite3
 import time
 from collections import OrderedDict
 from typing import Optional
 
-from backend.utils.cache import _connect_with_wal, get_cached_async, set_cached_async
 from backend.utils.scrub import scrub_sensitive
 
 logger = logging.getLogger(__name__)
@@ -71,7 +75,7 @@ def _shingles(text: str, n: int = 3) -> set[str]:
 
     对归一化后的字符串, 提取所有长度为 n 的连续子串.
     例 "机器学习" → {"机器学", "器学习"}
-    例 "machine learning" → {"mac", "ach", "chi", "hin", "ne ", "e l", " le", ...}
+    例 "machine learning" → {"mac", "ach", "chi", "hin", ...}
     """
     if len(text) < n:
         return {text} if text else set()
@@ -88,31 +92,39 @@ def _jaccard(a: set[str], b: set[str]) -> float:
     return inter / len(a | b)
 
 
-# ===== 内存 LRU 缓存: query_text → (response_json, cost, tokens, ts) =====
+# ===== 内存 LRU 缓存: query_text → (shingle_set, response_json, cost, tokens) =====
 
 _MAX_LRU = 200
 _SIM_THRESHOLD = 0.85
-_LRU: "OrderedDict[str, tuple[str, float, int, float]]" = OrderedDict()
+# 单一 LRU: shingle 集合 + payload 一起存. R10.5.7 曾经有并行 _LRU + _SHINGLE_LRU
+# 双 LRU, R10.5.8 code-review 发现 _LRU 从未被读, 删除.
+_SHINGLE_LRU: "OrderedDict[str, tuple[set[str], str, float, int]]" = OrderedDict()
 
 
 def _hash_query(query: str) -> str:
-    return hashlib.sha256(query.encode("utf-8")).hexdigest()[:32]
+    """L1 语义缓存的 LRU key — 仅按 query 文本, 不含 max_iter/budget/provider.
+
+    设计取舍 (R10.5.8 code-review 决策): 跟 backend.utils.cache.cache_key 不同 —
+    精确缓存按 (query, max_iter, budget, provider) 4 元组, 防不同参数命中同一
+    缓存结果. 但**语义缓存**是为了"相似 query 跨参数复用 LLM 报告" — 用户
+    改 max_iter=3→5 不应导致语义缓存失效 (jaccard 命中应继续返). 因此 L1
+    按 query 单独 hash, 不用 cache_key. 仍走 sha256 + 32 截断保持格式一致.
+    """
+    return hashlib.sha256(query.strip().lower().encode("utf-8")).hexdigest()[:32]
 
 
-def _lru_get(query_hash: str) -> Optional[tuple[str, float, int]]:
-    """LRU 读取 (命中后移到末尾, 保持活跃)."""
-    if query_hash in _LRU:
-        _LRU.move_to_end(query_hash)
-        v = _LRU[query_hash]
-        return (v[0], v[1], v[2])
-    return None
-
-
-def _lru_put(query_hash: str, response_json: str, cost: float, tokens: int) -> None:
-    _LRU[query_hash] = (response_json, cost, tokens, time.time())
-    _LRU.move_to_end(query_hash)
-    while len(_LRU) > _MAX_LRU:
-        _LRU.popitem(last=False)
+def _shingle_lru_put(
+    query: str,
+    response_json: str,
+    cost: float,
+    tokens: int,
+) -> None:
+    qhash = _hash_query(query)
+    shingle_set = _shingles(_normalize(query))
+    _SHINGLE_LRU[qhash] = (shingle_set, response_json, cost, tokens)
+    _SHINGLE_LRU.move_to_end(qhash)
+    while len(_SHINGLE_LRU) > _MAX_LRU:
+        _SHINGLE_LRU.popitem(last=False)
 
 
 # ===== Public API =====
@@ -121,8 +133,17 @@ async def find_semantic_match(
     query: str,
     *,
     threshold: float = _SIM_THRESHOLD,
+    max_iter: int = 0,
+    budget: float = 0.0,
+    provider: str | None = None,
 ) -> Optional[tuple[dict, float, int]]:
     """在内存 LRU 中找语义相似 (>=threshold) 的缓存命中.
+
+    Args:
+        query: 用户原始 query
+        threshold: Jaccard 相似度阈值, 默认 0.85
+        max_iter, budget, provider: 签名兼容 get_cached_async 旧桩; 不参与 LRU key,
+            保持 in-memory 缓存按纯 query 匹配 (避免同一 query 不同 max_iter 重复)
 
     Returns: (response_dict, cost_usd, tokens) 或 None
     """
@@ -159,27 +180,7 @@ async def find_semantic_match(
     return None
 
 
-# 双 LRU: shingle 集合镜像 + 完整数据
-_SHINGLE_LRU: "OrderedDict[str, tuple[set[str], str, float, int]]" = OrderedDict()
-_SHINGLE_LRU_MAX = _MAX_LRU
-
-
-def _shingle_lru_put(
-    query: str,
-    response_json: str,
-    cost: float,
-    tokens: int,
-) -> None:
-    qhash = _hash_query(query)
-    shingle_set = _shingles(_normalize(query))
-    _SHINGLE_LRU[qhash] = (shingle_set, response_json, cost, tokens)
-    _SHINGLE_LRU.move_to_end(qhash)
-    while len(_SHINGLE_LRU) > _SHINGLE_LRU_MAX:
-        _SHINGLE_LRU.popitem(last=False)
-    # 同步 LRU (compat)
-    _lru_put(qhash, response_json, cost, tokens)
-
-
+# 向后兼容别名: R10.5 占位桩阶段 main.py 已经 import 这个名字, 不删
 async def get_semantic_cached(
     query: str,
     max_iter: int,
@@ -187,18 +188,18 @@ async def get_semantic_cached(
     provider: str | None = None,
     threshold: float = _SIM_THRESHOLD,
 ) -> Optional[tuple[dict, float, int]]:
-    """语义缓存检索 (R10.5.7 真实实现).
+    """语义缓存检索 — 转发到 find_semantic_match (R10.5.8 合并 wrapper).
 
     Args:
         query: 用户原始 query
-        max_iter, budget, provider: 仅用于日志/未来扩展 (跟精确缓存一致签名)
-        threshold: Jaccard 相似度阈值, 默认 0.85
-
-    Returns: (response_dict, cost_usd, tokens) 或 None
+        max_iter, budget, provider: 签名兼容; 仅作 key 元数据, LRU 按 query 匹配
+        threshold: Jaccard 相似度阈值
     """
     if not semantic_cache_enabled:
         return None
-    return await find_semantic_match(query, threshold=threshold)
+    return await find_semantic_match(
+        query, threshold=threshold, max_iter=max_iter, budget=budget, provider=provider,
+    )
 
 
 async def set_semantic_cached(
@@ -212,8 +213,8 @@ async def set_semantic_cached(
 ) -> None:
     """语义缓存写入 (R10.5.7 真实实现).
 
-    写入内存 LRU (后续 query 命中), 同时落 SQLite (跨进程共享).
-    注: SQLite 落库由 set_cached_async (精确缓存) 统一负责, 这里不重复写.
+    写入内存 LRU (后续 query 命中), 跨进程由 SQLite 精确缓存 get_cached_async
+    独立承担 (H8 修复后 search_cache 只存 hash, 语义缓存存全文, 二者互补).
     """
     if not semantic_cache_enabled:
         return
@@ -231,32 +232,3 @@ async def set_semantic_cached(
 def clear_semantic_cache() -> None:
     """测试用: 清空 LRU."""
     _SHINGLE_LRU.clear()
-    _LRU.clear()
-
-
-# 启动时从 SQLite 预热 LRU (跨进程复用, 限最近 50 条)
-async def warmup_from_db(limit: int = 50) -> None:
-    """进程启动时从 search_cache 拉最近 N 条预热 LRU.
-
-    避免冷启动时第一波 query 都没有缓存可命中.
-    """
-    try:
-        conn = _connect_with_wal("cache")
-        try:
-            # 反查 query_text — 但 search_cache 表只存 query_hash (H8 修复后
-            # 不存 query 原文, 防止泄露). 因此无法预热. 留作未来扩展 (R11+
-            # 加 query_text 列时启用).
-            # 现在只能 skip 预热, 冷启动靠运行时累积.
-            cur = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='search_cache'"
-            )
-            if cur.fetchone() is None:
-                return
-            logger.info(
-                f"[semantic_cache] warmup skipped (search_cache stores only hash, "
-                f"no query_text to compute shingles). Cold start relies on runtime accumulation."
-            )
-        finally:
-            conn.close()
-    except sqlite3.Error as e:
-        logger.warning(f"[semantic_cache] warmup failed (non-fatal): {e}")

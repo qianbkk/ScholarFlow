@@ -64,37 +64,77 @@ export function ReportPanel({
   const html = useMemo(() => {
     if (!report) return '';
     try {
-      // 三层 XSS 防护链：marked → DOMPurify 白名单 → React 渲染
-      // 关键：DOMPurify.sanitize() 必须在 dangerouslySetInnerHTML 之前调用，
-      // 防止 LLM 输出 <script> / onerror= 等可执行 payload。
+      // R10.5 Fix-P0-XSS: 四层 XSS 防护链 —
+      // ① marked 解析 Markdown → ② DOMPurify 白名单过滤 → ③ DOMParser 属性强化 → ④ React 渲染
+      // 关键: DOMPurify 必须在 dangerouslySetInnerHTML 之前调用,
+      // 防止 LLM 输出 <script> / onerror= / javascript: 等可执行 payload.
       const rawHtml = marked.parse(report) as string;
+
+      // ② DOMPurify: 白名单过滤 + 强化 FORBID 规则
       const sanitized = DOMPurify.sanitize(rawHtml, {
         ALLOWED_TAGS: [
           'h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li',
           'strong', 'em', 'a', 'code', 'pre', 'blockquote',
           'br', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr',
+          'sup', 'sub', // R10.5: 新增上下标支持 (学术论文常用)
         ],
-        ALLOWED_ATTR: ['href', 'target', 'rel'],
-        FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed'],
-        FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'style'],
+        // R10.5.8 code-review 修复: 允许 'rel' 和 'name' 透传 — LLM 经常生成
+        // 内部锚点 <a name="ref-1"> 和 nofollow 等 rel 修饰, 旧版一刀切
+        // 全部剥光导致报告内"论文 N" 引用跳转变 plain text.
+        // 'class' / 'id' 仍禁 (防 CSS 注入); 'target' 由下方 DOMParser 统一强制.
+        ALLOWED_ATTR: ['href', 'title', 'rel', 'name'],
+        FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed', 'textarea', 'select', 'button'],
+        FORBID_ATTR: [
+          'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
+          'onfocus', 'onblur', 'onchange', 'onsubmit', 'onkeydown', 'onkeyup',
+          'style', 'class', 'id', // R10.5 Fix-P0: 禁止内联样式和 id (防 CSS 注入)
+        ],
+        // R10.5 Fix-P0: 强制 URL 协议白名单, 防 javascript: / data: 伪协议
+        ALLOWED_URI_REGEXP: /^(?:(?:(?:https?|mailto|tel):)|\/|#)/i,
       });
-      // R9 阶段 3 (审计员 #3): tabnabbing 防护
-      // 之前 marked 渲染 LLM 输出的 Markdown 链接带 [text](url){:target="_blank"} 时
-      // 会生成 <a target=_blank> 但没强制 rel=noopener, 新窗口可通过 window.opener
-      // 反向操控父页 (XSS 等级 low, 但报告里外部链接可点, 防御纵深必须有).
-      // 保守方案: ALLOWED_ATTR 保留 target (让用户能新窗口打开), sanitize 后用
-      // DOMParser 兜底遍历所有 target=_blank 的 <a>, 显式补 rel="noopener noreferrer".
-      // 不激进 (即不在 ALLOWED_ATTR 里删 target), 因为论文链接在原页面打开会丢失报告.
-      if (typeof DOMParser !== 'undefined' && /target=["']_blank["']/i.test(sanitized)) {
-        const doc = new DOMParser().parseFromString(sanitized, 'text/html');
-        doc.querySelectorAll('a[target="_blank"]').forEach((a) => {
-          a.setAttribute('rel', 'noopener noreferrer');
-        });
-        return doc.body.innerHTML;
+
+      // ③ DOMParser: 区分"锚点"vs"外链"决定是否开新窗
+      // R10.5.8 code-review 修复: 旧实现无条件 target=_blank, 报告内
+      // "论文 N"内部锚点 + 同源链接也被开新窗 (15+ 标签页). 新实现:
+      //   - href 形如 #xxx  (页内锚点) → 同窗跳转
+      //   - href 含 name 属性 (LLM 锚点) → 同窗 (目标 id 在本报告)
+      //   - href 同源 (/api/...) → 同窗
+      //   - 其余 (http(s):// 外链) → 新窗 + noopener noreferrer 防 tabnabbing
+      if (typeof DOMParser === 'undefined') {
+        // 降级: 无 DOMParser 时, 用正则强制添加属性 (不完美但比无防护好)
+        return sanitized.replace(
+          /<a\b([^>]*)>/gi,
+          '<a$1 target="_blank" rel="noopener noreferrer">'
+        );
       }
-      return sanitized;
+
+      const doc = new DOMParser().parseFromString(sanitized, 'text/html');
+      doc.querySelectorAll('a').forEach((a) => {
+        const href = a.getAttribute('href') || '';
+        // R10.5 Fix-P0: 二次校验 href 协议, 防 DOMPurify 绕过
+        if (/^(javascript|data|vbscript|file):/i.test(href)) {
+          a.removeAttribute('href');
+          a.setAttribute('data-removed', 'unsafe-protocol');
+          return;
+        }
+        // 内部锚点 / 同源链接: 同窗 (不强制 _blank)
+        const isInternalAnchor = href.startsWith('#');
+        const isRelativeOrApi = href.startsWith('/') || href.startsWith('#');
+        if (isInternalAnchor || isRelativeOrApi) {
+          // 保留原 href, 不强制 target=_blank
+          return;
+        }
+        // 外链: 新窗 + 防御 tabnabbing (新窗口无法通过 window.opener 操控父页)
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+        // R10.5: 添加隐式安全提示
+        a.setAttribute('title', `${a.textContent || '外部链接'} · 将在新窗口打开`);
+      });
+
+      return doc.body.innerHTML;
     } catch (e) {
-      // 兜底：parse 失败时转义所有 < > 字符
+      // 兜底: 完全转义
+      console.error('[ReportPanel] XSS 处理失败, 降级到纯文本:', e);
       return DOMPurify.sanitize(report.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
     }
   }, [report]);

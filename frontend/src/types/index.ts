@@ -41,7 +41,7 @@ export interface GraphNode {
   in_degree?: number;       // 入度 (在 ranked 子图内被引次数)
   out_degree?: number;      // 出度 (在 ranked 子图内引用次数)
   pagerank?: number;        // 中心度近似 (归一化 in_degree, R11 用 NetworkX 真实 PageRank)
-  community_id?: number;    // 社区标签 (decade 分组: 0=最老 decade, 1=下一个, ...)
+  community_id?: number;    // 社区标签 (R10.5.7 P1-2 Louvain modularity: 0..N-1, 顺序无意义)
 }
 
 // D3 模拟节点：在 GraphNode 基础上加 x/y/fx/fy/vx/vy

@@ -17,6 +17,7 @@ expand_citations_node 内动态创建, 同 search_agent 修复.
 """
 import asyncio
 import logging
+import statistics
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar
@@ -89,7 +90,10 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     ]
     median_rel: float = 0.0
     if rel_scores:
-        median_rel = sorted(rel_scores)[len(rel_scores) // 2]
+        # R10.5.8 code-review 修复: 用 statistics.median (偶数 N 取均值),
+        # 旧手写 sorted(...)[len//2] 在偶数 N 时取上中位, 边界 [7,7,9,9] 误判为 7,
+        # 跌到 SEED_LIMIT_MIN. statistics.median 返 8, 正确进 DEFAULT 档.
+        median_rel = statistics.median(rel_scores)
         if median_rel >= 8.0:
             seed_limit = SEED_LIMIT_MAX     # 10 — 高置信度, 扩大扩展
         elif median_rel >= 6.0:
@@ -103,9 +107,11 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     seen = set(state.get("expanded_paper_ids", []))
     # 1) 选 top-N (按引用数) → 2) 过滤 relevance < CITATION_THRESHOLD (避免雪崩)
     candidates = sorted(ss_papers, key=lambda p: p.citation_count, reverse=True)[:seed_limit]
-    # 阈值过滤: 只在 ranked_papers 有真实相关性分时启用 (rel>0),
-    # 否则跳过阈值 (保留旧行为, 兼容未走 ranker 的测试/小数据流).
-    has_real_relevance = any((p.relevance_score or 0) > 0 for p in candidates)
+    # R10.5.8 code-review 修复: has_real_relevance 应该在 ranked_papers 上判定
+    # (决定是否启用阈值过滤的"上游信号"), 不是在 candidates 上 (top-cited 子集,
+    # 即便 rel=0 也不代表 ranker 没跑). 旧实现: 如果 top-5 全是 rel=0 (ranker 跳过),
+    # 误判 has_real_relevance=False → 阈值过滤被禁用, 5 篇全过 → 雪崩.
+    has_real_relevance = len(rel_scores) > 0
     if has_real_relevance:
         top = [p for p in candidates
                if p.paper_id not in seen

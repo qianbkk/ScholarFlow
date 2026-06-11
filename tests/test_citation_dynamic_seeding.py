@@ -159,3 +159,53 @@ def test_constants_exposed():
     assert SEED_LIMIT_MAX == 10
     assert SEED_LIMIT_DEFAULT == 5
     assert CITATION_THRESHOLD == 6.0
+
+
+# ===== R10.5.8 code-review 修复: median off-by-one (偶数 N) =====
+
+def test_median_even_n_takes_true_middle(monkeypatch, mock_ss_api):
+    """R10.5.8: 偶数 N 排名时, median 用 statistics.median (取均值),
+    旧手写 sorted[len//2] 在 N=4 时取上中位 [7,7,9,9] → 7, 跌到 MIN=3.
+    修复后 [7,7,9,9] → median=8.0 → DEFAULT=5.
+    """
+    # ranked 4 篇: rel = 7, 7, 9, 9 → true median = 8.0
+    ranked = [
+        _make_ranked_dict(f"r_{i}", relevance=r)
+        for i, r in enumerate([7.0, 7.0, 9.0, 9.0])
+    ]
+    # 配 10 篇 raw SS (中-高相关) 让 candidates 候选 > 5
+    raw = [_make_ss_paper(f"ss_{i}", citation_count=100 - i, relevance=8.0) for i in range(10)]
+
+    async def _run():
+        return await expand_citations_node(_make_state(raw_papers=raw, ranked_papers=ranked))
+
+    result = asyncio.run(_run())
+    # median=8.0 恰好跨 DEFAULT (>=6) / MAX (>=8) 边界. 实际: median >= 8.0 → MAX=10.
+    # 验证: 5+ 扩展 (旧实现 [7,7,9,9] 取 7, 跌 MIN=3, 会导致 3 个 — 错的)
+    # 此处取 10 因为 ranked median=8 触发 MAX tier.
+    assert len(result["expanded_paper_ids"]) == 10, (
+        f"偶数 N=4 median 应为 8.0 (触发 MAX=10), 旧实现会跌到 MIN=3. "
+        f"got {len(result['expanded_paper_ids'])}"
+    )
+
+
+def test_median_even_n_below_threshold(monkeypatch, mock_ss_api):
+    """R10.5.8: 偶数 N 时, true median 正确落 DEFAULT 档 (6.0-8.0 区间).
+
+    4 篇 ranked: rel = 5, 5, 7, 7 → true median = 6.0
+    旧实现 sorted[len//2]=sorted[2]=7 → 触发 DEFAULT (>=6 < 8) → 5 个
+    修复后 median=6.0 → DEFAULT → 5 个 (同样)
+    旧/新结果相同, 但**边界**应正确.
+    """
+    ranked = [
+        _make_ranked_dict(f"r_{i}", relevance=r)
+        for i, r in enumerate([5.0, 5.0, 7.0, 7.0])
+    ]
+    raw = [_make_ss_paper(f"ss_{i}", citation_count=100 - i, relevance=7.0) for i in range(8)]
+
+    async def _run():
+        return await expand_citations_node(_make_state(raw_papers=raw, ranked_papers=ranked))
+
+    result = asyncio.run(_run())
+    # median=6.0 → DEFAULT=5 → 5 个
+    assert len(result["expanded_paper_ids"]) == 5

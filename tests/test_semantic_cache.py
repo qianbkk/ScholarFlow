@@ -149,8 +149,8 @@ async def test_semantic_cache_lru_eviction():
     命中剩余 query (这是预期行为, 不是 bug). 这里的测试只用长度很不同的 query
     避免误判.
     """
-    original_max = sc._SHINGLE_LRU_MAX
-    sc._SHINGLE_LRU_MAX = 3  # 临时调小
+    original_max = sc._MAX_LRU
+    sc._MAX_LRU = 3  # 临时调小
     try:
         # 写 5 条, 字符完全不重叠, 避免 Jaccard 误命中
         queries = [
@@ -167,7 +167,7 @@ async def test_semantic_cache_lru_eviction():
         hit = await sc.find_semantic_match("reinforcement learning multi agent", threshold=0.5)
         assert hit is not None, "最新写入的 query 应能命中"
     finally:
-        sc._SHINGLE_LRU_MAX = original_max
+        sc._MAX_LRU = original_max
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_semantic_cache_concurrent_writes():
         sc.set_semantic_cached(f"concurrent_query_{i}", 3, 1.0, {"i": i}, 0.1, 50)
         for i in range(n)
     ])
-    assert len(sc._SHINGLE_LRU) == min(n, sc._SHINGLE_LRU_MAX)
+    assert len(sc._SHINGLE_LRU) == min(n, sc._MAX_LRU)
     # 抽样查几条
     for i in [0, 10, 19]:
         hit = await sc.find_semantic_match(f"concurrent_query_{i}")
@@ -211,7 +211,5 @@ async def test_semantic_cache_punct_normalization():
 def test_clear_semantic_cache_resets_lru():
     # 同步测试 clear: 验证空操作 + 不会抛错
     sc._SHINGLE_LRU["fake"] = (set(), "{}", 0.0, 0)
-    sc._LRU["fake"] = ("{}", 0.0, 0, 0.0)
     sc.clear_semantic_cache()
     assert len(sc._SHINGLE_LRU) == 0
-    assert len(sc._LRU) == 0

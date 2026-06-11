@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import * as d3 from 'd3';
 import type { CitationGraph, GraphNode, SimNode, GraphLink } from '../types';
 
@@ -54,12 +54,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
 
   const selected = selectedPaperId;
 
-  // R10.5.5: 当前选中节点的 1 跳邻居数 (含自身) — 工具栏显示
-  useEffect(() => {
-    if (!graph || !selected) {
-      setNeighborCount(null);
-      return;
-    }
+  // R10.5.8 code-review 优化: 邻居集合 (1 跳) — 两个 effect 都依赖, 提到 useMemo
+  // 避免每次 selected/graph 变化重算 2 次 (旧实现: useEffect 算 count + useEffect
+  // 算 opacity, 各自独立遍历 graph.links 一遍). 50k links 大图节省 50%.
+  const neighborSet = useMemo(() => {
+    if (!graph || !selected) return null;
     const ns = new Set<string>([selected]);
     for (const l of graph.links) {
       const sAny = l.source as unknown as string | { id: string };
@@ -69,8 +68,16 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       if (sId === selected) ns.add(tId);
       if (tId === selected) ns.add(sId);
     }
-    setNeighborCount(ns.size);
+    return ns;
   }, [graph, selected]);
+
+  // R10.5.5: 当前选中节点的 1 跳邻居数 (含自身) — 工具栏显示
+  useEffect(() => {
+    setNeighborCount(neighborSet ? neighborSet.size : null);
+  }, [neighborSet]);
+
+  // R10.5 Fix-P0-MemoryLeak: 追踪已绑定的事件处理器引用, 以便在 cleanup 中精确移除.
+  const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
 
   // R10.5.5: fit-to-view — 计算所有节点的 bbox, 平滑缩放 + 平移到刚好覆盖
   // 用户滚轮缩放过大/过小/拖偏后, 一键回正.
@@ -98,20 +105,28 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     svg.transition().duration(750).call(zoomRef.current.transform, transform);
   }, []);
 
-  // R10.5.5: 键盘快捷键 "f" → fit-to-view (在面板聚焦时)
-  // 不在 App.tsx 全局监听, 因为 f 字母常用于输入; 只在 svg 容器 focus 时生效
-  // 简化: 直接在 svg 上加 tabIndex + onKeyDown
+  // R10.5 Fix-P0-MemoryLeak: 键盘事件 — 通过 ref 保存处理器引用, 组件卸载时精确移除.
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
+    // 移除旧处理器 (如果存在)
+    if (keyHandlerRef.current) {
+      el.removeEventListener('keydown', keyHandlerRef.current);
+    }
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault();
         fitToView();
       }
     };
+    keyHandlerRef.current = onKey;
     el.addEventListener('keydown', onKey);
-    return () => el.removeEventListener('keydown', onKey);
+    return () => {
+      if (keyHandlerRef.current) {
+        el.removeEventListener('keydown', keyHandlerRef.current);
+        keyHandlerRef.current = null;
+      }
+    };
   }, [fitToView]);
 
   useEffect(() => {
@@ -160,8 +175,8 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         // event.transform 是 d3 计算好的 translate + scale, 直接 apply 到 root <g>
         root.attr('transform', event.transform.toString());
       });
-    // svg 调用 zoom (滚轮 + 拖动空白处平移); 节点上 d3.drag 会阻止事件冒泡
-    // 让节点拖动和 svg 平移共存, 互不干扰 (drag 有 subject 范围限定).
+    // R10.5 Fix-P0-MemoryLeak: zoom 绑定到 svg, 需要在 cleanup 中精确移除.
+    // 旧实现只清 simulation.stop(), zoom 事件处理器持续累积 → 内存泄漏.
     svg.call(zoom);
     // R10.5.5: 保存 zoom + root 引用, 工具栏 fit-to-view / 重置缩放 用
     zoomRef.current = zoom;
@@ -220,6 +235,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .attr('fill', '#c2410c');
 
     // Color scale: M-18 优先用 community 颜色 (如果 multi-decade), 否则用 relevance 颜色
+    // R10.5.8 code-review 修复: 旧 Set1 3 色 (红/蓝/绿) 是 categorical palette,
+    // 不适合 0-1 连续相关度 (低=红=警示, 高=绿=安全, 跟数据直觉反向).
+    // 改 ColorBrewer 顺序 YlGn (黄→深绿) — 低相关淡黄, 高相关深绿, 符合
+    // "relevance 越高越显眼" 的用户预期, 同时仍色盲友好 (黄→绿单色梯度).
     const communityCount = graph.metadata.community_count ?? 1;
     const useCommunityColor = communityCount > 1;
     const colorScale = useCommunityColor
@@ -227,7 +246,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       : d3
           .scaleLinear<string>()
           .domain([0, 0.5, 1])
-          .range(['#e41a1c', '#377eb8', '#4daf4a']);
+          .range(['#ffffcc', '#78c679', '#006837']);
 
     // Simulation
     const simulation = d3
@@ -404,6 +423,14 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     });
 
     return () => {
+      // R10.5 Fix-P0-MemoryLeak: 必须先移除 zoom 行为再停止 simulation,
+      // 否则 zoom 事件处理器残留在 DOM 上 → 内存泄漏.
+      if (zoomRef.current) {
+        try {
+          // D3 的 zoom 是通过 selection.on() 绑定的, 用 .on('.zoom', null) 移除
+          svg.on('.zoom', null);
+        } catch { /* ignore */ }
+      }
       simulation.stop();
     };
     // Fix-H (R10.5): deps 只 [graph], 删 [selected].  selected 触发的样式更新
@@ -414,24 +441,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   // 旧版: deps=[graph, selected], 用户点击节点 → effect 重跑 → svg.selectAll('*').remove()
   //   + 重建 force simulation + 节点位置重置 + 100+ tick 重新收敛, 视觉抖动.
   // 新版: simulation 走上面 [graph] effect, 此 effect 仅用 d3.select(svgRef.current) 改样式.
+  // R10.5.8: 邻居集合用上面 useMemo 算的 neighborSet, 去掉 effect 内重复计算.
   useEffect(() => {
     if (!svgRef.current || !graph) return;
     const svg = d3.select(svgRef.current);
-    // 邻居集合 (与 simulation effect 同样逻辑, 这里独立计算避免 ref 传复杂度)
-    // 注: 用 as unknown cast 绕过 TS narrowing (TS 看到 l.source: string 后,
-    //     else 分支 'l.source.id' 推导成 'never', 实际无意义 — 我们安全 guard).
-    const neighborOfSelected = (id: string) => {
-      const s = new Set<string>([id]);
-      for (const l of graph.links) {
-        const lAny = l as unknown as { source: string | { id: string }; target: string | { id: string } };
-        const sId = typeof lAny.source === 'string' ? lAny.source : lAny.source.id;
-        const tId = typeof lAny.target === 'string' ? lAny.target : lAny.target.id;
-        if (sId === id) s.add(tId);
-        if (tId === id) s.add(sId);
-      }
-      return s;
-    };
-    const ns = selected ? neighborOfSelected(selected) : null;
+    const ns = neighborSet;
 
     // 节点 + 边 opacity 仅在 selected 存在时改; selected=null 时还原 baseline
     svg
@@ -454,7 +468,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .select('circle')
       .attr('stroke', (d: any) => (d.id === selected ? '#c2410c' : '#1c1917'))
       .attr('stroke-width', (d: any) => (d.id === selected ? 3 : 1.2));
-  }, [selected, graph]);
+  }, [selected, graph, neighborSet]);
 
   return (
     // R10.5.4 Editorial: 左侧分隔线 (跟 QueryPanel 右侧对齐), 无圆角, 无 border-r
@@ -553,9 +567,59 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           ref={svgRef}
           className="w-full h-full"
           tabIndex={0}
-          role="application"
+          role="img"
           aria-label="引文关系图谱 (按 f 适配视图, Esc 清选中)"
         />
+
+        {/* R10.5 Fix-P0-EmptyState: 优雅的空状态 — 无数据时显示引导, 而非空白 */}
+        {!graph && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 pointer-events-none">
+            <div
+              className="w-16 h-16 mb-4 flex items-center justify-center"
+              style={{ border: '1px solid var(--sf-border)' }}
+            >
+              <svg
+                width="32"
+                height="32"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1"
+                style={{ color: 'var(--sf-muted)' }}
+              >
+                <circle cx="12" cy="5" r="2.5" />
+                <circle cx="5" cy="19" r="2.5" />
+                <circle cx="19" cy="19" r="2.5" />
+                <line x1="12" y1="7.5" x2="5" y2="16.5" />
+                <line x1="12" y1="7.5" x2="19" y2="16.5" />
+                <line x1="5" y1="16.5" x2="19" y2="16.5" />
+              </svg>
+            </div>
+            <p
+              className="font-display italic text-lg mb-1"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              暂无图谱数据
+            </p>
+            <p className="font-body text-[11px]" style={{ color: 'var(--sf-muted)' }}>
+              完成搜索后将自动构建引文关系图
+            </p>
+          </div>
+        )}
+
+        {graph && graph.nodes.length === 0 && (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 pointer-events-none">
+            <p
+              className="font-display italic text-lg mb-1"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              未检索到论文关联
+            </p>
+            <p className="font-body text-[11px]" style={{ color: 'var(--sf-muted)' }}>
+              尝试更换关键词重新搜索
+            </p>
+          </div>
+        )}
 
         {hovered && (
           <div
