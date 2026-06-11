@@ -1,6 +1,10 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { SearchResult } from '../types';
 import { searchPapers, fetchMe } from '../services/api';
+import {
+  readLocalStorage,
+  writeLocalStorage,
+} from '../lib/useLocalStorage';
 
 // 8 节点流水线步骤（用于进度反馈）
 // key 与后端 NODE_NAME_TO_STEP 映射保持一致（前端展示用）
@@ -67,26 +71,19 @@ type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | 
 
 // R10.5.5 交互升级: 最近搜索 localStorage 持久化
 // 5 条上限, LRU 替换, 用 'sf-recent-searches' 命名空间
+// R10.5.9 code-review 落地: 复用 lib/useLocalStorage 的 readLocalStorage/writeLocalStorage,
+// 删 4 处重复的 try/parse/filter 样板.
 const RECENT_KEY = 'sf-recent-searches';
 const RECENT_MAX = 5;
+const isStringArray = (v: unknown): v is string[] =>
+  Array.isArray(v) && v.every((x) => typeof x === 'string');
 
 function loadRecent(): string[] {
-  try {
-    const raw = localStorage.getItem(RECENT_KEY);
-    if (!raw) return [];
-    const arr = JSON.parse(raw);
-    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
+  return readLocalStorage<string[]>(RECENT_KEY, [], { validate: isStringArray });
 }
 
 function saveRecent(queries: string[]): void {
-  try {
-    localStorage.setItem(RECENT_KEY, JSON.stringify(queries.slice(0, RECENT_MAX)));
-  } catch {
-    // 静默
-  }
+  writeLocalStorage(RECENT_KEY, queries.slice(0, RECENT_MAX));
 }
 
 // R10.5.5 交互升级: 成本超限结构化数据
@@ -110,21 +107,18 @@ export function useSearch() {
   const [budgetExceeded, setBudgetExceeded] = useState<BudgetExceeded | null>(null);
   const [recentSearches, setRecentSearches] = useState<string[]>(loadRecent);
 
-  // R10.5 Fix-P0-MemoryLeak: 移除未使用的 esRef (EventSource 已废弃).
+  // R10.5.9 落地: 移除 esRef/reconnectTimerRef 历史注释 — R10.5.8 code-review
+  // 已删两个 ref, 注释没必要每次提醒"已移除". 代码即真相.
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fallbackStartRef = useRef<number>(0);
   const requestIdRef = useRef<string | null>(null);
   // H6: generation counter — bumped on every search / reset.
   const genRef = useRef<number>(0);
-  // R10.5 Fix-P0-2.2-b: 全局兜底超时 timer, 防止 SSE 真死锁时 (e.g. 401 / 后端卡死)
-  // 90s 仍无任何事件时强制报错, 不再让用户看 1000s loading.
-  // R10.5.8 code-review 修复: 此 ref 之前从未被 setTimeout 赋值, 注释与行为不符.
-  // 新版: search() 启动时 setTimeout(GLOBAL_TIMEOUT_MS), reader.read 第一帧
-  // 收到任一 SSE 事件时由 stopFallbackProgress 清掉, 卸载/reset 也清掉.
+  // R10.5.8 修复: 全局兜底超时, 防 SSE 真死锁 (e.g. 401 / 后端卡死) 90s 无
+  // 任何事件时强制报错. search() 启动时 setTimeout, 收首个 SSE 事件后清掉.
   const globalTimeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const GLOBAL_TIMEOUT_MS = 90_000;
-  // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff, 防止用户瞬时网络抖动
-  // (WIFI 切换 / VPN 重连) 整次搜索直接失败. 重试仍失败才显示 error.
+  // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff (WIFI 切换 / VPN 重连).
   const retryAttemptedRef = useRef<boolean>(false);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 

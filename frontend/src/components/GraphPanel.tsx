@@ -11,15 +11,26 @@ interface Props {
 
 // M-18: 4 类边的视觉颜色 (cites 实箭头 / co_cited 虚线 / same_venue 点线 / author_overlap 双向)
 // R10.5.7 P1-3: 改用 ColorBrewer Set1 色盲友好配色 (4 类高对比度不同色).
-// 旧版用 ink 单色 + dasharray 区分, 色盲用户无法辨识. Set1 在红/蓝/绿/紫
-// 4 维度区分明显, 通过 Deuteranopia/Protanopia 色盲模拟测试.
-// 来源: ColorBrewer 2.0, 学术 + 色盲友好标准配色方案.
-const LINK_STYLES: Record<string, { stroke: string; dasharray?: string; marker?: string }> = {
-  cites: { stroke: '#e41a1c', marker: 'url(#arrow)' },                // 红 — 直接引用
-  co_cited: { stroke: '#377eb8', dasharray: '4,3' },                    // 蓝 — 共同引用
-  same_venue: { stroke: '#4daf4a', dasharray: '2,2' },                  // 绿 — 同会议
-  author_overlap: { stroke: '#984ea3', marker: 'url(#arrow-both)' },    // 紫 — 共同作者
+// R10.5.9 落地: 颜色提到 CSS 变量 --sf-edge-* (index.css 4 主题各设一遍),
+// midnight 黑底 + sage 绿底不再 invisible. stroke 走 getComputedStyle 读
+// 当前主题值, 避免 d3 hardcode 写死.
+const LINK_STYLES: Record<string, { cssVar: string; dasharray?: string; marker?: string }> = {
+  cites: { cssVar: '--sf-edge-cites', marker: 'url(#arrow)' },
+  co_cited: { cssVar: '--sf-edge-co-cited', dasharray: '4,3' },
+  same_venue: { cssVar: '--sf-edge-same-venue', dasharray: '2,2' },
+  author_overlap: { cssVar: '--sf-edge-author-overlap', marker: 'url(#arrow-both)' },
 };
+
+// 读 CSS 变量当前值 (一次, effect 内复用)
+function readEdgeColors(): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+  const style = getComputedStyle(document.documentElement);
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(LINK_STYLES)) {
+    out[k] = style.getPropertyValue(v.cssVar).trim() || '#94a3b8';
+  }
+  return out;
+}
 
 
 const INTERACTION_HINTS = [
@@ -140,6 +151,8 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     const height = svgRef.current.clientHeight || 600;
     const nodes: SimNode[] = graph.nodes.map((n) => ({ ...n }));
     const links: { source: string; target: string; type: string }[] = graph.links.map((l) => ({ ...l }));
+    // R10.5.9: 读 CSS 变量当前主题值 — 切换主题时图谱边色自动跟 (ThemeSwitcher 改 <html> class)
+    const edgeColors = readEdgeColors();
 
     if (nodes.length === 0) {
       svg
@@ -275,7 +288,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .selectAll('line')
       .data(links)
       .join('line')
-      .attr('stroke', (d: any) => LINK_STYLES[d.type]?.stroke ?? '#94a3b8')
+      .attr('stroke', (d: any) => edgeColors[d.type] ?? '#94a3b8')
       .attr('stroke-dasharray', (d: any) => LINK_STYLES[d.type]?.dasharray ?? null)
       .attr('stroke-width', (d: any) => (d.type === 'cites' ? 1.2 : 0.8))
       .attr('stroke-opacity', 0.5)
@@ -684,29 +697,39 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             边类型
           </div>
           {/* R10.5.7 P1-3: 色盲友好图例 — 4 类边用 ColorBrewer Set1 (红/蓝/绿/紫)
-              旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识 */}
+              旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识
+              R10.5.9 落地: 颜色用 CSS 变量 — 主题切换时图例色自动跟随 */}
           <div className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-px" style={{ background: '#e41a1c' }} />
+            <span
+              className="inline-block w-3 h-px"
+              style={{ background: 'var(--sf-edge-cites)' }}
+            />
             <span>cites</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: 'transparent', borderTop: '1px dashed #377eb8' }}
+              style={{
+                background: 'transparent',
+                borderTop: '1px dashed var(--sf-edge-co-cited)',
+              }}
             />
             <span>co-cited</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: 'transparent', borderTop: '1px dotted #4daf4a' }}
+              style={{
+                background: 'transparent',
+                borderTop: '1px dotted var(--sf-edge-same-venue)',
+              }}
             />
             <span>same venue</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: '#984ea3' }}
+              style={{ background: 'var(--sf-edge-author-overlap)' }}
             />
             <span>author overlap</span>
           </div>

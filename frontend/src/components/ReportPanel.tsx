@@ -100,14 +100,9 @@ export function ReportPanel({
       //   - href 含 name 属性 (LLM 锚点) → 同窗 (目标 id 在本报告)
       //   - href 同源 (/api/...) → 同窗
       //   - 其余 (http(s):// 外链) → 新窗 + noopener noreferrer 防 tabnabbing
-      if (typeof DOMParser === 'undefined') {
-        // 降级: 无 DOMParser 时, 用正则强制添加属性 (不完美但比无防护好)
-        return sanitized.replace(
-          /<a\b([^>]*)>/gi,
-          '<a$1 target="_blank" rel="noopener noreferrer">'
-        );
-      }
-
+      // R10.5.9 落地: 删 typeof DOMParser === 'undefined' 降级分支 —
+      // Vite 5 + 现代浏览器 (Chrome 90+/Firefox 88+/Safari 14+) 100% 可用,
+      // 该分支是死代码, 删 11 行. 错误兜底走 catch(e) → 完全转义已存在.
       const doc = new DOMParser().parseFromString(sanitized, 'text/html');
       doc.querySelectorAll('a').forEach((a) => {
         const href = a.getAttribute('href') || '';

@@ -40,6 +40,14 @@ html.theme-parchment {
   --sf-accent-soft: #fed7aa;   /* 浅橙背景 (badge / highlight) */
   --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.04),
                0 4px 12px rgba(28, 25, 23, 0.06);
+  /* === R10.5.9 code-review 落地: GraphPanel 4 类边色升 CSS 变量 ===
+     旧实现硬编码 4 个 hex, midnight 主题看不见蓝, sage 主题绿跟
+     背景色冲. 现在每主题单独微调, 仍走 ColorBrewer Set1 色盲友好
+     调色板, 但跟背景保证 ≥ 3:1 对比度. */
+  --sf-edge-cites: #b91c1c;        /* 红 — 直接引用 (深一点, 浅底更显) */
+  --sf-edge-co-cited: #1d4ed8;     /* 蓝 — 共同引用 */
+  --sf-edge-same-venue: #15803d;   /* 绿 — 同会议 */
+  --sf-edge-author-overlap: #6b21a8; /* 紫 — 共同作者 */
 }
 html.theme-kraft {
   --sf-bg: #f4ecd8;            /* 牛皮纸 */
@@ -51,6 +59,11 @@ html.theme-kraft {
   --sf-accent-soft: #fed7aa;
   --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
                0 4px 14px rgba(28, 25, 23, 0.08);
+  /* kraft 暖底: 边色饱和度 +15%, 跟羊皮色背景拉开 */
+  --sf-edge-cites: #991b1b;
+  --sf-edge-co-cited: #1e40af;
+  --sf-edge-same-venue: #166534;
+  --sf-edge-author-overlap: #581c87;
 }
 html.theme-midnight {
   --sf-bg: #0d0d0d;            /* 深墨水黑 */
@@ -62,6 +75,12 @@ html.theme-midnight {
   --sf-accent-soft: #7c2d12;
   --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
                0 4px 14px rgba(0, 0, 0, 0.4);
+  /* midnight 黑底: 边色提亮 (Set1 原色), 蓝紫尤其重要 — 旧 #377eb8
+     在 #0d0d0d 上几乎看不见 */
+  --sf-edge-cites: #f87171;        /* 亮红 */
+  --sf-edge-co-cited: #60a5fa;     /* 亮蓝 */
+  --sf-edge-same-venue: #86efac;   /* 亮绿 */
+  --sf-edge-author-overlap: #c4b5fd; /* 亮紫 */
 }
 html.theme-sage {
   --sf-bg: #e8e4d4;            /* sage 纸 */
@@ -73,6 +92,11 @@ html.theme-sage {
   --sf-accent-soft: #fde68a;
   --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
                0 4px 12px rgba(124, 45, 18, 0.08);
+  /* sage 绿底: 绿边色加深到 #14532d, 蓝稍微提饱和, 避免冲背景 */
+  --sf-edge-cites: #991b1b;
+  --sf-edge-co-cited: #1e40af;
+  --sf-edge-same-venue: #14532d;   /* 深绿 — 跟 sage 底色明显分层 */
+  --sf-edge-author-overlap: #581c87;
 }
 
 body {

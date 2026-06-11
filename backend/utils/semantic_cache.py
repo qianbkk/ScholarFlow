@@ -44,6 +44,11 @@ from collections import OrderedDict
 from typing import Optional
 
 from backend.utils.scrub import scrub_sensitive
+# R10.5.9 落地: 复用 text_utils._normalize_title, 取代自己写的 _normalize.
+# 两边正则/逻辑一致 (lowercase + 去标点 + 折叠空白), 但 text_utils 多了
+# 跨调用方一致性的好处 (跟 deduplicate_papers / 论文匹配用同一份规范化).
+# char-level CJK 范围 [一-鿿] 在 \w (Python 3 str) 已包含, 不需要额外 unicode range.
+from backend.utils.text_utils import _normalize_title
 
 logger = logging.getLogger(__name__)
 
@@ -57,17 +62,12 @@ semantic_cache_stub_marker: bool = True
 # ===== Shingle + Jaccard 核心算法 =====
 
 def _normalize(text: str) -> str:
-    """归一化: 去标点 + 折叠空白 + 小写.
+    r"""归一化: 委托给 text_utils._normalize_title (R10.5.9 复用).
 
     中文按字符保留 (无空格分词), 英文按 word 保留 (空格分词).
-    不做分词 — 避免引入 jieba 等额外依赖.
+    \w 在 Python 3 str 模式已含 CJK 范围, 不需要额外的 [一-鿿] 字符类.
     """
-    if not text:
-        return ""
-    # 去标点 / 特殊字符 (保留中文 + 英文 + 数字 + 空格)
-    text = re.sub(r"[^\w\s一-鿿]+", " ", text.lower())
-    # 折叠空白
-    return re.sub(r"\s+", " ", text).strip()
+    return _normalize_title(text)
 
 
 def _shingles(text: str, n: int = 3) -> set[str]:
