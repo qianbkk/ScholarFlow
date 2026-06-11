@@ -138,6 +138,7 @@ export function QueryPanel({
   // 比单纯回填更好: 用户意图明显, 立即重跑才是符合期望的行为
   const useRecent = (s: string) => {
     setQuery(s);
+    setShowRecent(false);
     onSearch(s, budget, maxIter, selectedProvider || undefined);
   };
 
@@ -147,6 +148,14 @@ export function QueryPanel({
     // 这是符合预期的 — 用户改了预算希望下次还用
     onReset();
   };
+
+  // R10.5.6 Fix: 表单可折叠 — 有结果时给论文列表腾空间
+  // (旧版表单 + 示例 + 最近搜索 堆太满, 论文列表被挤出可视区)
+  const [formCollapsed, setFormCollapsed] = useState<boolean>(false);
+  // 自动折叠: 用户搜索过且当前不在加载中, 给论文列表让位
+  const hasResults = papers.length > 0;
+  const shouldCollapseForm = formCollapsed || (hasResults && !loading);
+  const [showRecent, setShowRecent] = useState<boolean>(false);  // 最近搜索 popover
 
   return (
     // Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
@@ -158,31 +167,93 @@ export function QueryPanel({
         borderRight: '1px solid var(--sf-border)',
       }}
     >
-      <div className="p-4 border-b" style={{ borderColor: 'var(--sf-border)' }}>
-        {/* 栏目标题 — Editorial 风格: 序号 + 衬线斜体 */}
-        <div className="flex items-baseline gap-2 mb-3">
-          <span
-            className="font-mono text-[10px] uppercase tracking-[0.18em]"
-            style={{ color: 'var(--sf-accent)' }}
+      <div
+        className="p-3 border-b shrink-0"
+        style={{ borderColor: 'var(--sf-border)' }}
+        data-form-section
+        data-collapsed={shouldCollapseForm ? 'true' : 'false'}
+      >
+        {/* 栏目标题 — Editorial 风格: 序号 + 衬线斜体 + 折叠按钮 */}
+        <div className="flex items-baseline justify-between gap-2 mb-2">
+          <div className="flex items-baseline gap-2 min-w-0">
+            <span
+              className="font-mono text-[10px] uppercase tracking-[0.18em] shrink-0"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              § 1
+            </span>
+            <h2
+              className="font-display text-base font-semibold italic truncate"
+              style={{ color: 'var(--sf-text)' }}
+            >
+              研究查询
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFormCollapsed((c) => !c)}
+            aria-label={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
+            title={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
+            className="font-mono text-[10px] uppercase tracking-[0.12em] px-1.5 py-0.5 transition-colors border shrink-0"
+            style={{
+              color: 'var(--sf-muted)',
+              borderColor: 'var(--sf-border)',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = 'var(--sf-accent)';
+              e.currentTarget.style.borderColor = 'var(--sf-accent)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = 'var(--sf-muted)';
+              e.currentTarget.style.borderColor = 'var(--sf-border)';
+            }}
           >
-            § 1
-          </span>
-          <h2
-            className="font-display text-base font-semibold italic"
-            style={{ color: 'var(--sf-text)' }}
-          >
-            研究查询
-          </h2>
+            {shouldCollapseForm ? '▾ 展开' : '▴ 折叠'}
+          </button>
         </div>
-        <form onSubmit={submit} className="space-y-2.5">
+        {/* 折叠态: 单行紧凑摘要 (回填内容 + 折叠后保留一个快搜图标按钮) */}
+        {shouldCollapseForm ? (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setFormCollapsed(false)}
+              data-search-input
+              tabIndex={-1}
+              className="flex-1 text-left font-body text-[13px] italic truncate px-2.5 py-1.5 transition-colors cursor-text"
+              style={{
+                backgroundColor: 'var(--sf-bg-elev)',
+                color: query ? 'var(--sf-text)' : 'var(--sf-muted)',
+                border: '1px solid var(--sf-border)',
+              }}
+              title="点击展开查询表单"
+            >
+              {query || '点击展开查询表单…'}
+            </button>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={!query.trim() || loading}
+              aria-label="重新检索"
+              title="用当前 query 重新检索"
+              className="font-display italic font-semibold px-2.5 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{
+                backgroundColor: 'var(--sf-accent)',
+                color: 'var(--sf-bg)',
+              }}
+            >
+              检索 →
+            </button>
+          </div>
+        ) : (
+        <form onSubmit={submit} className="space-y-2">
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="输入研究问题…"
-            rows={2}
+            rows={1}
             maxLength={2000}
             data-search-input
-            className="w-full font-body text-[15px] leading-relaxed border rounded-none p-2.5 resize-none transition-colors"
+            className="w-full font-body text-[14px] leading-relaxed border rounded-none px-2.5 py-1.5 resize-none transition-colors"
             style={{
               borderColor: 'var(--sf-border)',
               backgroundColor: 'var(--sf-bg)',
@@ -349,8 +420,25 @@ export function QueryPanel({
             >
               清空
             </button>
+            {recentSearches.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowRecent((s) => !s)}
+                aria-label="最近搜索"
+                aria-expanded={showRecent}
+                title="最近搜索"
+                className="px-2 py-1.5 text-sm transition-colors border-l"
+                style={{
+                  color: showRecent ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                  borderColor: 'var(--sf-border)',
+                }}
+              >
+                ⏱
+              </button>
+            )}
           </div>
         </form>
+        )}
 
         {/* 加载进度条 — Editorial 风格: 8 段细线 + 当前节点标签 */}
         {loading && (
@@ -394,20 +482,15 @@ export function QueryPanel({
           </div>
         )}
 
-        <div className="mt-3">
-          <p
-            className="text-[9px] uppercase tracking-[0.18em] font-mono mb-1.5"
-            style={{ color: 'var(--sf-muted)' }}
-          >
-            示例
-          </p>
-          <div className="flex flex-wrap gap-1">
+        {/* 示例 — 单行紧凑, 只在 query 为空时显示 (有内容时省空间) */}
+        {!query && (
+          <div className="mt-2.5 flex flex-wrap gap-x-2 gap-y-1">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => useSuggestion(s)}
-                className="text-[11px] font-body italic px-2 py-0.5 transition-colors border-b border-dashed"
+                className="text-[11px] font-body italic transition-colors border-b border-dashed"
                 style={{
                   color: 'var(--sf-muted)',
                   borderColor: 'var(--sf-border)',
@@ -426,11 +509,20 @@ export function QueryPanel({
               </button>
             ))}
           </div>
-        </div>
+        )}
 
-        {/* R10.5.5: 最近搜索 (localStorage LRU 5) — 点击即重跑 */}
-        {recentSearches.length > 0 && (
-          <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--sf-border)' }}>
+        {/* R10.5.6 Fix: 最近搜索 popover — 不再常驻, 点 ⏱ 按钮才展开
+            旧版 always-visible 块 + 5 个示例 + 表单 = 论文列表被挤出可视区.
+            改 popover 后, 论文列表始终优先占满剩余高度. */}
+        {showRecent && recentSearches.length > 0 && (
+          <div
+            className="mt-2 p-2 font-ui"
+            style={{
+              backgroundColor: 'var(--sf-bg-elev)',
+              border: '1px solid var(--sf-border)',
+            }}
+            data-testid="recent-popover"
+          >
             <div className="flex items-center justify-between mb-1.5">
               <p
                 className="text-[9px] uppercase tracking-[0.18em] font-mono"
@@ -438,17 +530,28 @@ export function QueryPanel({
               >
                 最近搜索
               </p>
-              {onClearRecent && (
+              <div className="flex items-center gap-2">
+                {onClearRecent && (
+                  <button
+                    type="button"
+                    onClick={onClearRecent}
+                    className="text-[9px] font-mono uppercase tracking-[0.15em] opacity-60 hover:opacity-100 transition"
+                    style={{ color: 'var(--sf-muted)' }}
+                    title="清除全部最近搜索"
+                  >
+                    清除
+                  </button>
+                )}
                 <button
                   type="button"
-                  onClick={onClearRecent}
-                  className="text-[9px] font-mono uppercase tracking-[0.15em] hover:opacity-100 opacity-60 transition"
+                  onClick={() => setShowRecent(false)}
+                  className="font-display italic text-base leading-none opacity-60 hover:opacity-100 transition"
                   style={{ color: 'var(--sf-muted)' }}
-                  title="清除全部最近搜索"
+                  aria-label="关闭"
                 >
-                  清除
+                  ×
                 </button>
-              )}
+              </div>
             </div>
             <div className="space-y-0.5">
               {recentSearches.map((s, i) => (
@@ -458,7 +561,7 @@ export function QueryPanel({
                   onClick={() => useRecent(s)}
                   className="group flex items-center gap-2 w-full text-left px-1.5 py-1 transition-colors"
                   onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
+                    e.currentTarget.style.backgroundColor = 'var(--sf-bg)';
                   }}
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';

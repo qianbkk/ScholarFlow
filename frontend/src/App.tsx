@@ -253,8 +253,11 @@ export default function App() {
     >
       {/* === 报头 (Editorial Masthead) ===
           R10.5.4 重设计: 报头三段式 — 刊名 (Fraunces italic) + 副刊号 (IBM Plex mono 小字) + 右侧主题/用户.
-          顶部加双线 (经典期刊装订线) 替代单 border, 强化"翻杂志"的视觉感. */}
-      <header className="sf-rise">
+          顶部加双线 (经典期刊装订线) 替代单 border, 强化"翻杂志"的视觉感.
+          R10.5.6 Fix: header 加 z-30, 否则 ThemeSwitcher / UserBadge 的 z-20 下拉
+          会被后续 CostDashboard 兄弟节点 (默认 z-auto, 后渲染赢) 盖住, 表现为
+          "点不到主题切换" / "点到了引文图谱". */}
+      <header className="sf-rise relative z-30">
         <div
           className="px-4 sm:px-6 py-3 flex items-end justify-between gap-4 border-b-2"
           style={{ borderColor: 'var(--sf-text)' }}
@@ -272,7 +275,7 @@ export default function App() {
               Vol. 1 · 科研文献智能检索
             </span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 relative">
             <UserBadge
               user={currentUser}
               openMode={currentUser?.open_mode ?? true}
