@@ -4,8 +4,15 @@ import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
+import { LoginDialog } from './components/LoginDialog';
+import { UserBadge } from './components/UserBadge';
 import { useSearch } from './hooks/useSearch';
-import { healthCheck } from './services/api';
+import {
+  healthCheck,
+  fetchMe,
+  logout as authLogout,
+  type UserInfo,
+} from './services/api';
 
 // Round 6 SIMPLIFY (REDUNDANT-004): 修复 onRetry 闭包丢失用户表单状态 bug
 // 之前 onRetry={(q) => search(q)} 只传 query, useSearch.search 内部对
@@ -46,11 +53,56 @@ export default function App() {
   const [lastSearchOpts, setLastSearchOpts] = useState<LastSearchOpts | null>(null);
   // R10 (M-17): 背景色主题状态 — localStorage 记忆, 4 套全部 WCAG AA (>4.5:1)
   const [theme, setTheme] = useState<ThemeId>(loadStoredTheme);
+  // R10.5.3: 认证状态机 — 'loading' (启动检测中) | 'unauthenticated' (弹登录框)
+  // | 'authenticated' (显示主界面).  配 UserInfo (含 open_mode) 控制 UserBadge.
+  const [authState, setAuthState] = useState<'loading' | 'unauthenticated' | 'authenticated'>('loading');
+  const [currentUser, setCurrentUser] = useState<UserInfo | null>(null);
+  // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
 
   useEffect(() => {
     healthCheck()
       .then((d) => setServerOk(d.status === 'ok'))
       .catch(() => setServerOk(false));
+  }, []);
+
+  // R10.5.3: 启动时调 /auth/me 检测登录态.
+  // - 200 → 拿到 UserInfo (含 open_mode), 进 authenticated
+  // - 401 或无 key → 进 unauthenticated (弹 LoginDialog)
+  // - 网络错 → 也按 unauthenticated 处理 (LoginDialog 内有错误提示, 不再白屏)
+  useEffect(() => {
+    let cancelled = false;
+    fetchMe()
+      .then((u) => {
+        if (cancelled) return;
+        if (u) {
+          setCurrentUser(u);
+          setAuthState('authenticated');
+        } else {
+          setCurrentUser(null);
+          setAuthState('unauthenticated');
+        }
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentUser(null);
+        setAuthState('unauthenticated');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleLoginSuccess = useCallback(async () => {
+    // 重新拉一次 /auth/me 拿完整 UserInfo (含 created_at, open_mode 等)
+    const u = await fetchMe();
+    setCurrentUser(u);
+    setAuthState(u ? 'authenticated' : 'unauthenticated');
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    authLogout();  // 清 localStorage
+    setCurrentUser(null);
+    setAuthState('unauthenticated');
   }, []);
 
   // 当 result 更新时，把后端返回的 elapsed 同步进来
@@ -113,7 +165,15 @@ export default function App() {
         <div className="flex items-center gap-2 text-xs opacity-70">
           <span>ScholarFlow</span>
         </div>
-        <ThemeSwitcher current={theme} onChange={handleThemeChange} />
+        <div className="flex items-center gap-2">
+          <UserBadge
+            user={currentUser}
+            openMode={currentUser?.open_mode ?? true}
+            onLogout={handleLogout}
+            loading={authState === 'loading'}
+          />
+          <ThemeSwitcher current={theme} onChange={handleThemeChange} />
+        </div>
       </div>
 
       <CostDashboard result={result} loading={loading} elapsed={elapsed} />
@@ -172,6 +232,15 @@ export default function App() {
         />
         <GraphPanel graph={result?.citation_graph ?? null} />
       </div>
+
+      {/* R10.5.3: 认证对话框 — 未登录时强制弹出 (OPEN_MODE=false).
+          z-50 模态, 阻断所有下层交互, 防止用户绕过认证直接触发 search. */}
+      {authState === 'unauthenticated' && (
+        <LoginDialog
+          requireAuth
+          onSuccess={handleLoginSuccess}
+        />
+      )}
     </div>
   );
 }
