@@ -35,17 +35,22 @@ async def bounded_gather(
         list[T | BaseException]: 每个 task 的结果 (成功值或异常/超时占位).
         与 asyncio.gather(..., return_exceptions=True) 行为一致, 但有总超时.
 
-    Notes:
-        R10.5 Fix-Audit-Leak: wait_for 不会自动 cancel 内部 task. 超时后底层 task
-        还会跑一会, 持有 semaphore / 连接池. 调用方需要的话可自己追踪 task.
+    P1-4 fix (深度审计 §P1-4): wait_for 超时后用 gather._cancel() 主动
+    关闭 gather 内部 task, 释放 semaphore / httpx 连接池槽位. 旧实现
+    仅靠 gather 内部 CancelledError 传播, httpx.AsyncClient.get()
+    可能在 await 点未能及时响应, 持锁超时 → 下次同 batch 阻塞.
     """
+    gather_task = asyncio.gather(*tasks, return_exceptions=True)
     try:
-        return await asyncio.wait_for(
-            asyncio.gather(*tasks, return_exceptions=True),
-            timeout=timeout,
-        )
+        return await asyncio.wait_for(gather_task, timeout=timeout)
     except asyncio.TimeoutError:
         logger.warning(
             f"[{label}] gather timed out after {timeout}s, {len(tasks)} tasks pending"
         )
+        # 主动 cancel gather 内部 task, 触发 CancelledError 传播到子协程
+        gather_task.cancel()
+        try:
+            await gather_task  # 等待 cancel 真正完成 (释放资源)
+        except (asyncio.CancelledError, Exception):
+            pass
         return [fallback_factory(f"{label} gather timeout")] * len(tasks)

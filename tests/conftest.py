@@ -56,8 +56,8 @@ def _reset_global_state(request):
         import backend.main as main_mod
         if hasattr(main_mod, "limiter"):
             main_mod.limiter.reset()
-        if hasattr(main_mod, "_in_flight_tasks"):
-            main_mod._in_flight_tasks.clear()
+        if hasattr(main_mod, "_in_flight_searches"):
+            main_mod._in_flight_searches.clear()
         # R8.3.2 修复: _PROVIDER_HEALTH_CACHE 是 module-level dict,
         # _get_providers_with_keys() 读它算 has_key。如果前面 test 跑过
         # _verify_provider_key 填了 verified=False, 当前 test 的 has_key 会被
@@ -96,8 +96,8 @@ def _reset_global_state(request):
         import backend.main as main_mod
         if hasattr(main_mod, "limiter"):
             main_mod.limiter.reset()
-        if hasattr(main_mod, "_in_flight_tasks"):
-            main_mod._in_flight_tasks.clear()
+        if hasattr(main_mod, "_in_flight_searches"):
+            main_mod._in_flight_searches.clear()
         try:
             from backend.api.services import providers as prov_mod
             if hasattr(prov_mod, "_PROVIDER_HEALTH_CACHE"):

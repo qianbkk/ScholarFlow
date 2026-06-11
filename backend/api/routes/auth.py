@@ -22,7 +22,7 @@ from backend.auth.dependencies import (
     User,
     get_current_user,
     issue_key_for_email,
-    _register_user,
+    # _register_user 已迁出, register/login 改用 issue_key_for_email. P1-2 移除死导入.
 )
 from backend.utils.network import get_real_ip
 

@@ -148,6 +148,20 @@ def build_graph_node(state: SearchState) -> SearchState:
     year_min = min((y for y in years if y > 0), default=2020)
     year_max = max(years, default=2024)
 
+    # P1-3 fix (深度审计 §P1-3): 消除 O(N²×E) pagerank 计算.
+    # 旧实现: 内层循环对每个节点都遍历所有 cites_edges 求 in_degree,
+    #         加上嵌套外层循环 → 总复杂度 O(N² × E).
+    # 新实现: 预计算 in_degree_map (O(E)), 外层循环直接 O(1) 查询.
+    in_degree_map: dict[str, int] = defaultdict(int)
+    out_degree_map: dict[str, int] = defaultdict(int)
+    node_ids = {p.get("paper_id", "") for p in ranked if p.get("paper_id")}
+    for s, t in cites_edges:
+        if s in node_ids:
+            out_degree_map[s] += 1
+        if t in node_ids:
+            in_degree_map[t] += 1
+    max_in = max(in_degree_map.values(), default=1)
+
     nodes = []
     for i, p in enumerate(ranked):
         pid = p.get("paper_id") or f"paper_{i}"
@@ -155,18 +169,10 @@ def build_graph_node(state: SearchState) -> SearchState:
         rel = p.get("relevance_score", 5.0) or 0.0
         year = p.get("year", 0) or 0
 
-        # in_degree (被引次数, 在 ranked 子图内)
-        in_degree = sum(1 for (s, t) in cites_edges if t == pid)
-        out_degree = sum(1 for (s, t) in cites_edges if s == pid)
+        # in_degree (被引次数, 在 ranked 子图内) — O(1) 查表
+        in_degree = in_degree_map.get(pid, 0)
+        out_degree = out_degree_map.get(pid, 0)
         # pagerank 简化: 归一化入度, max in_degree 视为 1.0
-        # (R11 跟 NetworkX 一起做真实 PageRank)
-        all_in_degrees = []
-        for p2 in ranked:
-            pid2 = p2.get("paper_id", "")
-            all_in_degrees.append(
-                sum(1 for (s, t) in cites_edges if t == pid2) if pid2 else 0
-            )
-        max_in = max(all_in_degrees) if all_in_degrees else 1
         pagerank = round(in_degree / max_in, 3) if max_in else 0.0
 
         # community_id: decade 分组 (e.g. 2020s → 5)

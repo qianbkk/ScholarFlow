@@ -308,6 +308,16 @@ export function useSearch() {
       // 重试按钮 fallback 也会拿错. R10.5 SSE 重构时遗漏, 一直未恢复.
       setLastQuery(trimmed);
       setError(null);
+      // P1-11 fix (深度审计 §P1-11): 假进度计时器在真实 SSE 事件到来前
+      // 一直显示 0.0s, 用户以为程序卡死. 启动 setInterval 200ms 推进 elapsedSec.
+      // 在第一个真实 SSE 事件触发时由 stopFallbackProgress 清掉.
+      fallbackStartRef.current = Date.now();
+      if (fallbackTimerRef.current) {
+        clearInterval(fallbackTimerRef.current);
+      }
+      fallbackTimerRef.current = setInterval(() => {
+        setElapsedSec((Date.now() - fallbackStartRef.current) / 1000);
+      }, 200);
       // H6: bump generation
       genRef.current += 1;
       setLoading(true);

@@ -71,11 +71,24 @@ def _title_jaccard(a: str, b: str) -> float:
 
 
 def _get_paper_attr(p, key: str, default=""):
-    """兼容 dataclass Paper 和 dict 两种对象访问方式。"""
+    """兼容 dataclass Paper 和 dict 两种对象访问方式。
+
+    P1-8 fix (深度审计 §P1-8): 旧实现 `getattr(...) or default`
+    导致 citation_count=0 被误判为 falsy → 返 default "".
+    下游 `p_cites = _get_paper_attr(..., 'citation_count', 0) or 0`
+    双重 `or 0` 兜底才没崩, 但函数语义错误.
+    改为 None 检查, 保留 0/False/空字符串等真实 falsy 值.
+    """
     if hasattr(p, key):
-        return getattr(p, key) or default
+        val = getattr(p, key, None)
+        if val is None:
+            return default
+        return val
     if isinstance(p, dict):
-        return p.get(key, default) or default
+        val = p.get(key)
+        if val is None:
+            return default
+        return val
     return default
 
 

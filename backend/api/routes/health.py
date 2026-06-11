@@ -61,6 +61,8 @@ def _check_cache_writable() -> dict:
             continue
         # round-trip test
         test_db = d / f"_healthcheck_{os.getpid()}.sqlite"
+        # P1-5 fix (深度审计 §P1-5): try/finally 确保清理,
+        # 防止 k8s 异常重启或频繁失败时 .cache/ 被 _healthcheck_*.sqlite 填满.
         try:
             import sqlite3
             with sqlite3.connect(str(test_db), timeout=2.0) as conn:
@@ -70,11 +72,6 @@ def _check_cache_writable() -> dict:
                 conn.execute("DELETE FROM _hc WHERE id = (SELECT MAX(id) FROM _hc)")
                 conn.commit()
             assert rows and rows[0] >= 1, "round-trip count mismatch"
-            # 清理
-            try:
-                test_db.unlink()
-            except OSError:
-                pass
             latency = (_time.monotonic() - start) * 1000.0
             return {
                 "writable": True,
@@ -85,6 +82,12 @@ def _check_cache_writable() -> dict:
         except Exception as e:
             last_error = f"sqlite at {d}: {e}"
             continue
+        finally:
+            # P1-5: 任何路径都清理临时 db 文件
+            try:
+                test_db.unlink(missing_ok=True)
+            except OSError:
+                pass
     latency = (_time.monotonic() - start) * 1000.0
     return {
         "writable": False,

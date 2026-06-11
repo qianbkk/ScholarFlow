@@ -541,7 +541,6 @@ async def search_stream(
             looked = _lookup_user_by_key(api_key)
             if looked:
                 user = looked
-    """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
     try:
         safe_query = sanitize_query(q)
     except ValueError as e:

@@ -110,9 +110,15 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
         words = positions.get(i)
         if not words:
             continue  # 间隙位置跳过, 不补空串 (避免双空格)
-        # 冲突时按出现频率升序拼接 (罕见词在前, 让 token 多样性优先)
+        # 冲突时按总出现频率升序拼接 (罕见词在前, 让 token 多样性优先)
+        # P1-7 fix (深度审计 §P1-7): 旧实现用 inverted_index[w].count(i)
+        # 实际上对每个 word 都返回 1 (该词本来就是因为出现在位置 i 才被收集),
+        # 是 no-op. 改为按总出现次数 len(inverted_index[w]) 排序.
         if len(words) > 1:
-            words = sorted(words, key=lambda w: inverted_index[w].count(i) if w in inverted_index else 1)
+            words = sorted(
+                words,
+                key=lambda w: len(inverted_index.get(w, [])),
+            )
         out.extend(words)
     return " ".join(out)
 
