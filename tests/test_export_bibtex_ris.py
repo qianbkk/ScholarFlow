@@ -113,7 +113,9 @@ class TestPapersToBibtex:
         }
         out = papers_to_bibtex([paper])
         assert "@article{vaswani2017attention" in out
-        assert "title     = {Attention Is All You Need}" in out
+        # P2-1 fix (深度审计 §P2-1): 标题用双层括号 `{{...}}` 保护大小写,
+        # 避免 APA/IEEE 引用样式把 "BERT" 改成 "Bert". 测试期望同步更新.
+        assert "title     = {{Attention Is All You Need}}" in out
         assert "author    = {Vaswani and Shazeer}" in out
         assert "year      = {2017}" in out
         assert "journal   = {NeurIPS}" in out
@@ -142,7 +144,8 @@ class TestPapersToBibtex:
             "year": 2024,
         }
         out = papers_to_bibtex([paper])
-        assert r"title     = {RAG \& Knowledge Graphs: 100\% Coverage}" in out
+        # P2-1 fix: 标题双层括号 + 内部 LaTeX 字符转义
+        assert r"title     = {{RAG \& Knowledge Graphs: 100\% Coverage}}" in out
         assert r"author    = {Smith \& Jones}" in out
 
     def test_empty_list(self):

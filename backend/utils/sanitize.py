@@ -207,8 +207,11 @@ def _normalize_math_chars(text: str) -> str:
     return "".join(out)
 
 
-def sanitize_query(query: str, max_len: int = 500) -> str:
+def sanitize_query(query: str, max_len: int = 2000) -> str:
     """净化用户 query：去除控制字符 + 截断 + 注入特征词过滤。
+
+    P2-4 fix (深度审计 §P2-4): 旧默认 500 与 Pydantic schema 的 2000
+    不一致, 用户 500-2000 字符内容会被静默截断. 改 2000 对齐.
 
     Returns: 净化后的 query
     Raises: ValueError 当检测到注入特征词

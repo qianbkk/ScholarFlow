@@ -36,6 +36,19 @@ def test_openalex_reconstruct_abstract_positions_unsorted():
     assert _reconstruct_abstract(inverted) == "a m z"
 
 
+def test_openalex_reconstruct_abstract_with_gap():
+    """P2-3 fix: 间隙位置 (i=1 缺失) 用空串占位, join 后保留双空格, 不坍缩单词距离.
+
+    旧实现 `continue` 会让 "the" 和 "cat" 之间的 1 词 gap 消失,
+    还原为 "the cat" (单空格), 改变语义间距.
+    """
+    inverted = {"the": [0], "cat": [2]}
+    result = _reconstruct_abstract(inverted)
+    # i=0:"the", i=1:"", i=2:"cat" → "the  cat" (双空格保留 gap)
+    assert result == "the  cat"
+    assert "  " in result  # 显式断言有 gap
+
+
 # ===== Mock 模式：Semantic Scholar search_papers =====
 
 def test_ss_search_papers_mock_returns_papers(force_mock_api):

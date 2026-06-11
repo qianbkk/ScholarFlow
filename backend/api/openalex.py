@@ -109,7 +109,12 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
     for i in range(max_pos + 1):
         words = positions.get(i)
         if not words:
-            continue  # 间隙位置跳过, 不补空串 (避免双空格)
+            # P2-3 fix (深度审计 §P2-3): 旧实现 continue 跳间隙, 导致
+            # {"the":[0],"cat":[2]} 还原为 "the cat" (单词距离坍缩).
+            # 正确做法: 占位空串, " ".join 后保留双空格, 表示原本有 1 词未索引.
+            # OpenAlex 摘要通常无间隙, 此分支是边界 case, 频率低但语义重要.
+            out.append("")
+            continue
         # 冲突时按总出现频率升序拼接 (罕见词在前, 让 token 多样性优先)
         # P1-7 fix (深度审计 §P1-7): 旧实现用 inverted_index[w].count(i)
         # 实际上对每个 word 都返回 1 (该词本来就是因为出现在位置 i 才被收集),

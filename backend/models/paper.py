@@ -4,11 +4,14 @@ from typing import Optional
 
 
 # to_dict / 反序列化时保留的有效字段
+# P2-7 fix (深度审计 §P2-7): _scored 必须加入 _PAPER_FIELDS,
+# 否则跨迭代 refine → search 时 Paper.from_dict() 反序列化丢失 _scored,
+# 第二轮 rank 全部论文被重评浪费 LLM token. Round 2 PERF-006 缓存失效.
 _PAPER_FIELDS = (
     "paper_id", "title", "abstract", "year", "authors", "citation_count",
     "venue", "doi", "url", "source", "is_expanded", "is_fallback",
     "relevance_score", "authority_score", "consistency_score", "final_score",
-    "references",
+    "references", "_scored",
 )
 
 

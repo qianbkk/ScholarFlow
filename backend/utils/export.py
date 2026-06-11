@@ -79,8 +79,12 @@ def papers_to_bibtex(papers: Iterable[dict]) -> str:
         note = f"ScholarFlow score: {score:.1f}/10"
 
         # 字段组装
+        # P2-1 fix (深度审计 §P2-1): BibTeX 标题大小写保护.
+        # 旧实现 `title = {title}` 让引用样式 (APA/IEEE) 自动改写大小写,
+        # 学术工具导入时可能错误把 "BERT" 改成 "Bert". 用双层括号
+        # `{{Deep Learning}}` 强制保留原始大小写.
         fields: list[str] = [
-            f"  title     = {{{title}}}",
+            f"  title     = {{{{{title}}}}}",
             f"  author    = {{{authors_str}}}",
         ]
         if year:
