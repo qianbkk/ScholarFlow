@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { Paper } from '../types';
@@ -37,6 +37,28 @@ export function ReportPanel({
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [exportedFormat, setExportedFormat] = useState<string | null>(null);
+  // R10.5.11: Download 按钮 popover — 单按钮, 点出 3 选项 (md/bibtex/ris)
+  const [downloadMenuOpen, setDownloadMenuOpen] = useState(false);
+  const downloadMenuRef = useRef<HTMLDivElement | null>(null);
+
+  // popover Esc 关闭 + 点外部关闭
+  useEffect(() => {
+    if (!downloadMenuOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDownloadMenuOpen(false);
+    };
+    const onClickOutside = (e: MouseEvent) => {
+      if (downloadMenuRef.current && !downloadMenuRef.current.contains(e.target as Node)) {
+        setDownloadMenuOpen(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onClickOutside);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('mousedown', onClickOutside);
+    };
+  }, [downloadMenuOpen]);
 
   // R10.5.5: 报告内的 paper_id 锚点 (后端 synthesis 节点会生成 [论文 N] 引用)
   // 给 paper_id 生成 set, 渲染时在 report-body 末尾注入 data-paper-id 锚点
@@ -164,8 +186,23 @@ export function ReportPanel({
     setTimeout(() => URL.revokeObjectURL(url), 100);
   };
 
-  // R10.5 P0: BibTeX / RIS 下载, 一键导入 Zotero / Mendeley / EndNote
-  const handleExport = (format: 'bibtex' | 'ris') => {
+  // R10.5.11: 统一 Download 函数 (从 popover 选项调)
+  // 接受 format 参数: 'md' | 'bibtex' | 'ris'
+  const handleDownloadFormat = (format: 'md' | 'bibtex' | 'ris') => {
+    setDownloadMenuOpen(false);
+    if (format === 'md') {
+      const blob = new Blob([report], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `scholarflow_report_${Date.now()}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 100);
+      return;
+    }
+    // bibtex / ris
     const content = format === 'bibtex' ? bibtex : ris;
     if (!content) return;
     const mime = format === 'bibtex'
@@ -223,7 +260,7 @@ export function ReportPanel({
             )}
           </div>
           {report && !loading && (
-            <div className="flex gap-0 shrink-0">
+            <div className="flex gap-0 shrink-0 items-stretch">
               <button
                 onClick={handleCopy}
                 className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
@@ -235,42 +272,74 @@ export function ReportPanel({
               >
                 {copied ? '✓ Copied' : 'Copy'}
               </button>
-              <button
-                onClick={handleDownload}
-                className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
-                style={{
-                  color: 'var(--sf-muted)',
-                  borderColor: 'var(--sf-border)',
-                }}
-                title="下载 Markdown 报告"
-              >
-                Download
-              </button>
-              {hasExport && (
-                <>
-                  <button
-                    onClick={() => handleExport('bibtex')}
-                    className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
+              {/* R10.5.11: Download 按钮合 1, popover 选 3 格式 */}
+              <div className="relative" ref={downloadMenuRef}>
+                <button
+                  onClick={() => setDownloadMenuOpen((s) => !s)}
+                  aria-haspopup="menu"
+                  aria-expanded={downloadMenuOpen}
+                  className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors"
+                  style={{
+                    color: downloadMenuOpen ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                    borderColor: 'var(--sf-border)',
+                  }}
+                  title="下载 (Markdown / BibTeX / RIS)"
+                >
+                  Download ▾
+                </button>
+                {downloadMenuOpen && (
+                  <div
+                    role="menu"
+                    data-testid="download-menu"
+                    className="absolute right-0 top-full mt-1 z-20 font-mono text-[11px]"
                     style={{
-                      color: exportedFormat === 'bibtex' ? 'var(--sf-accent)' : 'var(--sf-muted)',
-                      borderColor: 'var(--sf-border)',
+                      backgroundColor: 'var(--sf-bg)',
+                      border: '1px solid var(--sf-border)',
+                      boxShadow: '0 4px 14px rgba(0,0,0,0.10)',
+                      minWidth: '180px',
                     }}
-                    title="导出 BibTeX (导入 Zotero / JabRef)"
                   >
-                    {exportedFormat === 'bibtex' ? '✓ .bib' : '.bib'}
-                  </button>
-                  <button
-                    onClick={() => handleExport('ris')}
-                    className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors"
-                    style={{
-                      color: exportedFormat === 'ris' ? 'var(--sf-accent)' : 'var(--sf-muted)',
-                    }}
-                    title="导出 RIS (导入 EndNote / Mendeley)"
-                  >
-                    {exportedFormat === 'ris' ? '✓ .ris' : '.ris'}
-                  </button>
-                </>
-              )}
+                    <button
+                      role="menuitem"
+                      onClick={() => handleDownloadFormat('md')}
+                      className="w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between gap-3"
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)')}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      style={{ color: 'var(--sf-text)' }}
+                    >
+                      <span className="uppercase tracking-[0.1em]">Markdown</span>
+                      <span style={{ color: 'var(--sf-muted)' }}>.md</span>
+                    </button>
+                    {hasExport && (
+                      <>
+                        <div className="border-t" style={{ borderColor: 'var(--sf-border)' }} />
+                        <button
+                          role="menuitem"
+                          onClick={() => handleDownloadFormat('bibtex')}
+                          className="w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between gap-3"
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                          style={{ color: 'var(--sf-text)' }}
+                        >
+                          <span className="uppercase tracking-[0.1em]">BibTeX</span>
+                          <span style={{ color: 'var(--sf-muted)' }}>.bib</span>
+                        </button>
+                        <button
+                          role="menuitem"
+                          onClick={() => handleDownloadFormat('ris')}
+                          className="w-full text-left px-3 py-1.5 transition-colors flex items-center justify-between gap-3"
+                          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)')}
+                          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                          style={{ color: 'var(--sf-text)' }}
+                        >
+                          <span className="uppercase tracking-[0.1em]">RIS</span>
+                          <span style={{ color: 'var(--sf-muted)' }}>.ris</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>

@@ -187,7 +187,7 @@ def test_synthesize_node_clean_report_no_warning():
 
 
 def test_synthesize_node_warns_on_out_of_range_index():
-    """LLM 报告引用越界 [99] → 加 ⚠️ 警告."""
+    """LLM 报告引用越界 [99] → 加 ⚠️ 警告 (R10.5.11: HTML pre 包裹)."""
     state = _make_state()  # 1 paper, range 1..1
 
     # 引用 [1] (合法) + [99] (越界) + 加粗术语 (**Transformer** — R10.5.10 不再误判)
@@ -203,8 +203,11 @@ def test_synthesize_node_warns_on_out_of_range_index():
         result = asyncio.run(synthesis_agent.synthesize_node(state))
 
     report = result["report"]
-    # 警告出现
-    assert "⚠️" in report, f"Expected warning, got:\n{report!r}"
+    # 警告出现 (R10.5.11: 包在 <pre data-sf-unverified-warning> 里, 避免 marked 误判)
+    assert "data-sf-unverified-warning" in report, (
+        f"Expected HTML-wrapped warning, got:\n{report!r}"
+    )
+    assert "⚠️" in report
     assert "未在检索结果中找到对应来源" in report
     # [99] 被列出
     assert "99" in report
@@ -227,7 +230,8 @@ def test_synthesize_node_warns_on_hallucinated_link():
         result = asyncio.run(synthesis_agent.synthesize_node(state))
 
     report = result["report"]
-    # 警告
+    # 警告 (HTML 包裹)
+    assert "data-sf-unverified-warning" in report
     assert "⚠️" in report
     # 警告里含 fake-999
     assert "fake-999" in report
@@ -241,3 +245,28 @@ def test_synthesize_node_no_anchors_when_no_ranked():
     assert "⚠️" not in result["report"]
     # 旧 "## 📎 原始文献来源" 也确认不存在
     assert "## 📎 原始文献来源" not in result["report"]
+
+
+def test_synthesize_node_warning_uses_html_pre_not_markdown_quote():
+    """R10.5.11: 警告必须用 HTML pre 包裹, 不能用 markdown `> -  [N]:` 格式.
+    旧 markdown 格式会让 marked 误把 [N]: 当 reference link definition,
+    触发章节重新排列 (用户反馈)."""
+    state = _make_state()  # 1 paper
+    fake_llm_output = "讨论 [99] 时, 引用不存在的来源."  # [99] 越界
+    fake_usage = {
+        "model": "mock", "provider": "mock",
+        "input_tokens": 100, "output_tokens": 200, "cost_usd": 0.0,
+    }
+    with patch.object(
+        synthesis_agent, "call_llm",
+        new=AsyncMock(return_value=(fake_llm_output, fake_usage)),
+    ):
+        result = asyncio.run(synthesis_agent.synthesize_node(state))
+
+    report = result["report"]
+    # 必须用 HTML pre, 不能用 markdown 引用语法
+    assert "<pre" in report, f"Expected HTML <pre> wrapper, got:\n{report!r}"
+    # 警告里不能有 markdown blockquote list 形式 (marked 会当 ref link def)
+    assert "> - [99]:" not in report, (
+        f"Markdown blockquote list should NOT be used (would break marked), got:\n{report!r}"
+    )

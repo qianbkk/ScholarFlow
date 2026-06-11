@@ -67,6 +67,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   // R10.5.10: 边类型图例折叠 — 默认折叠 (图例占左下角, 跟节点重叠时看不清)
   // 点 "边类型" 标题或 ? 按钮展开
   const [legendExpanded, setLegendExpanded] = useState<boolean>(false);
+  // R10.5.11: 当前 zoom 缩放深度 (d3 zoom transform.k), 用来:
+  //   1) 缩放 > 1.5x 时放大节点标签字号, 显示完整标题
+  //   2) 缩放 < 0.7x 时隐藏远距离边, 避免视觉杂乱
+  //   3) 工具栏显示 "N.Nx" 缩放指示
+  const [zoomLevel, setZoomLevel] = useState<number>(1);
 
   const selected = selectedPaperId;
 
@@ -218,6 +223,45 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .on('zoom', (event) => {
         // event.transform 是 d3 计算好的 translate + scale, 直接 apply 到 root <g>
         root.attr('transform', event.transform.toString());
+        // R10.5.11: 缩放深度反馈 — 改标签字号 + 远距离边淡出 + 工具栏指示
+        const k = event.transform.k;
+        setZoomLevel(k);
+        // 节点标签字号: zoom < 0.8x 缩 6px, 0.8-1.5 缩 9px (原), 1.5-2.5 缩 12px, > 2.5 缩 14px
+        let labelFontSize: number;
+        let labelCharLimit: number;
+        if (k < 0.8) {
+          labelFontSize = 0;  // 完全隐藏
+          labelCharLimit = 0;
+        } else if (k < 1.5) {
+          labelFontSize = 9;
+          labelCharLimit = 14;
+        } else if (k < 2.5) {
+          labelFontSize = 12;
+          labelCharLimit = 24;
+        } else {
+          labelFontSize = 14;
+          labelCharLimit = 40;
+        }
+        // 应用到节点标签 (主标题 + 年份)
+        node.selectAll<SVGTextElement, SimNode>('text')
+          .style('font-size', `${labelFontSize}px`)
+          .style('display', labelFontSize === 0 ? 'none' : null as unknown as string)
+          .text((d: SimNode) => {
+            if (labelCharLimit === 0) return '';
+            const t = d.title || '';
+            return t.length > labelCharLimit ? t.slice(0, labelCharLimit - 1) + '…' : t;
+          });
+        // 远距离边淡出: zoom > 1.5x 时, 非邻接边 opacity 降低
+        // 邻接判定: 当前节点有 selected 或 hovered 节点
+        const focusId = selected || hovered?.id;
+        if (focusId) {
+          link.style('stroke-opacity', (l: any) => {
+            const sId = typeof l.source === 'string' ? l.source : l.source.id;
+            const tId = typeof l.target === 'string' ? l.target : l.target.id;
+            if (sId === focusId || tId === focusId) return 0.85;
+            return k > 1.5 ? 0.04 : 0.5;  // 放大时非邻接边几乎看不见
+          });
+        }
       });
     // R10.5 Fix-P0-MemoryLeak: zoom 绑定到 svg, 需要在 cleanup 中精确移除.
     // 旧实现只清 simulation.stop(), zoom 事件处理器持续累积 → 内存泄漏.
@@ -564,12 +608,24 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         <div className="flex items-center gap-1.5 shrink-0">
           {graph && (
             <span
-              className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums"
+              className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums flex items-center gap-1.5"
               style={{ color: 'var(--sf-muted)' }}
             >
-              {graph.metadata.total_papers}n · {graph.metadata.total_links}l
+              <span>{graph.metadata.total_papers}n · {graph.metadata.total_links}l</span>
               {graph.metadata.community_count && graph.metadata.community_count > 1 && (
-                <> · {graph.metadata.community_count} 簇</>
+                <span>· {graph.metadata.community_count} 簇</span>
+              )}
+              {/* R10.5.11: 缩放深度指示 — 1.0x 灰色隐藏, 偏离时高亮提示 */}
+              {Math.abs(zoomLevel - 1) > 0.05 && (
+                <span
+                  style={{
+                    color: 'var(--sf-accent)',
+                    fontWeight: 600,
+                  }}
+                  title={`当前缩放: ${zoomLevel.toFixed(2)}x (按 f 适配)`}
+                >
+                  · {zoomLevel.toFixed(2)}x
+                </span>
               )}
             </span>
           )}

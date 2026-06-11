@@ -197,13 +197,27 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
 
     _, unverified = _verify_citations_in_report(report, ranked)
     if unverified:
-        # R10.5.10: 改用结构化警告, 只列真实越界/未匹配, 不再把所有加粗术语当未验证
-        warning_lines = [
-            "\n\n> ⚠️ **系统提示**: 以下引用未在检索结果中找到对应来源, 请自行核查:"
-        ]
-        for u in unverified[:8]:  # 上限 8 条, 太多刷屏
-            warning_lines.append(f"> - {u['value']} ({u['reason']})")
-        report += "\n".join(warning_lines)
+        # R10.5.11 Fix: 用户反馈 — 旧版用 `> -  [2018]: ...` blockquote list 格式
+        # 拼警告, marked 误把 `> -  [YYYY]:` 当 markdown reference link definition
+        # (`[foo]: url` 语法), 触发链接引用定义处理, 后续章节顺序被错乱重新排列
+        # (用户在报告末尾看到 "### 四、跨领域应用与扩展" 重新出现在警告后).
+        # 修复: 用 HTML 块 (pre + plain text) 包裹警告, 让 marked 完全跳过 markdown
+        # 解析, 当 literal text 处理. HTML pre 元素 + data-* 标识 + DOMPurify 仍
+        # 允许 pre 标签 (ReportPanel ALLOWED_TAGS), 内容走纯文本.
+        items_html = "".join(
+            f"<div>• {h_escape(u['value'])} <small style=\"opacity:0.6\">({h_escape(u['reason'])})</small></div>"
+            for u in unverified[:8]
+        )
+        warning_html = (
+            f'<pre data-sf-unverified-warning '
+            f'style="white-space:pre-wrap;background:var(--sf-bg-elev);'
+            f'border-left:3px solid var(--sf-accent);padding:0.75rem 1rem;'
+            f'margin:1.5rem 0;font-family:inherit;font-size:0.92em">'
+            f'<strong>⚠️ 系统提示</strong>: 以下引用未在检索结果中找到对应来源, 请自行核查:\n'
+            f'{items_html}'
+            f'</pre>'
+        )
+        report += "\n\n" + warning_html
 
     return {
         **state,
@@ -212,6 +226,16 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
         "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传 iter 起点
         "status": "building_graph",
     }
+
+
+def h_escape(s: str) -> str:
+    """HTML 转义 (避免 value/reason 里的 < > & 破坏结构)."""
+    return (
+        s.replace("&", "&amp;")
+         .replace("<", "&lt;")
+         .replace(">", "&gt;")
+         .replace('"', "&quot;")
+    )
 
 
 # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
