@@ -27,10 +27,17 @@ from backend.utils.scrub import scrub_sensitive  # VULN-004
 logger = logging.getLogger(__name__)
 
 # 扩展深度参数（控制图谱大小上限，避免下游 LLM 上下文爆炸）
-SEED_LIMIT = 5              # 用前 N 篇高引论文做扩展种子
-BACKWARD_LIMIT = 20         # 每篇 seed 取多少 references
-FORWARD_LIMIT = 10          # 每篇 seed 取多少 citers（citations 通常更稀疏）
-MAX_TOTAL_PAPERS = 50       # 扩展后总论文数上限（raw 之外的新增）
+# R10.5.7 P0-2 动态剪枝: SEED_LIMIT 不再硬编码 5, 根据 ranked_papers
+# 相关性分布动态调整 3-10. 高置信度查询扩大扩展, 低置信度查询保守.
+# 原因: 固定 5 会漏掉中等引用数但高相关的论文, 也无法在高置信场景
+# (相关中位数 ≥ 8) 充分扩展. 同时配合 CITATION_THRESHOLD 过滤低相关 seed.
+SEED_LIMIT_MIN = 3
+SEED_LIMIT_MAX = 10
+SEED_LIMIT_DEFAULT = 5       # 向后兼容: 当 ranked_papers 不可用时回退
+CITATION_THRESHOLD = 6.0     # relevance_score 低于此值的 seed 不扩展
+BACKWARD_LIMIT = 20          # 每篇 seed 取多少 references
+FORWARD_LIMIT = 10           # 每篇 seed 取多少 citers（citations 通常更稀疏）
+MAX_TOTAL_PAPERS = 50        # 扩展后总论文数上限（raw 之外的新增）
 
 # 单批 gather 并发上限常量 (per-call, 不再 module singleton)
 _CITATION_BATCH_LIMIT = 4
@@ -71,10 +78,44 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     # 选引用数最高的前 N 篇做引文扩展（只用 SS，有结构化引用数据）
     ss_papers = [p for p in raw if p.source == "semantic_scholar" and p.paper_id]
 
+    # ===== R10.5.7 P0-2: 动态 SEED_LIMIT =====
+    # 基于 ranked_papers 的相关性中位数动态调整, 高相关扩大扩展, 低相关保守.
+    # ranked 缺失/全 0 时回退 SEED_LIMIT_DEFAULT=5 (跟旧行为兼容).
+    ranked = state.get("ranked_papers") or []
+    rel_scores = [
+        (p.get("relevance_score", 0) or 0)
+        for p in ranked
+        if (p.get("relevance_score") or 0) > 0
+    ]
+    median_rel: float = 0.0
+    if rel_scores:
+        median_rel = sorted(rel_scores)[len(rel_scores) // 2]
+        if median_rel >= 8.0:
+            seed_limit = SEED_LIMIT_MAX     # 10 — 高置信度, 扩大扩展
+        elif median_rel >= 6.0:
+            seed_limit = SEED_LIMIT_DEFAULT  # 5  — 中等相关
+        else:
+            seed_limit = SEED_LIMIT_MIN     # 3  — 低置信度, 保守扩展
+    else:
+        seed_limit = SEED_LIMIT_DEFAULT
+
     # ===== 跨迭代去重：跳过已扩展过的 seed =====
     seen = set(state.get("expanded_paper_ids", []))
-    top = [p for p in sorted(ss_papers, key=lambda p: p.citation_count, reverse=True)[:SEED_LIMIT]
-           if p.paper_id not in seen]
+    # 1) 选 top-N (按引用数) → 2) 过滤 relevance < CITATION_THRESHOLD (避免雪崩)
+    candidates = sorted(ss_papers, key=lambda p: p.citation_count, reverse=True)[:seed_limit]
+    # 阈值过滤: 只在 ranked_papers 有真实相关性分时启用 (rel>0),
+    # 否则跳过阈值 (保留旧行为, 兼容未走 ranker 的测试/小数据流).
+    has_real_relevance = any((p.relevance_score or 0) > 0 for p in candidates)
+    if has_real_relevance:
+        top = [p for p in candidates
+               if p.paper_id not in seen
+               and (p.relevance_score or 0) >= CITATION_THRESHOLD]
+        # 如果 CITATION_THRESHOLD 过滤后空, 兜底取 top-3 (避免某 iter 完全无扩展)
+        if not top and candidates:
+            top = candidates[:SEED_LIMIT_MIN]
+    else:
+        # 兼容路径: 无 ranked 数据时, 仅按"已扩展过" 去重
+        top = [p for p in candidates if p.paper_id not in seen]
 
     if not top:
         # 没有 SS 论文 或 全部已扩展过：直接把 raw 作为 expanded，继续流程
@@ -170,7 +211,8 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     logger.info(
         f"[CitationExpander] {len(raw)} -> {len(unique)} papers "
         f"(+{n_backward} backward refs, +{n_forward} forward citers from top {len(top)} seeds, "
-        f"{n_with_edges} papers have outgoing edges)"
+        f"{n_with_edges} papers have outgoing edges, "
+        f"dynamic_seed_limit={seed_limit}, median_rel={median_rel if rel_scores else 'N/A'})"
     )
 
     return {

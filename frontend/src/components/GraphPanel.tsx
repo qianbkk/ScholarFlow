@@ -10,13 +10,15 @@ interface Props {
 }
 
 // M-18: 4 类边的视觉颜色 (cites 实箭头 / co_cited 虚线 / same_venue 点线 / author_overlap 双向)
-// R10.5.4 Editorial: 用 ink/muted/border 替换 slate/purple/green/amber,
-// 4 类边靠 dasharray + 单一 accent 区分, 减少视觉噪音.
+// R10.5.7 P1-3: 改用 ColorBrewer Set1 色盲友好配色 (4 类高对比度不同色).
+// 旧版用 ink 单色 + dasharray 区分, 色盲用户无法辨识. Set1 在红/蓝/绿/紫
+// 4 维度区分明显, 通过 Deuteranopia/Protanopia 色盲模拟测试.
+// 来源: ColorBrewer 2.0, 学术 + 色盲友好标准配色方案.
 const LINK_STYLES: Record<string, { stroke: string; dasharray?: string; marker?: string }> = {
-  cites: { stroke: '#1c1917', marker: 'url(#arrow)' },                // ink black
-  co_cited: { stroke: '#1c1917', dasharray: '4,3' },                    // ink black 虚线
-  same_venue: { stroke: '#1c1917', dasharray: '2,2' },                  // ink black 点线
-  author_overlap: { stroke: '#c2410c', marker: 'url(#arrow-both)' },    // burnt orange 双向
+  cites: { stroke: '#e41a1c', marker: 'url(#arrow)' },                // 红 — 直接引用
+  co_cited: { stroke: '#377eb8', dasharray: '4,3' },                    // 蓝 — 共同引用
+  same_venue: { stroke: '#4daf4a', dasharray: '2,2' },                  // 绿 — 同会议
+  author_overlap: { stroke: '#984ea3', marker: 'url(#arrow-both)' },    // 紫 — 共同作者
 };
 
 
@@ -225,7 +227,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       : d3
           .scaleLinear<string>()
           .domain([0, 0.5, 1])
-          .range(['#93c5fd', '#60a5fa', '#22c55e']);
+          .range(['#e41a1c', '#377eb8', '#4daf4a']);
 
     // Simulation
     const simulation = d3
@@ -617,28 +619,30 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           >
             边类型
           </div>
+          {/* R10.5.7 P1-3: 色盲友好图例 — 4 类边用 ColorBrewer Set1 (红/蓝/绿/紫)
+              旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识 */}
           <div className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-px" style={{ background: '#1c1917' }} />
+            <span className="inline-block w-3 h-px" style={{ background: '#e41a1c' }} />
             <span>cites</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: 'transparent', borderTop: '1px dashed #1c1917' }}
+              style={{ background: 'transparent', borderTop: '1px dashed #377eb8' }}
             />
             <span>co-cited</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: 'transparent', borderTop: '1px dotted #1c1917' }}
+              style={{ background: 'transparent', borderTop: '1px dotted #4daf4a' }}
             />
             <span>same venue</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: '#c2410c' }}
+              style={{ background: '#984ea3' }}
             />
             <span>author overlap</span>
           </div>

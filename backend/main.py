@@ -67,8 +67,10 @@ from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.utils.cache import get_cached_async, set_cached_async  # H4
-from backend.utils.semantic_cache import (  # 占位桩 (Fix-E R10.5: 死代码全部移除, 留骨架)
+from backend.utils.semantic_cache import (  # R10.5.7 P0-1: 真实实现
     semantic_cache_stub_marker,
+    get_semantic_cached,
+    set_semantic_cached,
 )
 from backend.utils.observability import (
     new_request_id,
@@ -373,7 +375,7 @@ async def search(req: SearchRequest, request: Request):
 
     try:
         # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
-        # 精确缓存 get_cached_async 是唯一缓存查找路径; 语义缓存留作 R11 真实实现.
+        # R10.5.7 P0-1 真实实现: 精确缓存 miss 后, 查语义缓存 (shingle Jaccard >= 0.85)
         cached = await get_cached_async(
             safe_query, req.max_iterations, req.budget, provider=provider
         )
@@ -385,6 +387,20 @@ async def search(req: SearchRequest, request: Request):
             )
             return _build_search_response(
                 state_dict={}, elapsed=0.0, from_cache=True, cached_payload=cached_response
+            )
+
+        # R10.5.7 P0-1: 精确缓存 miss → 查语义缓存 (相似度 ≥ 0.85 复用)
+        sem_cached = await get_semantic_cached(
+            safe_query, req.max_iterations, req.budget, provider=provider
+        )
+        if sem_cached is not None:
+            sem_response, sem_cost, sem_tokens = sem_cached
+            logger.info(
+                f"[/search] SEMANTIC cache hit q='{safe_query[:40]}' "
+                f"cost=${sem_cost:.4f} tokens={sem_tokens}"
+            )
+            return _build_search_response(
+                state_dict={}, elapsed=0.0, from_cache=True, cached_payload=sem_response
             )
 
         # R9 清理: 删 BudgetExceededError 死代码后,这里原本的 try/except
@@ -443,9 +459,20 @@ async def search(req: SearchRequest, request: Request):
             )
         except Exception as cache_err:
             logger.warning(f"[/search] cache write failed (non-fatal): {cache_err}")
-        # Fix-E R10.5: 删除 set_semantic_cached 调用 (重复 I/O 同一行写两次).
-        # 上面的 except Exception cache_err 已经捕获, 旧 L417-418 except sem_err
-        # 是死代码, 顺手删掉 (语义缓存留 R11 真实实现再调用).
+
+        # R10.5.7 P0-1: 写语义缓存 (供下次相似 query 命中)
+        try:
+            await set_semantic_cached(
+                safe_query,
+                req.max_iterations,
+                req.budget,
+                response_obj.model_dump(),
+                float(final.get("total_cost_usd", 0.0)),
+                int(final.get("total_tokens_used", 0)),
+                provider=provider,
+            )
+        except Exception as sem_err:
+            logger.warning(f"[/search] semantic cache write failed (non-fatal): {sem_err}")
 
         return response_obj
     except asyncio.TimeoutError:
@@ -571,7 +598,7 @@ async def search_stream(
 
         try:
             # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
-            # 精确缓存 get_cached_async 是唯一缓存查找路径; 语义缓存留作 R11.
+            # R10.5.7 P0-1: 精确缓存 miss 后查语义缓存
             cached = await get_cached_async(
                 safe_query, max_iter, budget, provider=resolved_provider
             )
@@ -585,6 +612,24 @@ async def search_stream(
                     "event": "done",
                     "cached": True,
                     "result": cached_response,
+                    "elapsed": round(_time.time() - t0, 2),
+                })
+                return
+
+            # R10.5.7 P0-1: 语义缓存兜底 (shingle Jaccard)
+            sem_cached = await get_semantic_cached(
+                safe_query, max_iter, budget, provider=resolved_provider
+            )
+            if sem_cached is not None:
+                sem_response, _sem_cost, _sem_tokens = sem_cached
+                logger.info(
+                    f"[/search/stream] SEMANTIC cache hit q='{safe_query[:40]}'"
+                )
+                yield _sse_format({"event": "started", "cached": True})
+                yield _sse_format({
+                    "event": "done",
+                    "cached": True,
+                    "result": sem_response,
                     "elapsed": round(_time.time() - t0, 2),
                 })
                 return
@@ -711,8 +756,22 @@ async def search_stream(
                 logger.warning(
                     f"[/search/stream] cache write failed (non-fatal): {cache_err}"
                 )
-            # Fix-E R10.5: 删除 set_semantic_cached 调用 (重复写同一行).
-            # 语义缓存留 R11 真实实现时再调用.
+
+            # R10.5.7 P0-1: 写语义缓存 (供下次相似 query 命中)
+            try:
+                await set_semantic_cached(
+                    safe_query,
+                    max_iter,
+                    budget,
+                    response_obj.model_dump(),
+                    float(accumulated.get("total_cost_usd", 0.0)),
+                    int(accumulated.get("total_tokens_used", 0)),
+                    provider=resolved_provider,
+                )
+            except Exception as sem_err:
+                logger.warning(
+                    f"[/search/stream] semantic cache write failed (non-fatal): {sem_err}"
+                )
 
             yield _sse_format({
                 "event": "done",

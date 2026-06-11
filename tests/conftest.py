@@ -86,6 +86,13 @@ def _reset_global_state(request):
                 log_throttle._THROTTLES.clear()
         except (ImportError, AttributeError):
             pass
+        # R10.5.7 P0-1: 语义缓存 LRU 是 module-level OrderedDict.
+        # 跨 test 残留会导致后续 test 的"未命中"假设被打破 (实际命中 LRU).
+        try:
+            from backend.utils import semantic_cache
+            semantic_cache.clear_semantic_cache()
+        except (ImportError, AttributeError):
+            pass
     except (ImportError, AttributeError):
         pass
 

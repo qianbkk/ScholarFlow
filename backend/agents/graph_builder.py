@@ -24,6 +24,62 @@ MAX_GRAPH_NODES = 100
 GRAPH_SCORE_THRESHOLD = 8.0
 
 
+def detect_communities_modularity(
+    node_ids: list[str],
+    edges: list[tuple[str, str, str]],
+) -> dict[str, int]:
+    """基于引文网络结构做真实社区发现 (R10.5.7 P1-2).
+
+    旧版 community_id 用 decade 分组 (1970s/1980s/...) — 只是按发表时间划
+    块, 不是基于引文网络结构. 用户看图谱看不到"研究主题聚类", 失去社区
+    发现的核心价值.
+
+    真实实现: 用 networkx.greedy_modularity_communities (Clauset-Newman-Moore
+    贪心算法, O(N²logN) 但 N≤100 极快). 边权: cites=3 (最强), co_cited=2,
+    same_venue=1, author_overlap=1.
+
+    边界:
+    - N < 3 → 单社区 (避免过分割)
+    - 无边 → 单社区 (graph 不连通)
+    - networkx 不可用 → 退化到单社区 (兜底)
+    """
+    if len(node_ids) < 3:
+        return {nid: 0 for nid in node_ids}
+    try:
+        import networkx as nx
+    except ImportError:
+        return {nid: 0 for nid in node_ids}
+
+    G = nx.Graph()
+    G.add_nodes_from(node_ids)
+    # 边权: cites=3 (最强结构信号), co_cited=2, same_venue=1, author_overlap=1
+    edge_weights = {"cites": 3, "co_cited": 2, "same_venue": 1, "author_overlap": 1}
+    for s, t, etype in edges:
+        if s in node_ids and t in node_ids and s != t:
+            w = edge_weights.get(etype, 1)
+            if G.has_edge(s, t):
+                G[s][t]["weight"] += w
+            else:
+                G.add_edge(s, t, weight=w)
+
+    if G.number_of_edges() == 0:
+        return {nid: 0 for nid in node_ids}
+
+    try:
+        communities = nx.community.greedy_modularity_communities(G, weight="weight")
+    except Exception:
+        return {nid: 0 for nid in node_ids}
+
+    result: dict[str, int] = {}
+    for cid, members in enumerate(communities):
+        for m in members:
+            result[m] = cid
+    for nid in node_ids:
+        if nid not in result:
+            result[nid] = 0
+    return result
+
+
 def apply_graph_pruning(
     ranked_full: list[dict],
     *,
@@ -143,7 +199,8 @@ def build_graph_node(state: SearchState) -> SearchState:
 
     # ===== M-18: 节点 metadata (in/out_degree, pagerank 近似, community_id) =====
     # pagerank 简化: 归一化 in_degree (引用入度)
-    # community_id 简化: decade 分组 (1970s/1980s/.../2020s)
+    # R10.5.7 P1-2: community_id 改真实社区发现 (networkx.greedy_modularity_communities),
+    #                替代旧版按 decade 假分组. 边权 cites=3, co_cited=2, others=1.
     years = [p.get("year", 0) or 0 for p in ranked]
     year_min = min((y for y in years if y > 0), default=2020)
     year_max = max(years, default=2024)
@@ -162,6 +219,19 @@ def build_graph_node(state: SearchState) -> SearchState:
             in_degree_map[t] += 1
     max_in = max(in_degree_map.values(), default=1)
 
+    # R10.5.7 P1-2: 真实社区发现 — 用全部 4 类边建 weighted graph,
+    # greedy_modularity_communities 检测. 替代旧版 decade 假分组.
+    all_edges: list[tuple[str, str, str]] = []
+    for s, t in cites_edges:
+        all_edges.append((s, t, "cites"))
+    for a, b in co_cited_pairs:
+        all_edges.append((a, b, "co_cited"))
+    for a, b in same_venue_pairs:
+        all_edges.append((a, b, "same_venue"))
+    for a, b in author_overlap_pairs:
+        all_edges.append((a, b, "author_overlap"))
+    community_map = detect_communities_modularity(list(node_ids), all_edges)
+
     nodes = []
     for i, p in enumerate(ranked):
         pid = p.get("paper_id") or f"paper_{i}"
@@ -175,12 +245,8 @@ def build_graph_node(state: SearchState) -> SearchState:
         # pagerank 简化: 归一化入度, max in_degree 视为 1.0
         pagerank = round(in_degree / max_in, 3) if max_in else 0.0
 
-        # community_id: decade 分组 (e.g. 2020s → 5)
-        if year > 0:
-            decade = (year // 10) * 10
-            community_id = decade - (year_min // 10) * 10  # 0-indexed
-        else:
-            community_id = 0
+        # community_id: 真实社区发现 (R10.5.7 P1-2), 替代旧 decade 假分组
+        community_id = community_map.get(pid, 0)
 
         nodes.append({
             "id": pid,

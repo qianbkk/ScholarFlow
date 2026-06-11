@@ -118,22 +118,35 @@ class TestNodeMetadata:
         # c 被 a + b 引用, in_degree=2, max_in_degree=2, pagerank=1.0
         assert c_node["pagerank"] == 1.0
 
-    def test_community_id_by_decade(self):
-        """community_id 按 decade 分组 (2010s 同社区)."""
+    def test_community_id_by_modularity(self):
+        """R10.5.7 P1-2: community_id 改用真实社区发现 (modularity), 替代 decade 分组.
+
+        构造 2 个明显分隔的引用簇 (a-b 互相引用, c-d 互相引用, 簇间无引用),
+        期望网络模块度算法把它们分成 2 个社区.
+        """
+        # 4 个节点, 2 个 cluster, cluster 内互相引用 (强结构)
+        # 注: _paper helper 用 kwarg 'references' (不是 'refs')
         ranked = [
-            _paper("a", year=2015),
-            _paper("b", year=2018),
-            _paper("c", year=1995),
+            _paper("a", year=2015, references=["b"]),
+            _paper("b", year=2018, references=["a"]),
+            _paper("c", year=1995, references=["d"]),
+            _paper("d", year=2020, references=["c"]),
         ]
         state = {"ranked_papers": ranked}
         result = build_graph_node(state)
         graph = result["citation_graph"]
-        # 2010s: a, b 同 decade → 同 community
         a_node = next(n for n in graph["nodes"] if n["id"] == "a")
         b_node = next(n for n in graph["nodes"] if n["id"] == "b")
         c_node = next(n for n in graph["nodes"] if n["id"] == "c")
-        assert a_node["community_id"] == b_node["community_id"]
-        assert a_node["community_id"] != c_node["community_id"]
+        d_node = next(n for n in graph["nodes"] if n["id"] == "d")
+        # a-b 互引应同社区, c-d 互引应同社区
+        assert a_node["community_id"] == b_node["community_id"], \
+            f"a, b 强互引应同社区, got {a_node['community_id']} vs {b_node['community_id']}"
+        assert c_node["community_id"] == d_node["community_id"], \
+            f"c, d 强互引应同社区, got {c_node['community_id']} vs {d_node['community_id']}"
+        # 两个 cluster 应分到不同社区
+        assert a_node["community_id"] != c_node["community_id"], \
+            "两个 cluster 应分到不同社区"
 
 
 class TestGraphMetadata:
