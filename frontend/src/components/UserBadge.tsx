@@ -35,29 +35,31 @@ export function UserBadge({ user, openMode, onLogout, loading }: Props) {
   if (loading) {
     return (
       <div
-        className="flex items-center gap-1 px-2 py-1 text-xs opacity-60"
+        className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono uppercase tracking-[0.12em]"
         title="正在检查登录态…"
+        style={{ color: 'var(--sf-muted)' }}
       >
-        <span className="inline-block w-3 h-3 border-2 border-slate-300 border-t-brand-500 rounded-full animate-spin" />
+        <span
+          className="inline-block w-2.5 h-2.5 border-2 border-t-transparent rounded-full animate-spin"
+          style={{ borderColor: 'var(--sf-border)', borderTopColor: 'transparent' }}
+        />
+        <span>载入</span>
       </div>
     );
   }
 
-  // OPEN_MODE=true: 灰色 badge, 不可点击 (说明当前是开发模式)
+  // OPEN_MODE=true: Editorial 风格 "open access" 标记
   if (openMode) {
     return (
       <div
-        className="flex items-center gap-1 px-2 py-1 text-xs rounded-md border"
+        className="flex items-center gap-1.5 px-2 py-1 text-[10px] font-mono uppercase tracking-[0.18em]"
         title="OPEN_MODE=true: 后端跳过认证, 所有用户共享 dev-user 账户"
         style={{
-          backgroundColor: 'var(--sf-bg, #ffffff)',
-          color: 'var(--sf-text, #0f172a)',
-          borderColor: 'var(--sf-border, #e2e8f0)',
-          opacity: 0.7,
+          color: 'var(--sf-muted)',
         }}
       >
-        <span>🔓</span>
-        <span className="font-medium">开发模式</span>
+        <span style={{ color: 'var(--sf-accent)' }}>○</span>
+        <span>开发模式</span>
       </div>
     );
   }
@@ -73,32 +75,49 @@ export function UserBadge({ user, openMode, onLogout, loading }: Props) {
         aria-label="用户菜单"
         aria-expanded={open}
         title={`用户: ${user.display_name}`}
-        className="flex items-center gap-1 px-2 py-1 text-xs border border-slate-300 rounded-md hover:bg-slate-100 transition"
+        className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono uppercase tracking-[0.12em] transition-colors"
         style={{
-          backgroundColor: 'var(--sf-bg, #ffffff)',
-          color: 'var(--sf-text, #0f172a)',
+          backgroundColor: 'var(--sf-bg)',
+          color: 'var(--sf-text)',
+          border: '1px solid var(--sf-border)',
         }}
       >
-        <span>👤</span>
-        <span className="font-medium max-w-[120px] truncate">
+        <span style={{ color: 'var(--sf-accent)' }}>●</span>
+        <span
+          className="font-display italic font-semibold normal-case tracking-normal text-[12px] max-w-[120px] truncate"
+          style={{ color: 'var(--sf-text)' }}
+        >
           {user.display_name}
         </span>
-        <span className="text-[10px] opacity-60">▼</span>
+        <span className="text-[9px] opacity-60">▾</span>
       </button>
 
       {open && (
         <div
-          className="absolute right-0 mt-1 z-20 min-w-[200px] border rounded-md shadow-lg overflow-hidden"
+          className="absolute right-0 mt-1 z-20 min-w-[220px] overflow-hidden font-ui"
           style={{
-            backgroundColor: 'var(--sf-bg, #ffffff)',
-            borderColor: 'var(--sf-border, #e2e8f0)',
-            color: 'var(--sf-text, #0f172a)',
+            backgroundColor: 'var(--sf-bg-elev)',
+            border: '1px solid var(--sf-border)',
+            boxShadow: 'var(--sf-shadow)',
+            color: 'var(--sf-text)',
           }}
           role="menu"
         >
-          <div className="px-3 py-2 text-[11px] opacity-70 border-b" style={{ borderColor: 'var(--sf-border, #e2e8f0)' }}>
-            <div className="font-mono text-[10px] opacity-60">{user.user_id}</div>
-            <div className="mt-0.5">
+          <div
+            className="px-3 py-2.5 text-[10px] border-b"
+            style={{
+              borderColor: 'var(--sf-border)',
+              color: 'var(--sf-muted)',
+            }}
+          >
+            <div
+              className="font-mono text-[9px] uppercase tracking-[0.15em] mb-1"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              Subscriber
+            </div>
+            <div className="font-mono text-[10px] opacity-80">{user.user_id}</div>
+            <div className="font-mono text-[10px] mt-0.5 tabular-nums">
               注册: {new Date(user.created_at * 1000).toLocaleDateString('zh-CN')}
             </div>
           </div>
@@ -109,10 +128,16 @@ export function UserBadge({ user, openMode, onLogout, loading }: Props) {
               setOpen(false);
               onLogout();
             }}
-            className="w-full text-left px-3 py-2 text-xs hover:bg-rose-50 transition flex items-center gap-1.5"
-            style={{ color: '#b91c1c' }}
+            className="w-full text-left px-3 py-2 text-xs transition-colors flex items-center gap-2"
+            style={{ color: 'var(--sf-accent)' }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'var(--sf-bg)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
           >
-            <span>🚪</span>
+            <span>⏻</span>
             <span>退出登录</span>
           </button>
         </div>

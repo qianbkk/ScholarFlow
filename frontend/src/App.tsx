@@ -28,7 +28,7 @@ interface LastSearchOpts {
 }
 
 const THEME_STORAGE_KEY = 'sf-theme';
-const VALID_THEMES: ThemeId[] = ['light', 'warm', 'dark', 'eye'];
+const VALID_THEMES: ThemeId[] = ['parchment', 'kraft', 'midnight', 'sage'];
 
 function loadStoredTheme(): ThemeId {
   try {
@@ -36,10 +36,21 @@ function loadStoredTheme(): ThemeId {
     if (stored && (VALID_THEMES as string[]).includes(stored)) {
       return stored as ThemeId;
     }
+    // R10.5.4 升级: 旧版本号用户 localStorage 存的是 light/warm/dark/eye,
+    // 一次性迁移到新 ID. 缺失任意 ID 都回退到 parchment.
+    const legacyMap: Record<string, ThemeId> = {
+      light: 'parchment',
+      warm: 'kraft',
+      dark: 'midnight',
+      eye: 'sage',
+    };
+    if (stored && legacyMap[stored]) {
+      return legacyMap[stored];
+    }
   } catch {
     // localStorage 可能在隐私模式不可用 — 静默回退默认
   }
-  return 'light';
+  return 'parchment';
 }
 
 export default function App() {
@@ -120,19 +131,21 @@ export default function App() {
     }
   }, []);
 
-  // R10 (M-17): 启动时把 theme 写到 <html> (data-theme 属性), 让全局生效
+  // R10.5.4 启动时把 theme 写到 <html> (data-theme 属性), 让全局生效
   useEffect(() => {
     const html = document.documentElement;
-    // 先清掉旧 theme class, 再加新的 (避免 stacking)
-    VALID_THEMES.forEach((t) => html.classList.remove(`theme-${t}`));
+    // 先清掉所有 theme-* class (含旧 light/warm/dark/eye 残留), 再加新的
+    ['parchment', 'kraft', 'midnight', 'sage', 'light', 'warm', 'dark', 'eye'].forEach(
+      (t) => html.classList.remove(`theme-${t}`)
+    );
     html.classList.add(`theme-${theme}`);
     // 顺便在 console 打印一次对比度 (开发期验证)
     if (import.meta.env.DEV) {
       const contrasts: Record<ThemeId, string> = {
-        light: '16.5:1',
-        warm: '13.2:1',
-        dark: '14.5:1',
-        eye: '6.8:1',
+        parchment: '14.8:1',
+        kraft: '11.2:1',
+        midnight: '15.1:1',
+        sage: '9.4:1',
       };
       console.info(`[theme] switched to ${theme} (contrast ${contrasts[theme]})`);
     }
@@ -151,46 +164,80 @@ export default function App() {
   );
 
   return (
-    // R10 (M-17): bg-theme-light 是默认浅色, text-theme-light 是高对比文字 (#0f172a)
-    // 全部 4 套主题都通过 tailwind.config.js 扩展的颜色对, 对比度 > 4.5:1 (WCAG AA)
+    // R10.5.4 Editorial Knowledge: 整体保持 4 套主题 CSS 变量驱动的 bg/text/border.
     <div
-      className="h-screen flex flex-col"
+      className="h-screen flex flex-col font-ui"
       style={{ backgroundColor: 'var(--sf-bg)', color: 'var(--sf-text)' }}
     >
-      {/* R10 (M-17): 顶部 toolbar — 右侧放 ThemeSwitcher, 切换不刷新页面 */}
-      <div
-        className="flex items-center justify-between px-4 py-1.5 border-b"
-        style={{ borderColor: 'var(--sf-border, #e2e8f0)' }}
-      >
-        <div className="flex items-center gap-2 text-xs opacity-70">
-          <span>ScholarFlow</span>
+      {/* === 报头 (Editorial Masthead) ===
+          R10.5.4 重设计: 报头三段式 — 刊名 (Fraunces italic) + 副刊号 (IBM Plex mono 小字) + 右侧主题/用户.
+          顶部加双线 (经典期刊装订线) 替代单 border, 强化"翻杂志"的视觉感. */}
+      <header className="sf-rise">
+        <div
+          className="px-4 sm:px-6 py-3 flex items-end justify-between gap-4 border-b-2"
+          style={{ borderColor: 'var(--sf-text)' }}
+        >
+          <div className="flex items-baseline gap-3 min-w-0">
+            <h1
+              className="font-display text-2xl sm:text-3xl font-semibold italic tracking-tight"
+              style={{ color: 'var(--sf-text)' }}
+            >
+              Scholar<span style={{ color: 'var(--sf-accent)' }}>Flow</span>
+            </h1>
+            <span
+              className="font-mono text-[10px] uppercase tracking-[0.18em] hidden sm:inline opacity-60"
+            >
+              Vol. 1 · 科研文献智能检索
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <UserBadge
+              user={currentUser}
+              openMode={currentUser?.open_mode ?? true}
+              onLogout={handleLogout}
+              loading={authState === 'loading'}
+            />
+            <ThemeSwitcher current={theme} onChange={handleThemeChange} />
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <UserBadge
-            user={currentUser}
-            openMode={currentUser?.open_mode ?? true}
-            onLogout={handleLogout}
-            loading={authState === 'loading'}
-          />
-          <ThemeSwitcher current={theme} onChange={handleThemeChange} />
-        </div>
+        {/* 报头底部细线 (印刷"切线") */}
+        <div className="h-px" style={{ backgroundColor: 'var(--sf-border)' }} />
+      </header>
+
+      <div className="sf-rise sf-rise-d1">
+        <CostDashboard result={result} loading={loading} elapsed={elapsed} />
       </div>
 
-      <CostDashboard result={result} loading={loading} elapsed={elapsed} />
-
       {serverOk === false && (
-        <div className="bg-rose-50 border-b border-rose-200 px-4 py-2 text-xs text-rose-700 flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-rose-500" />
-          后端服务未连通 (http://127.0.0.1:8000)。请先运行
-          <code className="bg-rose-100 px-1.5 py-0.5 rounded font-mono">
-            uvicorn backend.main:app
-          </code>
+        <div
+          className="mx-4 sm:mx-6 mt-3 px-4 py-2.5 text-xs flex items-center gap-2 font-ui"
+          style={{
+            backgroundColor: 'var(--sf-bg-elev)',
+            color: 'var(--sf-accent)',
+            borderLeft: '3px solid var(--sf-accent)',
+          }}
+        >
+          <span className="font-mono text-base">⚠</span>
+          <span>
+            <span className="font-semibold">后端未连通</span> · http://127.0.0.1:8000 ·
+            请先运行 <code className="font-mono px-1.5 py-0.5 bg-[var(--sf-bg)] border border-[var(--sf-border)]">
+              uvicorn backend.main:app
+            </code>
+          </span>
         </div>
       )}
 
       {error && (
-        <div className="bg-amber-50 border-b border-amber-200 px-4 py-2 text-xs text-amber-700 flex items-center gap-2">
-          <span>[!]</span> {error}
+        <div
+          className="mx-4 sm:mx-6 mt-3 px-4 py-2.5 text-xs flex items-center gap-2"
+          style={{
+            backgroundColor: 'var(--sf-bg-elev)',
+            color: 'var(--sf-accent)',
+            borderLeft: '3px solid var(--sf-accent)',
+          }}
+        >
+          <span className="font-mono">[!]</span>
+          <span className="font-ui">{error}</span>
         </div>
       )}
 
@@ -198,39 +245,42 @@ export default function App() {
           之前 flex 横排在 768px 以下挤, ReportPanel/GraphPanel 几乎不可见.
           现在 flex-col 默认 + overflow-y-auto 让整个页面竖向滚动 (避免嵌套 scroll);
           lg+ 切回 flex-row + overflow-hidden 让三栏独立内部滚动.
-          min-h-0 允许 flex 子项收缩到 0 (flex 默认 min-height: auto 会撑破父容器). */}
+          min-h-0 允许 flex 子项收缩到 0 (flex 默认 min-height: auto 会撑破父容器).
+          R10.5.4: 加 sf-rise-d2/d3 让中间栏 + 右侧栏按顺序淡入, 报头已 d0. */}
       <div className="flex-1 flex flex-col lg:flex-row min-h-0 overflow-y-auto lg:overflow-hidden">
-        <QueryPanel
-          loading={loading}
-          onSearch={handleSearch}
-          onReset={reset}
-          papers={result?.ranked_papers ?? []}
-          lastQuery={lastQuery}
-          currentStep={currentStep}
-          elapsedSec={elapsedSec}
-          pipelineSteps={pipelineSteps}
-          isDegradedResponse={result?.is_degraded_response ?? false}
-          fallbackPaperCount={result?.fallback_paper_count ?? 0}
-        />
-        {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
-            激活 R4 U4 死代码 (用户重试按钮生效).
-            Round 6 SIMPLIFY (REDUNDANT-004): onRetry 改用 lastSearchOpts 复现
-            用户上次表单状态 (预算/迭代/provider), 修复闭包丢失 bug. */}
-        <ReportPanel
-          report={result?.report ?? ''}
-          loading={loading}
-          query={lastQuery}
-          errorMsg={error}
-          lastQuery={lastQuery}
-          bibtex={result?.bibtex ?? ''}
-          ris={result?.ris ?? ''}
-          onRetry={(q) =>
-            lastSearchOpts
-              ? search(q, lastSearchOpts.budget, lastSearchOpts.maxIter, lastSearchOpts.provider)
-              : search(q)
-          }
-        />
-        <GraphPanel graph={result?.citation_graph ?? null} />
+        <div className="sf-rise sf-rise-d1 min-h-0 flex flex-col lg:flex-row w-full lg:contents">
+          <QueryPanel
+            loading={loading}
+            onSearch={handleSearch}
+            onReset={reset}
+            papers={result?.ranked_papers ?? []}
+            lastQuery={lastQuery}
+            currentStep={currentStep}
+            elapsedSec={elapsedSec}
+            pipelineSteps={pipelineSteps}
+            isDegradedResponse={result?.is_degraded_response ?? false}
+            fallbackPaperCount={result?.fallback_paper_count ?? 0}
+          />
+          {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
+              激活 R4 U4 死代码 (用户重试按钮生效).
+              Round 6 SIMPLIFY (REDUNDANT-004): onRetry 改用 lastSearchOpts 复现
+              用户上次表单状态 (预算/迭代/provider), 修复闭包丢失 bug. */}
+          <ReportPanel
+            report={result?.report ?? ''}
+            loading={loading}
+            query={lastQuery}
+            errorMsg={error}
+            lastQuery={lastQuery}
+            bibtex={result?.bibtex ?? ''}
+            ris={result?.ris ?? ''}
+            onRetry={(q) =>
+              lastSearchOpts
+                ? search(q, lastSearchOpts.budget, lastSearchOpts.maxIter, lastSearchOpts.provider)
+                : search(q)
+            }
+          />
+          <GraphPanel graph={result?.citation_graph ?? null} />
+        </div>
       </div>
 
       {/* R10.5.3: 认证对话框 — 未登录时强制弹出 (OPEN_MODE=false).

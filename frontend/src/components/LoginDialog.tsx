@@ -83,8 +83,8 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ backgroundColor: 'rgba(15, 23, 42, 0.55)' }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sf-fade"
+      style={{ backgroundColor: 'rgba(13, 13, 13, 0.55)' }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="login-dialog-title"
@@ -98,26 +98,43 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
         aria-hidden="true"
       />
 
+      {/* R10.5.4 Editorial: 无圆角, 双线包边, 像期刊订阅卡 */}
       <div
-        className="relative w-full max-w-md rounded-lg shadow-xl border p-6"
+        className="relative w-full max-w-md p-7 sf-rise"
         style={{
-          backgroundColor: 'var(--sf-bg, #ffffff)',
-          color: 'var(--sf-text, #0f172a)',
-          borderColor: 'var(--sf-border, #e2e8f0)',
+          backgroundColor: 'var(--sf-bg)',
+          color: 'var(--sf-text)',
+          border: '1px solid var(--sf-border)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.04), 0 16px 48px rgba(0,0,0,0.10)',
         }}
       >
+        {/* 顶部细线 (报头"装订线") */}
+        <div
+          className="absolute top-0 left-0 right-0 h-1"
+          style={{ backgroundColor: 'var(--sf-accent)' }}
+        />
+
         {/* 标题 + 关闭按钮 (仅在 !requireAuth 时显示) */}
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-start justify-between mb-5">
           <div>
+            <div
+              className="font-mono text-[9px] uppercase tracking-[0.25em] mb-1"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              § 订阅 · Subscription
+            </div>
             <h2
               id="login-dialog-title"
-              className="text-lg font-semibold"
-              style={{ color: 'var(--sf-text, #0f172a)' }}
+              className="font-display italic font-semibold text-2xl leading-tight"
+              style={{ color: 'var(--sf-text)' }}
             >
-              🔐 登录 ScholarFlow
+              登录 <span style={{ color: 'var(--sf-accent)' }}>ScholarFlow</span>
             </h2>
-            <p className="text-xs mt-1 opacity-70">
-              学术邮箱即身份, 无需密码 (高校信任模型)
+            <p
+              className="font-body text-[13px] italic mt-1.5"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              学术邮箱即身份, 无需密码
             </p>
           </div>
           {!requireAuth && onClose && (
@@ -125,7 +142,8 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
               type="button"
               onClick={onClose}
               aria-label="关闭"
-              className="text-xl opacity-60 hover:opacity-100 transition px-2"
+              className="font-display italic text-2xl leading-none transition-colors px-1"
+              style={{ color: 'var(--sf-muted)' }}
             >
               ×
             </button>
@@ -133,7 +151,10 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
         </div>
 
         {/* Tabs: 注册 / 登录 (后端是同一端点, 这里只是 UX 区分) */}
-        <div className="flex border-b mb-4" style={{ borderColor: 'var(--sf-border, #e2e8f0)' }}>
+        <div
+          className="flex border-b mb-5"
+          style={{ borderColor: 'var(--sf-border)' }}
+        >
           {(['register', 'login'] as Mode[]).map((m) => (
             <button
               key={m}
@@ -142,22 +163,27 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
                 setMode(m);
                 setError(null);
               }}
-              className={`flex-1 py-2 text-sm font-medium transition border-b-2 -mb-px ${
+              className={`flex-1 py-2.5 text-xs font-mono uppercase tracking-[0.15em] transition-colors -mb-px border-b-2 ${
                 mode === m
-                  ? 'border-brand-500 text-brand-600'
-                  : 'border-transparent opacity-60 hover:opacity-100'
+                  ? 'font-semibold'
+                  : 'opacity-50 hover:opacity-100'
               }`}
+              style={{
+                color: mode === m ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                borderColor: mode === m ? 'var(--sf-accent)' : 'transparent',
+              }}
             >
               {m === 'register' ? '新用户注册' : '已有账号登录'}
             </button>
           ))}
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-3">
+        <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label
               htmlFor="login-email"
-              className="block text-xs font-medium mb-1 opacity-80"
+              className="block text-[10px] font-mono uppercase tracking-[0.15em] mb-1.5"
+              style={{ color: 'var(--sf-muted)' }}
             >
               学术邮箱
             </label>
@@ -171,11 +197,11 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
               onChange={(e) => setEmail(e.target.value)}
               placeholder="you@university.edu"
               disabled={submitting}
-              className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+              className="w-full px-3 py-2.5 font-body text-[15px] italic border-0 border-b transition-colors focus:outline-none disabled:opacity-50"
               style={{
-                backgroundColor: 'var(--sf-bg, #ffffff)',
-                color: 'var(--sf-text, #0f172a)',
-                borderColor: 'var(--sf-border, #e2e8f0)',
+                backgroundColor: 'transparent',
+                color: 'var(--sf-text)',
+                borderColor: 'var(--sf-border)',
               }}
             />
           </div>
@@ -184,9 +210,10 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
             <div>
               <label
                 htmlFor="login-displayname"
-                className="block text-xs font-medium mb-1 opacity-80"
+                className="block text-[10px] font-mono uppercase tracking-[0.15em] mb-1.5"
+                style={{ color: 'var(--sf-muted)' }}
               >
-                显示名 <span className="opacity-60">(可选, 默认用邮箱)</span>
+                显示名 <span style={{ opacity: 0.6 }}>(可选)</span>
               </label>
               <input
                 id="login-displayname"
@@ -196,11 +223,11 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="张三 / Dr. Smith"
                 disabled={submitting}
-                className="w-full px-3 py-2 text-sm border rounded-md focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-50"
+                className="w-full px-3 py-2.5 font-body text-[15px] italic border-0 border-b transition-colors focus:outline-none disabled:opacity-50"
                 style={{
-                  backgroundColor: 'var(--sf-bg, #ffffff)',
-                  color: 'var(--sf-text, #0f172a)',
-                  borderColor: 'var(--sf-border, #e2e8f0)',
+                  backgroundColor: 'transparent',
+                  color: 'var(--sf-text)',
+                  borderColor: 'var(--sf-border)',
                 }}
               />
             </div>
@@ -209,43 +236,53 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
           {error && (
             <div
               role="alert"
-              className="text-xs px-3 py-2 rounded border"
+              className="text-xs font-body px-3 py-2.5"
               style={{
-                backgroundColor: '#fef2f2',
-                borderColor: '#fecaca',
-                color: '#b91c1c',
+                backgroundColor: 'var(--sf-bg-elev)',
+                color: 'var(--sf-accent)',
+                borderLeft: '3px solid var(--sf-accent)',
               }}
             >
-              ⚠️ {error}
+              <span className="font-display italic font-semibold">⚠</span> {error}
             </div>
           )}
 
           <button
             type="submit"
             disabled={submitting || !email.trim()}
-            className="w-full py-2 px-4 text-sm font-medium rounded-md transition disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-2.5 px-4 text-sm font-display italic font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             style={{
-              backgroundColor: submitting ? '#94a3b8' : '#2563eb',
-              color: '#ffffff',
+              backgroundColor: 'var(--sf-accent)',
+              color: 'var(--sf-bg)',
             }}
           >
             {submitting
               ? '处理中…'
               : mode === 'register'
-              ? '注册并进入'
-              : '登录并进入'}
+              ? '注册并进入 →'
+              : '登录并进入 →'}
           </button>
 
-          <div className="text-[11px] opacity-60 leading-relaxed pt-2 border-t" style={{ borderColor: 'var(--sf-border, #e2e8f0)' }}>
+          {/* 期刊页脚式小字 — 3 条说明 */}
+          <div
+            className="text-[10px] font-ui leading-relaxed pt-4 mt-2 border-t space-y-1.5"
+            style={{
+              color: 'var(--sf-muted)',
+              borderColor: 'var(--sf-border)',
+            }}
+          >
             <p>
-              📌 <strong>说明</strong>: 注册后系统会生成 API Key 并存到 localStorage,
-              后续请求自动带 <code className="font-mono">X-API-Key</code> header.
+              <span className="font-mono" style={{ color: 'var(--sf-accent)' }}>注 ·</span>{' '}
+              系统会生成 API Key 存到 localStorage,
+              后续请求自动带 <code className="font-mono text-[10px] px-1 py-0.5" style={{ backgroundColor: 'var(--sf-bg-elev)' }}>X-API-Key</code> header.
             </p>
-            <p className="mt-1">
-              ⚠️ 邮箱被用作 user_id, 同一邮箱重复登录会生成新 key (旧 key 失效).
+            <p>
+              <span className="font-mono" style={{ color: 'var(--sf-accent)' }}>注 ·</span>{' '}
+              邮箱作 user_id, 同邮箱重登生成新 key (旧 key 失效).
             </p>
-            <p className="mt-1">
-              🔒 限流: 每 IP 每分钟 5 次 / 每小时 20 次 (防字典攻击).
+            <p>
+              <span className="font-mono" style={{ color: 'var(--sf-accent)' }}>注 ·</span>{' '}
+              限流 5/min · 20/hour (防字典攻击).
             </p>
           </div>
         </form>

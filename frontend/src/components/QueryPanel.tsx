@@ -101,63 +101,80 @@ export function QueryPanel({
 
   return (
     // Round 6 S5: 移动端 w-full, lg+ 切回 1/4 宽 + 280px 最小宽.
-    // 高度也变 h-auto (移动端跟随内容) vs h-full (桌面 flex 子项填满).
-    <aside className="w-full lg:w-1/4 lg:min-w-[280px] h-auto lg:h-full bg-[var(--sf-bg)] border-r border-slate-200 flex flex-col">
-      <div className="p-3 border-b border-slate-100">
-        <h2 className="text-sm font-semibold text-slate-700 mb-2">研究查询</h2>
-        <form onSubmit={submit} className="space-y-2">
-          {/* Round 6 S4': 三个英文点 "..." → Unicode 省略号 "…", 符合中文排版规范.
-              R4 后 QueryPanel.tsx 残留 "（中英文均可）..." 等半角 ellipsis,
-              与 R5 新加的 "加载中…" 风格不一致. 统一改用 U+2026. */}
+    // R10.5.4 Editorial: 右侧用 var(--sf-border) 印刷线分隔, 内部用 Newsreader 论文列表
+    <aside
+      className="w-full lg:w-1/4 lg:min-w-[280px] h-auto lg:h-full flex flex-col"
+      style={{
+        backgroundColor: 'var(--sf-bg)',
+        borderRight: '1px solid var(--sf-border)',
+      }}
+    >
+      <div className="p-4 border-b" style={{ borderColor: 'var(--sf-border)' }}>
+        {/* 栏目标题 — Editorial 风格: 序号 + 衬线斜体 */}
+        <div className="flex items-baseline gap-2 mb-3">
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.18em]"
+            style={{ color: 'var(--sf-accent)' }}
+          >
+            § 1
+          </span>
+          <h2
+            className="font-display text-base font-semibold italic"
+            style={{ color: 'var(--sf-text)' }}
+          >
+            研究查询
+          </h2>
+        </div>
+        <form onSubmit={submit} className="space-y-2.5">
           <textarea
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="输入研究问题（中英文均可）…"
+            placeholder="输入研究问题…"
             rows={2}
             maxLength={2000}
-            className="w-full text-sm border border-slate-300 rounded-md p-2 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent resize-none"
+            className="w-full font-body text-[15px] leading-relaxed border rounded-none p-2.5 resize-none transition-colors"
+            style={{
+              borderColor: 'var(--sf-border)',
+              backgroundColor: 'var(--sf-bg)',
+              color: 'var(--sf-text)',
+              fontStyle: query ? 'normal' : 'italic',
+            }}
           />
-          {/* Round 4 U3: 实时字符计数，防止超长 query 触发后端 400
-              > 1800 变橙色（警告接近上限），= 2000 变红色（已到硬上限）。 */}
+          {/* Round 4 U3: 实时字符计数, 颜色用 CSS 变量 */}
           <div
-            className={`text-xs mt-1 text-right ${
-              query.length >= 2000
-                ? 'text-red-600 font-medium'
-                : query.length > 1800
-                ? 'text-orange-500'
-                : 'text-slate-400'
-            }`}
+            className="text-[10px] mt-0.5 text-right font-mono tracking-wider"
+            style={{
+              color:
+                query.length >= 2000
+                  ? 'var(--sf-accent)'
+                  : query.length > 1800
+                  ? 'var(--sf-accent)'
+                  : 'var(--sf-muted)',
+            }}
             aria-live="polite"
           >
-            {query.length}/2000
+            {query.length.toLocaleString()}/2,000
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
-            <label className="flex items-center gap-1 text-slate-600">
+          <div className="flex items-center gap-3 text-[11px] font-mono uppercase tracking-wider">
+            <label className="flex items-center gap-1.5" style={{ color: 'var(--sf-muted)' }}>
               模型
               <select
                 value={selectedProvider}
                 onChange={(e) => setSelectedProvider(e.target.value)}
                 disabled={providersLoading}
                 title={providersLoading ? '加载中…' : '选择 LLM provider（仅显示已配置 key 的）'}
-                className="border border-slate-300 rounded px-1.5 py-0.5 text-xs max-w-[140px] focus:outline-none focus:ring-1 focus:ring-brand-500"
+                className="font-mono text-[11px] tracking-normal border rounded-none px-1.5 py-0.5 max-w-[140px]"
+                style={{
+                  borderColor: 'var(--sf-border)',
+                  backgroundColor: 'var(--sf-bg)',
+                  color: 'var(--sf-text)',
+                }}
               >
                 {providers.length === 0 && !providersLoading && (
                   <option value="">（无可用 provider）</option>
                 )}
                 {providers.map((p) => {
-                  // R8.2 + R9 阶段 3 (审计员 #3): verified 字段差异化 UI
-                  // 之前 verified 字段 (后端 R8 加的) 在前端 types 声明但 UI 不消费,
-                  // 配错 key 的 provider 跟没配 key 一样默默从下拉消失 (其实 has_key
-                  // 仍然 true, 它会出现在下拉但调用 401, 用户以为是网络问题重试).
-                  // 修复 — 三态 UI:
-                  //   - verified === false: 🔴 红字 "(key 失效)" + tooltip 提示
-                  //     .env/key 问题, 仍可下拉看到, 让用户知道哪个 provider 出问题
-                  //   - verified === null: ⏳ 灰色 "(验证中...)" + disabled,
-                  //     启动后 5s 内后端 health check 未完成, 强制用户等
-                  //   - verified === true: 正常显示, verified 字段不外露
-                  //
-                  // R10 (M-16): minimax 加 "🎯 默认" 标签 — 让用户一眼知道哪个是默认.
                   if (p.verified === false) {
                     return (
                       <option
@@ -165,9 +182,9 @@ export function QueryPanel({
                         value={p.id}
                         disabled={false}
                         title="API key 验证失败,请检查 .env 或重新生成"
-                        style={{ color: '#dc2626' }}
+                        style={{ color: 'var(--sf-accent)' }}
                       >
-                        🔴 {p.name} (key 失效)
+                        ✕ {p.name} (key 失效)
                       </option>
                     );
                   }
@@ -178,28 +195,26 @@ export function QueryPanel({
                         value={p.id}
                         disabled={true}
                         title="后端启动后 5s 内未完成 key 验证,稍候重试"
-                        style={{ color: '#94a3b8' }}
+                        style={{ color: 'var(--sf-muted)' }}
                       >
-                        ⏳ {p.name} (验证中...)
+                        ⏳ {p.name} (验证中)
                       </option>
                     );
                   }
-                  // R10 (M-16): minimax 在 option label 上加 "🎯 默认" 标识
                   const isDefault = p.id === 'minimax';
                   return (
                     <option
                       key={p.id}
                       value={p.id}
                       title={p.flagship_model}
-                      style={isDefault ? { color: '#1d4ed8', fontWeight: 600 } : undefined}
                     >
-                      {isDefault ? `🎯 ${p.name} (默认)` : p.name}
+                      {isDefault ? `★ ${p.name}` : p.name}
                     </option>
                   );
                 })}
               </select>
             </label>
-            <label className="flex items-center gap-1 text-slate-600">
+            <label className="flex items-center gap-1.5" style={{ color: 'var(--sf-muted)' }}>
               预算
               <input
                 type="number"
@@ -208,10 +223,15 @@ export function QueryPanel({
                 step={0.1}
                 value={budget}
                 onChange={(e) => setBudget(parseFloat(e.target.value) || 2.0)}
-                className="w-14 border border-slate-300 rounded px-1.5 py-0.5 text-center"
+                className="font-mono text-[11px] tracking-normal border rounded-none w-14 px-1.5 py-0.5 text-center tabular-nums"
+                style={{
+                  borderColor: 'var(--sf-border)',
+                  backgroundColor: 'var(--sf-bg)',
+                  color: 'var(--sf-text)',
+                }}
               />
             </label>
-            <label className="flex items-center gap-1 text-slate-600">
+            <label className="flex items-center gap-1.5" style={{ color: 'var(--sf-muted)' }}>
               迭代
               <input
                 type="number"
@@ -219,28 +239,28 @@ export function QueryPanel({
                 max={5}
                 value={maxIter}
                 onChange={(e) => setMaxIter(parseInt(e.target.value) || 3)}
-                className="w-12 border border-slate-300 rounded px-1.5 py-0.5 text-center"
+                className="font-mono text-[11px] tracking-normal border rounded-none w-12 px-1.5 py-0.5 text-center tabular-nums"
+                style={{
+                  borderColor: 'var(--sf-border)',
+                  backgroundColor: 'var(--sf-bg)',
+                  color: 'var(--sf-text)',
+                }}
               />
             </label>
           </div>
 
-          <div className="flex items-center gap-2 text-xs">
-            {/* Round 6 S1: loading 时 search 按钮变取消按钮, 闭环 Round 5 S-5 后端 cancel.
-                之前 loading 期间用户无法中断 8 节点流水线 (SSE + LLM 调用可能跑 30s+),
-                按钮文案 '搜索中…' 误导用户以为在排队, 实际无取消能力.
-                现在 loading 时:
-                  - 按钮文案 '搜索中…' → '取消'
-                  - 颜色 brand-600 → rose-600 (语义化危险动作)
-                  - 行为 onClick(onReset) → 触发 useSearch.reset → POST /api/v1/search/cancel
-                注意 type='button' (不是 'submit'), 避免点取消时误触发表单 submit.
-                Round 6 S4': 加 title/aria-label 中文 hover 提示 + 加载中文文案统一化. */}
+          <div className="flex items-stretch gap-0">
             {loading ? (
               <button
                 type="button"
                 onClick={onReset}
                 aria-label="取消当前搜索"
                 title="点击中断当前检索流水线"
-                className="flex-1 bg-rose-600 hover:bg-rose-700 text-white text-sm font-medium py-1.5 rounded-md transition"
+                className="flex-1 text-sm font-medium py-2 transition-colors"
+                style={{
+                  backgroundColor: 'var(--sf-text)',
+                  color: 'var(--sf-bg)',
+                }}
               >
                 取消
               </button>
@@ -250,16 +270,24 @@ export function QueryPanel({
                 disabled={!query.trim()}
                 aria-label="开始搜索"
                 title={!query.trim() ? '请先输入研究问题' : '开始检索'}
-                className="flex-1 bg-brand-600 hover:bg-brand-700 disabled:bg-slate-300 text-white text-sm font-medium py-1.5 rounded-md transition"
+                className="flex-1 text-sm font-display italic font-semibold py-2 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  backgroundColor: 'var(--sf-accent)',
+                  color: 'var(--sf-bg)',
+                }}
               >
-                搜索
+                检索 →
               </button>
             )}
             <button
               type="button"
               onClick={handleReset}
               disabled={loading}
-              className="px-2.5 py-1.5 text-sm border border-slate-300 rounded-md hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-3 text-sm border-l transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{
+                borderColor: 'var(--sf-border)',
+                color: 'var(--sf-muted)',
+              }}
               title={loading ? '请先取消当前搜索' : '清空表单'}
             >
               清空
@@ -267,46 +295,74 @@ export function QueryPanel({
           </div>
         </form>
 
-        {/* Round 6 S4': 加载进度条加中文 aria-label, 屏幕阅读器友好. */}
+        {/* 加载进度条 — Editorial 风格: 8 段细线 + 当前节点标签 */}
         {loading && (
           <div
-            className="mt-2 p-2 bg-brand-50 border border-brand-200 rounded-md"
+            className="mt-3 p-2.5"
             role="status"
             aria-live="polite"
             aria-label="搜索进行中"
+            style={{
+              backgroundColor: 'var(--sf-bg-elev)',
+              border: '1px solid var(--sf-border)',
+            }}
           >
-            <div className="flex items-center justify-between text-[10px] text-brand-700 mb-1.5">
-              <span className="font-medium">
+            <div
+              className="flex items-baseline justify-between text-[10px] font-mono uppercase tracking-[0.12em] mb-2"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              <span>
                 {pipelineSteps[currentStep]?.emoji} {pipelineSteps[currentStep]?.label}
               </span>
-              <span className="font-mono">{elapsedSec.toFixed(1)}s</span>
+              <span className="tabular-nums">{elapsedSec.toFixed(1)}s</span>
             </div>
-            <div className="grid grid-cols-4 gap-0.5">
+            <div className="grid grid-cols-8 gap-0.5">
               {pipelineSteps.map((s, i) => (
                 <div
                   key={s.key}
-                  className={`h-1 rounded ${
-                    i < currentStep
-                      ? 'bg-brand-500'
-                      : i === currentStep
-                      ? 'bg-brand-300 animate-pulse'
-                      : 'bg-slate-200'
-                  }`}
+                  className="h-0.5"
+                  style={{
+                    backgroundColor:
+                      i < currentStep
+                        ? 'var(--sf-accent)'
+                        : i === currentStep
+                        ? 'var(--sf-accent)'
+                        : 'var(--sf-border)',
+                    opacity: i <= currentStep ? 1 : 0.5,
+                    animation: i === currentStep ? 'sf-fade 1.2s ease infinite alternate' : undefined,
+                  }}
                 />
               ))}
             </div>
           </div>
         )}
 
-        <div className="mt-2">
-          <p className="text-[10px] uppercase text-themed-muted mb-1">示例</p>
+        <div className="mt-3">
+          <p
+            className="text-[9px] uppercase tracking-[0.18em] font-mono mb-1.5"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            示例
+          </p>
           <div className="flex flex-wrap gap-1">
             {SUGGESTIONS.map((s) => (
               <button
                 key={s}
                 type="button"
                 onClick={() => useSuggestion(s)}
-                className="text-[10px] px-1.5 py-0.5 bg-slate-100 hover:bg-slate-200 rounded text-slate-700"
+                className="text-[11px] font-body italic px-2 py-0.5 transition-colors border-b border-dashed"
+                style={{
+                  color: 'var(--sf-muted)',
+                  borderColor: 'var(--sf-border)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--sf-accent)';
+                  e.currentTarget.style.borderColor = 'var(--sf-accent)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--sf-muted)';
+                  e.currentTarget.style.borderColor = 'var(--sf-border)';
+                }}
                 title={s}
               >
                 {s.length > 22 ? s.slice(0, 22) + '…' : s}
@@ -317,76 +373,137 @@ export function QueryPanel({
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
-        {/* Round 5 SIMPLIFY (API-001): 切到 M-1 顶层字段
-            is_degraded_response / fallback_paper_count 直接来自后端 SearchResponse
-            (Round 5 M-1, commit 0754fa1), 替代之前从 papers[].is_fallback 单篇聚合的 useMemo 派生.
-            闭环后端 API + 减 1 个 useMemo. */}
         {isDegradedResponse && (
           <div
-            className="bg-amber-50 border-l-4 border-amber-400 text-amber-800 px-4 py-3 mx-3 mt-3 rounded-md flex items-start gap-3"
+            className="mx-3 mt-3 p-3 flex items-start gap-3"
             role="alert"
             data-testid="degraded-banner"
+            style={{
+              backgroundColor: 'var(--sf-bg-elev)',
+              borderLeft: '3px solid var(--sf-accent)',
+            }}
           >
-            <span className="text-amber-600 text-xl leading-none" role="img" aria-label="warning">⚠️</span>
-            <div className="flex-1">
-              <h4 className="font-semibold text-sm">部分结果来自后备数据</h4>
-              <p className="text-xs mt-1 text-amber-700">
-                本次搜索触发了 {fallbackPaperCount} 篇论文的后备 fallback
-                （可能因 LLM API 限流、key 失效或网络问题）。建议检查 provider 配置后重试。
+            <span
+              className="font-display italic text-lg leading-none"
+              style={{ color: 'var(--sf-accent)' }}
+              role="img"
+              aria-label="warning"
+            >
+              ⚠
+            </span>
+            <div className="flex-1 min-w-0">
+              <h4
+                className="font-display italic text-sm font-semibold"
+                style={{ color: 'var(--sf-text)' }}
+              >
+                部分结果来自后备数据
+              </h4>
+              <p
+                className="text-[11px] font-body mt-1 leading-relaxed"
+                style={{ color: 'var(--sf-muted)' }}
+              >
+                本次搜索 {fallbackPaperCount} 篇论文触发后备 fallback
+                (LLM API 限流 / key 失效 / 网络问题).
               </p>
-              {/* R10.5 Fix-Diagnose: 自动检测常见 fallback 原因, 给用户可执行的修复建议.
-                  旧版只说"可能因限流/key/网络" 太空泛, 用户不知道具体哪里出问题.
-                  前端基于 providers 列表 + URL 反向检测给出 actionable hints. */}
-              <details className="mt-2 text-xs">
-                <summary className="cursor-pointer text-amber-700 hover:text-amber-900 select-none">
+              <details className="mt-2 text-[11px] font-ui">
+                <summary
+                  className="cursor-pointer select-none"
+                  style={{ color: 'var(--sf-accent)' }}
+                >
                   查看诊断与修复建议
                 </summary>
-                <ul className="mt-1.5 space-y-1 pl-3 list-disc text-amber-700">
-                  {/* 检查 SS key: providers 列表里没有 semantic_scholar 直接标识,
-                      但 query 后端能识别. 简易检测: 如果 fallback_paper_count >= 10,
-                      强烈怀疑 SS rate-limit (免费 tier 5req/5min). */}
+                <ul
+                  className="mt-1.5 space-y-1 pl-3 list-none"
+                  style={{ color: 'var(--sf-muted)' }}
+                >
                   {fallbackPaperCount >= 10 && (
-                    <li>
-                      <strong>Semantic Scholar 限流可能性高</strong>:
-                      无 SS API key 时免费配额 100 req/5min, 单次 max_iter=3 × 5 子查询 = 15+ 请求.
-                      修复: 在 <code className="bg-amber-100 px-1 rounded">.env</code> 设{' '}
-                      <code className="bg-amber-100 px-1 rounded">SEMANTIC_SCHOLAR_API_KEY=xxx</code>{' '}
-                      (申请: semanticscholar.org/product/api).
+                    <li className="relative pl-3">
+                      <span
+                        className="absolute left-0 top-0.5"
+                        style={{ color: 'var(--sf-accent)' }}
+                      >·</span>
+                      <strong>Semantic Scholar 限流</strong>:
+                      无 key 时免费配额 100 req/5min, 单次 max_iter=3 × 5 子查询 = 15+ 请求.
+                      修复: <code className="font-mono">.env</code> 设{' '}
+                      <code className="font-mono">SEMANTIC_SCHOLAR_API_KEY=xxx</code>.
                     </li>
                   )}
-                  {/* LLM 失败: 总是显示, 因为 fallback 可能只是部分论文.
-                      模板报告 "当前为 mock 模式" 文本已被替换为更明确的提示. */}
-                  <li>
+                  <li className="relative pl-3">
+                    <span
+                      className="absolute left-0 top-0.5"
+                      style={{ color: 'var(--sf-accent)' }}
+                    >·</span>
                     <strong>LLM 失败降级</strong>:
-                    synthesis 节点 fallback 会让综述内容质量降低 (评分统一为 4.0 左右).
-                    可尝试: 1) 换 provider (kimi/glm 备选); 2) 降低 max_iterations 减少 LLM 调用次数.
+                    synthesis 节点 fallback 让综述质量降低 (评分统一 ~4.0).
+                    可尝试: 换 provider (kimi/glm 备选); 降低 max_iterations.
                   </li>
-                  <li>
+                  <li className="relative pl-3">
+                    <span
+                      className="absolute left-0 top-0.5"
+                      style={{ color: 'var(--sf-accent)' }}
+                    >·</span>
                     <strong>网络/代理</strong>:
-                    确认 <code className="bg-amber-100 px-1 rounded">get_proxy()</code> 探测到的代理可达
-                    (国内常见端口 7890/7897), SS/OpenAlex 走不通也会触发 fallback.
+                    确认 <code className="font-mono">get_proxy()</code> 探测到的代理可达
+                    (国内常见 7890/7897), SS/OpenAlex 走不通也会触发 fallback.
                   </li>
                 </ul>
               </details>
             </div>
           </div>
         )}
-        <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 sticky top-0 flex items-center justify-between">
-          <h3 className="text-xs font-semibold text-slate-600">
-            论文列表 {papers.length > 0 && `(${papers.length})`}
-          </h3>
+        {/* 论文列表标题 — Editorial 风格: 序号 + 衬线斜体 */}
+        <div
+          className="px-4 py-2 sticky top-0 flex items-baseline justify-between border-b"
+          style={{
+            backgroundColor: 'var(--sf-bg-elev)',
+            borderColor: 'var(--sf-border)',
+          }}
+        >
+          <div className="flex items-baseline gap-2">
+            <span
+              className="font-mono text-[10px] uppercase tracking-[0.18em]"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              § 2
+            </span>
+            <h3
+              className="font-display text-sm italic font-semibold"
+              style={{ color: 'var(--sf-text)' }}
+            >
+              论文列表 {papers.length > 0 && `(${papers.length})`}
+            </h3>
+          </div>
           {papers.length > 0 && (
-            <span className="text-[10px] text-themed-muted">按相关性排序 · 点击打开</span>
+            <span
+              className="text-[9px] font-mono uppercase tracking-[0.12em]"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              按相关性 · 点击打开
+            </span>
           )}
         </div>
         {lastQuery && papers.length === 0 && (
-          <p className="text-xs text-themed-muted p-4 text-center">未找到论文</p>
+          <p
+            className="text-xs font-body italic p-6 text-center"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            未找到论文
+          </p>
         )}
-        <ul className="divide-y divide-slate-100">
+        {/* 论文列表 — Editorial: 序号用 Fraunces 衬线斜体 (像脚注编号),
+            标题用 Newsreader 15px 衬线 (长阅读), 元数据 mono + 细线分隔. */}
+        <ul>
           {papers.map((p, i) => (
             <li
               key={p.paper_id || i}
-              className="px-3 py-1.5 hover:bg-slate-50 cursor-pointer transition"
+              className="px-4 py-2.5 cursor-pointer transition-colors border-b"
+              style={{ borderColor: 'var(--sf-border)' }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
               onClick={() => {
                 // BUG-003 / VULN-004 修复：URL 协议白名单 + noopener/noreferrer
                 if (p.url && /^https?:\/\//i.test(p.url)) {
@@ -395,35 +512,57 @@ export function QueryPanel({
               }}
               title={p.title}
             >
-              <div className="flex items-start gap-2">
-                <span className="text-[10px] font-mono text-themed-muted mt-0.5 shrink-0 w-5 text-right">
-                  {i + 1}
+              <div className="flex items-start gap-2.5">
+                <span
+                  className="font-display italic text-sm leading-tight shrink-0 w-5 text-right tabular-nums"
+                  style={{ color: 'var(--sf-accent)' }}
+                >
+                  {String(i + 1).padStart(2, '0')}
                 </span>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-start gap-1.5">
-                    <p className="text-[11px] font-medium text-slate-800 line-clamp-2 leading-tight flex-1">
+                    <p
+                      className="font-body text-[14px] line-clamp-2 leading-snug flex-1"
+                      style={{ color: 'var(--sf-text)' }}
+                    >
                       {p.title}
                     </p>
-                    {/* P0-2 修复：单篇论文来自 fallback 时，title 旁加醒目标记 */}
                     {p.is_fallback && (
                       <span
-                        className="shrink-0 inline-block bg-amber-100 text-amber-700 text-[9px] px-1.5 py-0.5 rounded font-medium"
-                        title="此论文来自后备 fallback 数据（非真实 API 检索）"
+                        className="shrink-0 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5"
+                        style={{
+                          backgroundColor: 'var(--sf-accent-soft)',
+                          color: 'var(--sf-accent)',
+                        }}
+                        title="此论文来自后备 fallback 数据"
                         data-testid="paper-fallback-badge"
                       >
-                        后备
+                        fallback
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-themed-muted">
-                    <span>{p.year || '—'}</span>
-                    <span>·</span>
-                    <span>{p.citation_count.toLocaleString()}</span>
-                    <span className="font-mono text-brand-600 font-semibold">
+                  <div
+                    className="flex items-center gap-2 mt-1 text-[10px] font-mono uppercase tracking-wider"
+                    style={{ color: 'var(--sf-muted)' }}
+                  >
+                    <span className="tabular-nums">{p.year || '—'}</span>
+                    <span style={{ color: 'var(--sf-border)' }}>·</span>
+                    <span className="tabular-nums">{p.citation_count.toLocaleString()} cite</span>
+                    <span style={{ color: 'var(--sf-border)' }}>·</span>
+                    <span
+                      className="tabular-nums font-semibold"
+                      style={{ color: 'var(--sf-accent)' }}
+                    >
                       ★{p.final_score.toFixed(1)}
                     </span>
                     {p.is_expanded && (
-                      <span className="ml-auto text-[9px] bg-amber-100 text-amber-700 px-1 rounded">
+                      <span
+                        className="ml-auto text-[9px] font-mono uppercase tracking-wider px-1"
+                        style={{
+                          borderLeft: '2px solid var(--sf-accent)',
+                          color: 'var(--sf-accent)',
+                        }}
+                      >
                         ext
                       </span>
                     )}

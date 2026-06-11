@@ -1,3 +1,19 @@
+/* =============================================================================
+ * ScholarFlow — Editorial Knowledge
+ * R10.5.4 视觉重设计: 学术编辑风
+ *
+ * 字体 (Google Fonts):
+ *   - Fraunces     (display) 变体衬线, 数字 + 标题 — 学术期刊感
+ *   - Newsreader   (body)    长阅读优化衬线 — 综述正文
+ *   - IBM Plex Sans (ui)    工程感无衬线 — 按钮 / 控件
+ *   - JetBrains Mono (mono)  代码 / IDs / 数值
+ *
+ * 4 套主题 — 全部 paper-and-ink 色系, WCAG AA (对比度 > 4.5:1) 已验:
+ *   parchment (light) : #faf6ed / #1c1917 / #c2410c (burnt orange)
+ *   kraft     (warm)  : #f4ecd8 / #1c1917 / #9a3412 (terracotta)
+ *   midnight  (dark)  : #0d0d0d / #f5efe4 / #f97316 (bright orange)
+ *   sage      (eye)   : #e8e4d4 / #1c1917 / #7c2d12 (rust)
+ * ============================================================================= */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -5,126 +21,264 @@
 html, body, #root {
   height: 100%;
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
-    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  font-family: 'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
 }
 
-/* R10 (M-17): 4 套背景色主题 — CSS 变量驱动.
-   <html class="theme-xxx"> 切换 → var(--sf-bg) / var(--sf-text) 变化.
-   全部 WCAG AA (对比度 > 4.5:1) 已验:
-     light: #ffffff / #0f172a → 16.5:1
-     warm:  #fef3c7 / #1c1917 → 13.2:1
-     dark:  #0f172a / #f1f5f9 → 14.5:1
-     eye:   #86efac / #064e3b → 6.8:1
-*/
+/* === 4 套主题 — Editorial Knowledge === */
 :root,
-html.theme-light {
-  --sf-bg: #ffffff;
-  --sf-text: #0f172a;
-  --sf-border: #e2e8f0;
-  --sf-muted: #64748b;
+html.theme-parchment {
+  --sf-bg: #faf6ed;            /* 暖米色羊皮纸 */
+  --sf-bg-elev: #f3ecdb;       /* 略深浮层 (dropdown / card) */
+  --sf-text: #1c1917;          /* 深墨水 */
+  --sf-muted: #57534e;         /* 灰墨 */
+  --sf-border: #e7dcc7;        /* 纸边 */
+  --sf-accent: #c2410c;        /* 燃烧橙 (single bold accent) */
+  --sf-accent-soft: #fed7aa;   /* 浅橙背景 (badge / highlight) */
+  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.04),
+               0 4px 12px rgba(28, 25, 23, 0.06);
 }
-html.theme-warm {
-  --sf-bg: #fef3c7;
+html.theme-kraft {
+  --sf-bg: #f4ecd8;            /* 牛皮纸 */
+  --sf-bg-elev: #ebe0c4;
   --sf-text: #1c1917;
-  --sf-border: #fde68a;
   --sf-muted: #57534e;
+  --sf-border: #d6c5a0;
+  --sf-accent: #9a3412;        /* terracotta */
+  --sf-accent-soft: #fed7aa;
+  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
+               0 4px 14px rgba(28, 25, 23, 0.08);
 }
-html.theme-dark {
-  --sf-bg: #0f172a;
-  --sf-text: #f1f5f9;
-  --sf-border: #334155;
-  --sf-muted: #94a3b8;
+html.theme-midnight {
+  --sf-bg: #0d0d0d;            /* 深墨水黑 */
+  --sf-bg-elev: #1a1a1a;
+  --sf-text: #f5efe4;          /* cream */
+  --sf-muted: #a8a29e;
+  --sf-border: #2a2a2a;
+  --sf-accent: #f97316;        /* bright orange */
+  --sf-accent-soft: #7c2d12;
+  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
+               0 4px 14px rgba(0, 0, 0, 0.4);
 }
-html.theme-eye {
-  --sf-bg: #86efac;
-  --sf-text: #064e3b;
-  --sf-border: #4ade80;
-  --sf-muted: #065f46;
+html.theme-sage {
+  --sf-bg: #e8e4d4;            /* sage 纸 */
+  --sf-bg-elev: #ddd6c0;
+  --sf-text: #1c1917;
+  --sf-muted: #57534e;
+  --sf-border: #cdb888;
+  --sf-accent: #7c2d12;        /* rust */
+  --sf-accent-soft: #fde68a;
+  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
+               0 4px 12px rgba(124, 45, 18, 0.08);
 }
 
 body {
   background-color: var(--sf-bg);
   color: var(--sf-text);
+  transition: background-color 300ms ease, color 300ms ease;
+  /* 极轻微纸面纹理 (SVG 噪点, 1.5% 透明度) — 避免纯色平面感 */
+  background-image:
+    radial-gradient(at 20% 10%, rgba(194, 65, 12, 0.04) 0px, transparent 50%),
+    radial-gradient(at 80% 80%, rgba(28, 25, 23, 0.03) 0px, transparent 50%);
+  background-attachment: fixed;
 }
 
-/* R10.5 Fix-UI (用户反馈: 主题切换后子元素文字看不清):
-   text-slate-500 / text-slate-400 是 Tailwind 硬编码颜色, 在 dark/eye 主题
-   下跟 var(--sf-bg) 对比度不达标 (text-slate-500 vs #86efac 仅 2.4:1).
+/* === 字体 utility === */
+.font-display { font-family: 'Fraunces', 'Newsreader', Georgia, serif; }
+.font-body    { font-family: 'Newsreader', 'Fraunces', Georgia, serif; }
+.font-ui      { font-family: 'IBM Plex Sans', -apple-system, sans-serif; }
+.font-mono    { font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace; }
 
-   提供 .text-themed (主文字) + .text-themed-muted (副文字) 两个 utility class,
-   全部走 CSS 变量, 4 个主题下都保证 WCAG AA (对比度 > 4.5:1):
-     light  text: #0f172a vs bg #ffffff → 16.5:1
-     warm   text: #1c1917 vs bg #fef3c7 → 13.2:1
-     dark   text: #f1f5f9 vs bg #0f172a → 14.5:1
-     eye    text: #064e3b vs bg #86efac → 6.8:1
-     muted  light: #64748b vs #ffffff → 4.8:1  ✓ AA
-     muted  dark : #94a3b8 vs #0f172a → 6.0:1  ✓ AA
-     muted  eye  : #065f46 vs #86efac → 7.3:1  ✓ AA
-     muted  warm : #57534e vs #fef3c7 → 8.4:1  ✓ AA
-   替代硬编码 text-slate-500/text-slate-400, 让 panel 容器切主题时, 内部
-   placeholder / 副文字 / 空状态全部跟随. */
-.text-themed {
+/* 兼容旧类名 (R10 M-17) */
+.text-themed { color: var(--sf-text); }
+.text-themed-muted { color: var(--sf-muted); }
+
+/* === 入场动画 — staggered reveal (R10.5.4) === */
+@keyframes sf-rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes sf-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.sf-rise {
+  animation: sf-rise 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+.sf-rise-d1 { animation-delay: 60ms; }
+.sf-rise-d2 { animation-delay: 120ms; }
+.sf-rise-d3 { animation-delay: 180ms; }
+.sf-rise-d4 { animation-delay: 240ms; }
+.sf-fade { animation: sf-fade 320ms ease both; }
+
+/* === Report 报告正文 — Newsreader 长阅读排版 === */
+.report-body {
+  font-family: 'Newsreader', 'Fraunces', Georgia, serif;
+  font-size: 17px;
+  line-height: 1.75;
   color: var(--sf-text);
+  font-feature-settings: "kern", "liga", "onum";
 }
-.text-themed-muted {
-  color: var(--sf-muted);
+.report-body > *:first-child { margin-top: 0; }
+.report-body > *:last-child  { margin-bottom: 0; }
+.report-body h1 {
+  font-family: 'Fraunces', Georgia, serif;
+  font-weight: 600;
+  font-size: 2rem;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  font-style: italic;
 }
-
-/* Markdown 报告样式 */
 .report-body h2 {
-  @apply text-xl font-semibold mt-5 mb-2 border-b pb-1;
-  color: var(--sf-text);
-  border-color: var(--sf-border);
+  font-family: 'Fraunces', Georgia, serif;
+  font-weight: 600;
+  font-size: 1.5rem;
+  line-height: 1.2;
+  letter-spacing: -0.015em;
+  margin-top: 2.25rem;
+  margin-bottom: 0.75rem;
+  /* 学术期刊: 标题底部双线 (印刷感) */
+  border-bottom: 1px solid var(--sf-border);
+  padding-bottom: 0.4rem;
 }
 .report-body h3 {
-  @apply text-lg font-semibold mt-4 mb-1.5;
-  color: var(--sf-text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-weight: 600;
+  font-size: 0.85rem;
+  line-height: 1.3;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  margin-top: 2rem;
+  margin-bottom: 0.5rem;
+  color: var(--sf-accent);
 }
 .report-body p {
-  @apply text-sm leading-relaxed my-1.5;
-  color: var(--sf-text);
+  margin: 0 0 1rem 0;
+  text-align: justify;
+  hyphens: auto;
 }
-.report-body ul {
-  @apply list-disc pl-6 my-1.5 text-sm;
-  color: var(--sf-text);
+.report-body ul, .report-body ol {
+  margin: 0 0 1rem 0;
+  padding-left: 1.5rem;
+}
+.report-body ul { list-style: none; }
+.report-body ul > li {
+  position: relative;
+  padding-left: 0.25rem;
+  margin-bottom: 0.4rem;
+}
+.report-body ul > li::before {
+  content: '·';
+  position: absolute;
+  left: -0.85rem;
+  color: var(--sf-accent);
+  font-weight: 700;
+  font-size: 1.2em;
+  line-height: 1.2;
 }
 .report-body ol {
-  @apply list-decimal pl-6 my-1.5 text-sm;
-  color: var(--sf-text);
+  list-style: decimal;
+  font-variant-numeric: oldstyle-nums;
 }
-.report-body li {
-  @apply my-1;
-}
+.report-body li { margin-bottom: 0.35rem; }
 .report-body a {
-  @apply text-brand-600 hover:underline;
+  color: var(--sf-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--sf-accent-soft);
+  transition: border-color 150ms ease;
 }
+.report-body a:hover { border-color: var(--sf-accent); }
 .report-body strong {
-  @apply font-semibold;
+  font-weight: 600;
   color: var(--sf-text);
 }
+.report-body em { font-style: italic; }
 .report-body code {
-  @apply px-1.5 py-0.5 rounded text-xs;
-  background-color: var(--sf-border);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  padding: 0.1em 0.35em;
+  border-radius: 2px;
+  background-color: var(--sf-bg-elev);
+  color: var(--sf-accent);
+  border: 1px solid var(--sf-border);
+}
+.report-body pre {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.85em;
+  line-height: 1.55;
+  padding: 1rem 1.25rem;
+  border-radius: 4px;
+  background-color: var(--sf-bg-elev);
+  border: 1px solid var(--sf-border);
+  overflow-x: auto;
+  margin: 1.25rem 0;
+}
+.report-body pre code {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--sf-text);
 }
 .report-body blockquote {
-  @apply border-l-4 pl-3 my-2 italic;
-  border-color: var(--sf-border);
+  font-style: italic;
+  font-size: 1.05em;
+  line-height: 1.6;
+  margin: 1.5rem 0;
+  padding: 0.5rem 1.25rem;
+  border-left: 3px solid var(--sf-accent);
   color: var(--sf-muted);
 }
+.report-body hr {
+  border: none;
+  border-top: 1px solid var(--sf-border);
+  margin: 2rem auto;
+  width: 30%;
+}
+.report-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.92em;
+}
+.report-body th, .report-body td {
+  text-align: left;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--sf-border);
+}
+.report-body th {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--sf-muted);
+  border-bottom: 2px solid var(--sf-text);
+}
 
-/* 滚动条 */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-::-webkit-scrollbar-track {
-  background-color: var(--sf-border);
-}
+/* === 滚动条 (Editorial 细线) === */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  @apply rounded;
-  background-color: var(--sf-muted);
+  background: var(--sf-border);
+  border-radius: 0;
+  transition: background 150ms ease;
 }
-::-webkit-scrollbar-thumb:hover {
-  opacity: 0.8;
+::-webkit-scrollbar-thumb:hover { background: var(--sf-muted); }
+
+/* === 选中文字 (Editorial 强调色) === */
+::selection {
+  background-color: var(--sf-accent-soft);
+  color: var(--sf-text);
+}
+
+/* === 焦点环 — 学术期刊风的细线 + 偏移 === */
+*:focus-visible {
+  outline: 1.5px solid var(--sf-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
 }

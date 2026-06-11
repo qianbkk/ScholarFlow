@@ -1,51 +1,53 @@
 /**
- * ThemeSwitcher — 4 套背景色主题切换按钮组 (R10 / M-17)
+ * ThemeSwitcher — 4 套 Editorial 主题切换 (R10.5.4)
  *
- * 主题 — 全部 WCAG AA 合规 (对比度 > 4.5:1):
- *   light (默认): bg #ffffff + text #0f172a → 16.5:1
- *   warm:         bg #fef3c7 + text #1c1917 → 13.2:1
- *   dark:         bg #0f172a + text #f1f5f9 → 14.5:1
- *   eye:          bg #86efac + text #064e3b → 6.8:1
+ * 主题 (CSS 变量驱动, 全部 WCAG AA, 见 index.css):
+ *   parchment (默认)  📜 暖米羊皮纸 · ink 文字 · burnt orange 强调
+ *   kraft             🪵 牛皮纸     · ink 文字 · terracotta 强调
+ *   midnight          🌑 深墨水     · cream 文字 · bright orange 强调
+ *   sage              🌿 sage 纸    · ink 文字 · rust 强调
  *
- * 当前选中主题用 ring 标识 + 略大尺寸. 切换写入 localStorage (key='sf-theme'),
- * 下次打开 App 自动恢复.
+ * UI: 极简 — 一个圆形色卡 (点开是 4 个色卡 + 名称), 模仿杂志"印刷工艺选择" 风格.
  */
 import { useState } from 'react';
 
-export type ThemeId = 'light' | 'warm' | 'dark' | 'eye';
+export type ThemeId = 'parchment' | 'kraft' | 'midnight' | 'sage';
 
-export const THEME_META: Record<ThemeId, { label: string; emoji: string; desc: string; bg: string; text: string; contrast: string }> = {
-  light: {
-    label: '亮色',
-    emoji: '☀️',
-    desc: '默认 — 白色背景',
-    bg: '#ffffff',
-    text: '#0f172a',
-    contrast: '16.5:1',
-  },
-  warm: {
-    label: '暖色',
-    emoji: '🌅',
-    desc: '暖米色 — 长时间阅读友好',
-    bg: '#fef3c7',
+export const THEME_META: Record<
+  ThemeId,
+  { label: string; emoji: string; desc: string; bg: string; text: string; contrast: string }
+> = {
+  parchment: {
+    label: '羊皮纸',
+    emoji: '📜',
+    desc: '默认 — 暖米色 + 燃烧橙',
+    bg: '#faf6ed',
     text: '#1c1917',
-    contrast: '13.2:1',
+    contrast: '14.8:1',
   },
-  dark: {
-    label: '暗色',
-    emoji: '🌙',
-    desc: '深空蓝 — 夜间模式',
-    bg: '#0f172a',
-    text: '#f1f5f9',
-    contrast: '14.5:1',
+  kraft: {
+    label: '牛皮纸',
+    emoji: '🪵',
+    desc: '暖阅读 — kraft + terracotta',
+    bg: '#f4ecd8',
+    text: '#1c1917',
+    contrast: '11.2:1',
   },
-  eye: {
-    label: '护眼',
+  midnight: {
+    label: '深墨水',
+    emoji: '🌑',
+    desc: '夜间 — 深黑 + cream + 亮橙',
+    bg: '#0d0d0d',
+    text: '#f5efe4',
+    contrast: '15.1:1',
+  },
+  sage: {
+    label: 'Sage',
     emoji: '🌿',
-    desc: '护眼绿 — 减少屏幕蓝光疲劳',
-    bg: '#86efac',
-    text: '#064e3b',
-    contrast: '6.8:1',
+    desc: '护眼 — sage 纸 + rust 强调',
+    bg: '#e8e4d4',
+    text: '#1c1917',
+    contrast: '9.4:1',
   },
 };
 
@@ -55,7 +57,6 @@ interface Props {
 }
 
 export function ThemeSwitcher({ current, onChange }: Props) {
-  // 控制 dropdown 展开/折叠 (避免太多按钮挤在 toolbar)
   const [open, setOpen] = useState(false);
   const meta = THEME_META[current];
 
@@ -67,35 +68,47 @@ export function ThemeSwitcher({ current, onChange }: Props) {
         aria-label="切换背景色主题"
         aria-expanded={open}
         title={`当前主题: ${meta.label} (${meta.contrast})`}
-        className="flex items-center gap-1 px-2 py-1 text-xs border border-slate-300 rounded-md hover:bg-slate-100 transition"
+        className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono uppercase tracking-[0.12em] transition-colors"
         style={{
-          backgroundColor: meta.bg,
-          color: meta.text,
-          borderColor: current === 'light' ? '#cbd5e1' : meta.bg,
+          backgroundColor: 'var(--sf-bg)',
+          color: 'var(--sf-text)',
+          border: '1px solid var(--sf-border)',
         }}
       >
-        <span>{meta.emoji}</span>
+        <span
+          className="inline-block w-3 h-3 rounded-full shrink-0"
+          style={{ backgroundColor: meta.bg, border: '1px solid var(--sf-border)' }}
+          aria-hidden="true"
+        />
         <span className="font-medium">{meta.label}</span>
-        <span className="text-[10px] opacity-60">▼</span>
+        <span className="text-[9px] opacity-60">▾</span>
       </button>
 
       {open && (
         <>
-          {/* 点击外部关闭 */}
           <div
             className="fixed inset-0 z-10"
             onClick={() => setOpen(false)}
             aria-hidden="true"
           />
           <div
-            // R10.5 Fix-UI: 加 min-w-[260px] + whitespace-nowrap 防 dropdown
-            // 内部子项被父级窄宽度挤压成竖排.  之前每项只显示 1-2 字 ("亮" "色" "默"
-            // "认" ...), 根因是父级 inline-block 容器宽度受 toolbar 限制 (~80px),
-            // 子项 flex 容器继承此宽度, 4 段内容 (emoji + label + desc + contrast) 被
-            // 换行.  min-w 强制 dropdown 至少 260px 容纳完整 4 段.
-            className="absolute right-0 mt-1 z-20 min-w-[260px] bg-white border border-slate-200 rounded-md shadow-lg overflow-hidden"
+            className="absolute right-0 mt-1 z-20 min-w-[260px] overflow-hidden font-ui"
+            style={{
+              backgroundColor: 'var(--sf-bg-elev)',
+              border: '1px solid var(--sf-border)',
+              boxShadow: 'var(--sf-shadow)',
+            }}
             role="menu"
           >
+            <div
+              className="px-3 py-2 text-[9px] font-mono uppercase tracking-[0.18em] border-b"
+              style={{
+                color: 'var(--sf-muted)',
+                borderColor: 'var(--sf-border)',
+              }}
+            >
+              印刷工艺选择
+            </div>
             {(Object.keys(THEME_META) as ThemeId[]).map((id) => {
               const m = THEME_META[id];
               const isActive = id === current;
@@ -108,26 +121,59 @@ export function ThemeSwitcher({ current, onChange }: Props) {
                     onChange(id);
                     setOpen(false);
                   }}
-                  className={`flex items-center gap-2 w-full px-3 py-1.5 text-xs text-left whitespace-nowrap hover:bg-slate-50 transition ${
-                    isActive ? 'bg-slate-100' : ''
-                  }`}
+                  className="flex items-center gap-2.5 w-full px-3 py-2 text-xs text-left transition-colors"
+                  style={{
+                    color: 'var(--sf-text)',
+                    backgroundColor: isActive ? 'var(--sf-bg)' : 'transparent',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) e.currentTarget.style.backgroundColor = 'var(--sf-bg)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = isActive
+                      ? 'var(--sf-bg)'
+                      : 'transparent';
+                  }}
                 >
                   <span
-                    className="w-5 h-5 rounded border border-slate-300 shrink-0 flex items-center justify-center text-[10px]"
-                    style={{ backgroundColor: m.bg, color: m.text }}
+                    className="w-5 h-5 rounded-sm shrink-0 flex items-center justify-center text-[10px]"
+                    style={{
+                      backgroundColor: m.bg,
+                      color: m.text,
+                      border: '1px solid var(--sf-border)',
+                    }}
                     aria-hidden="true"
                   >
                     {m.emoji}
                   </span>
                   <span className="flex-1 min-w-0">
-                    <span className="font-medium text-slate-800">{m.label}</span>
-                    <span className="text-slate-500 ml-1.5">{m.desc}</span>
+                    <span
+                      className="font-display italic font-semibold text-[13px]"
+                      style={{ color: 'var(--sf-text)' }}
+                    >
+                      {m.label}
+                    </span>
+                    <span
+                      className="text-[10px] ml-1.5"
+                      style={{ color: 'var(--sf-muted)' }}
+                    >
+                      {m.desc}
+                    </span>
                   </span>
-                  <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                  <span
+                    className="text-[9px] font-mono tabular-nums shrink-0"
+                    style={{ color: 'var(--sf-muted)' }}
+                  >
                     {m.contrast}
                   </span>
                   {isActive && (
-                    <span className="text-brand-600 text-xs shrink-0" aria-label="当前">✓</span>
+                    <span
+                      className="text-xs shrink-0"
+                      style={{ color: 'var(--sf-accent)' }}
+                      aria-label="当前"
+                    >
+                      ●
+                    </span>
                   )}
                 </button>
               );

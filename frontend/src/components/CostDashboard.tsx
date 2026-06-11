@@ -1,12 +1,18 @@
+/**
+ * CostDashboard — 报头下方"运行指标条" (R10.5.4 Editorial)
+ *
+ * 设计意图: 学术期刊"运行状态"行 — 像 Bloomberg 终端的精简版
+ *   - 刊号: 大字 Fraunces 数字 (Cost / Tokens / Papers)
+ *   - 副标: IBM Plex Sans 10px UPPERCASE + letter-spacing (Cost / TOKEN / etc.)
+ *   - 状态: 一个小竖条 + 文字 (idle / searching / done / error)
+ *   - 折叠区: 模型用量明细 (用 editorial 的 fine rule 风格)
+ */
 import type { SearchResult } from '../types';
 
 interface Props {
   result: SearchResult | null;
   loading: boolean;
   elapsed: number;
-  // R9 阶段 3 (审计员 #3): model_usage_summary 消费
-  // App.tsx 暂时不显式传这个 prop, 我们从 result.model_usage_summary 回退读取.
-  // 加 optional prop 是为了: 1) 测试时容易注入; 2) 未来 App.tsx 升级时不用再改这里.
   modelUsageSummary?: Record<string, { tokens: number; cost: number }>;
 }
 
@@ -16,94 +22,105 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
   const papers = result?.ranked_papers.length ?? 0;
   const iterations = result?.iteration ?? 0;
   const status = result?.status ?? (loading ? 'searching' : 'idle');
-  // R9: model_usage_summary 字段消费. 优先用 prop, 其次 result.model_usage_summary
-  // (R8 已升级), 最后回退到老字段 result.model_usage 兼容旧 cache.
   const usage =
     modelUsageSummary ?? result?.model_usage_summary ?? result?.model_usage ?? {};
-  // R10.5 Fix-P0-e2e: 后端 model_usage_summary schema 漂移: 旧实现只返 tokens 没 cost,
-  // 前端 info.cost.toFixed() 抛 TypeError → ErrorBoundary → 白屏. 防御: cost 缺省 0.
-  // 排序也防御: 旧 cache 或老后端可能给 cost=undefined, NaN 比较会导致 sort 行为
-  // 不确定, 显式 ?? 0 让排序稳定.
   const usageEntries = Object.entries(usage)
     .map(([k, v]) => [k, { tokens: v?.tokens ?? 0, cost: v?.cost ?? 0 }] as const)
     .sort((a, b) => b[1].cost - a[1].cost);
 
-  const statusColor = {
-    idle: 'bg-slate-400',
-    searching: 'bg-amber-400 animate-pulse',
-    done: 'bg-emerald-500',
-    error: 'bg-rose-500',
-  }[status] || 'bg-slate-400';
+  const statusMeta: Record<string, { label: string; color: string; dot: string }> = {
+    idle: { label: '待命中', color: 'var(--sf-muted)', dot: 'var(--sf-border)' },
+    searching: { label: '检索中', color: 'var(--sf-accent)', dot: 'var(--sf-accent)' },
+    done: { label: '已完成', color: 'var(--sf-text)', dot: 'var(--sf-text)' },
+    error: { label: '出错了', color: 'var(--sf-accent)', dot: 'var(--sf-accent)' },
+  };
+  const meta = statusMeta[status] || statusMeta.idle;
 
   return (
     <>
-      {/* R9 阶段 3 (审计员 #3): 移动端 375px 横向滚动修复
-          之前 <header className="flex items-center gap-6"> 是单行横排, 5 个 Stat
-          (Token/Cost/Papers/Iterations/Elapsed) + Logo + Status 在 375px 总宽
-          ~625px, 触发 157px 横向滚动.
-          修复:
-            1) flex → flex-wrap + gap-4, 主 Stat (Cost/Status/Elapsed) 始终展示.
-            2) 次要 Stat (Token/Papers/Iterations) 加 hidden sm:flex, 只在 ≥640px
-               显示 — 移动端腾出空间, 桌面端信息密度不变.
-            3) 边距 px-6 → px-4 sm:px-6, 移动端让出左右 padding. */}
-      <header className="bg-[var(--sf-bg)] border-b border-slate-200 px-4 sm:px-6 py-3 flex flex-wrap items-center gap-4 shadow-sm">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center text-white font-bold text-sm">
-            SF
-          </div>
-          <div>
-            <h1 className="text-base font-semibold text-themed leading-none">ScholarFlow</h1>
-            <p className="text-xs text-themed-muted leading-none mt-0.5">科研文献智能搜索</p>
-          </div>
-        </div>
-
-        <div className="h-8 w-px bg-slate-200 hidden sm:block" />
-
-        <Stat label="Token" value={tokens.toLocaleString()} className="hidden sm:flex" />
-        <Stat label="Cost" value={`$${cost.toFixed(4)}`} />
-        <Stat label="Papers" value={String(papers)} className="hidden sm:flex" />
-        <Stat label="Iter" value={String(iterations)} className="hidden sm:flex" />
-        {elapsed > 0 && <Stat label="Elapsed" value={`${elapsed.toFixed(1)}s`} />}
+      {/* R10.5.4 Editorial: 指标条用更"印刷"的网格 — 等宽分栏 + 细线分隔.
+          每个指标 12px uppercase 副标 + Fraunces 24px 数字 (tabular-nums).
+          用 var(--sf-bg-elev) 做轻微底色差, 跟 paper bg 拉开层次. */}
+      <div
+        className="px-4 sm:px-6 py-2.5 flex flex-wrap items-baseline gap-x-6 sm:gap-x-8 gap-y-2 border-b"
+        style={{
+          backgroundColor: 'var(--sf-bg-elev)',
+          borderColor: 'var(--sf-border)',
+        }}
+      >
+        {/* 刊号 SECTION: 大数字 + 极小标 */}
+        <Metric label="费用" value={`$${cost.toFixed(4)}`} emphasis />
+        <Divider />
+        <Metric label="Tokens" value={tokens.toLocaleString()} className="hidden sm:flex" />
+        <Divider className="hidden sm:block" />
+        <Metric label="论文" value={String(papers)} className="hidden sm:flex" />
+        <Divider className="hidden sm:block" />
+        <Metric label="迭代" value={String(iterations)} className="hidden sm:flex" />
+        {elapsed > 0 && (
+          <>
+            <Divider />
+            <Metric label="耗时" value={`${elapsed.toFixed(1)}s`} />
+          </>
+        )}
 
         <div className="flex-1" />
 
-        <div className="flex items-center gap-2 text-xs text-slate-600">
-          <span className={`w-2 h-2 rounded-full ${statusColor}`} />
-          <span className="capitalize">{status}</span>
+        {/* 状态: 左侧细色条 + mono 文字 */}
+        <div
+          className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-[0.15em]"
+          style={{ color: meta.color }}
+        >
+          <span
+            className={`inline-block w-1.5 h-3.5 ${status === 'searching' ? 'animate-pulse' : ''}`}
+            style={{ backgroundColor: meta.dot }}
+          />
+          <span>{meta.label}</span>
         </div>
-      </header>
+      </div>
 
-      {/* R9 阶段 3 (审计员 #3): per-model breakdown 折叠区
-          之前 result.model_usage_summary 在 types 里声明了但 UI 不消费, R8 改的
-          字段死在类型里. 现在 details/summary 折叠展示 (默认关闭, 不挤视觉),
-          移动端也显示, 用户调试成本时可下钻到具体模型. */}
+      {/* 模型用量明细 — 折叠区, Editorial 风格的 fine rule + tabular 数据 */}
       {usageEntries.length > 0 && (
         <details
-          className="bg-white border-b border-slate-200 px-4 sm:px-6 py-1.5 text-xs"
+          className="px-4 sm:px-6 py-2 text-xs font-ui border-b"
+          style={{ borderColor: 'var(--sf-border)' }}
           data-testid="model-usage-breakdown"
         >
-          <summary className="cursor-pointer text-slate-600 hover:text-slate-800 select-none list-none flex items-center gap-1.5">
-            <span className="inline-block transition-transform group-open:rotate-90">
-              ▸
+          <summary
+            className="cursor-pointer select-none flex items-center gap-2 hover:opacity-80 transition"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            <span className="font-mono text-[10px]">▸</span>
+            <span className="font-mono text-[10px] uppercase tracking-[0.15em]">
+              模型用量明细 ({usageEntries.length})
             </span>
-            <span>模型用量明细 ({usageEntries.length} 个)</span>
-            <span className="text-themed-muted ml-1">
+            <span className="font-mono text-[10px]" style={{ color: 'var(--sf-muted)' }}>
               · 累计 ${usageEntries.reduce((s, [, v]) => s + v.cost, 0).toFixed(4)}
             </span>
           </summary>
-          <div className="mt-1.5 grid gap-1">
+          <div className="mt-2 grid gap-1 pl-4">
             {usageEntries.map(([model, info]) => (
               <div
                 key={model}
-                className="flex items-center gap-2 sm:gap-3 text-slate-700"
+                className="flex items-baseline gap-3 sm:gap-4"
+                style={{ color: 'var(--sf-text)' }}
               >
-                <span className="font-mono text-[11px] flex-1 truncate" title={model}>
+                <span
+                  className="font-mono text-[11px] flex-1 truncate"
+                  style={{ color: 'var(--sf-muted)' }}
+                  title={model}
+                >
                   {model}
                 </span>
-                <span className="font-mono text-[11px] text-themed-muted w-20 sm:w-24 text-right">
+                <span
+                  className="font-mono text-[11px] tabular-nums w-20 sm:w-28 text-right"
+                  style={{ color: 'var(--sf-muted)' }}
+                >
                   {(info.tokens ?? 0).toLocaleString()} tok
                 </span>
-                <span className="font-mono text-[11px] text-brand-600 font-semibold w-16 sm:w-20 text-right">
+                <span
+                  className="font-mono text-[11px] tabular-nums w-16 sm:w-20 text-right font-medium"
+                  style={{ color: 'var(--sf-accent)' }}
+                >
                   ${(info.cost ?? 0).toFixed(4)}
                 </span>
               </div>
@@ -115,19 +132,43 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
   );
 }
 
-function Stat({
+function Metric({
   label,
   value,
   className = '',
+  emphasis = false,
 }: {
   label: string;
   value: string;
   className?: string;
+  emphasis?: boolean;
 }) {
   return (
-    <div className={`flex flex-col ${className}`}>
-      <span className="text-[10px] uppercase tracking-wider text-themed-muted">{label}</span>
-      <span className="text-sm font-semibold text-slate-800">{value}</span>
+    <div className={`flex flex-col leading-tight ${className}`}>
+      <span
+        className="text-[9px] uppercase tracking-[0.18em] font-mono mb-0.5"
+        style={{ color: 'var(--sf-muted)' }}
+      >
+        {label}
+      </span>
+      <span
+        className={`tabular-nums ${
+          emphasis ? 'font-display text-xl' : 'font-mono text-sm font-medium'
+        }`}
+        style={{ color: emphasis ? 'var(--sf-text)' : 'var(--sf-text)' }}
+      >
+        {value}
+      </span>
     </div>
+  );
+}
+
+function Divider({ className = '' }: { className?: string }) {
+  return (
+    <div
+      className={`self-stretch w-px ${className}`}
+      style={{ backgroundColor: 'var(--sf-border)' }}
+      aria-hidden="true"
+    />
   );
 }

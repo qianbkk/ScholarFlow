@@ -123,43 +123,84 @@ export function ReportPanel({
   const hasExport = !!(bibtex && bibtex.includes('@article'));
 
   return (
-    <main className="flex-1 bg-[var(--sf-bg)] overflow-y-auto">
-      <div className="max-w-3xl mx-auto p-6">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <div className="flex items-baseline gap-2">
-            <h2 className="text-sm font-semibold text-slate-600">研究报告</h2>
-            {query && <span className="text-xs text-themed-muted">— {query}</span>}
+    // R10.5.4 Editorial: 报告页 = 期刊中央跨页 (max-w-2xl 38rem 黄金阅读宽度).
+    // 顶部用一行"栏目标题 + 工具栏", 论文体正文, 底部分隔细线.
+    <main
+      className="flex-1 overflow-y-auto"
+      style={{ backgroundColor: 'var(--sf-bg)' }}
+    >
+      <div className="max-w-2xl mx-auto px-6 py-8">
+        {/* 报头式工具栏 — "§ 3 综述" + 复制/下载/导出 */}
+        <div className="mb-6 flex items-end justify-between gap-3 border-b-2 pb-3" style={{ borderColor: 'var(--sf-text)' }}>
+          <div className="min-w-0">
+            <div className="flex items-baseline gap-2">
+              <span
+                className="font-mono text-[10px] uppercase tracking-[0.18em]"
+                style={{ color: 'var(--sf-accent)' }}
+              >
+                § 3
+              </span>
+              <h2
+                className="font-display text-xl italic font-semibold leading-tight"
+                style={{ color: 'var(--sf-text)' }}
+              >
+                综述报告
+              </h2>
+            </div>
+            {query && (
+              <p
+                className="font-body text-[13px] italic mt-1 truncate"
+                style={{ color: 'var(--sf-muted)' }}
+                title={query}
+              >
+                — {query}
+              </p>
+            )}
           </div>
           {report && !loading && (
-            <div className="flex gap-1.5">
+            <div className="flex gap-0 shrink-0">
               <button
                 onClick={handleCopy}
-                className="text-xs px-2.5 py-1 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 transition"
+                className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
+                style={{
+                  color: copied ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                  borderColor: 'var(--sf-border)',
+                }}
                 title="复制 Markdown 报告"
               >
-                {copied ? '✓ 已复制' : 'Copy'}
+                {copied ? '✓ Copied' : 'Copy'}
               </button>
               <button
                 onClick={handleDownload}
-                className="text-xs px-2.5 py-1 border border-slate-300 rounded text-slate-600 hover:bg-slate-50 transition"
+                className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
+                style={{
+                  color: 'var(--sf-muted)',
+                  borderColor: 'var(--sf-border)',
+                }}
                 title="下载 Markdown 报告"
               >
                 Download
               </button>
-              {/* R10.5 P0: BibTeX / RIS 导出, 一键导入 Zotero / Mendeley / EndNote */}
               {hasExport && (
                 <>
                   <button
                     onClick={() => handleExport('bibtex')}
-                    className="text-xs px-2.5 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-50 transition"
+                    className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors border-r"
+                    style={{
+                      color: exportedFormat === 'bibtex' ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                      borderColor: 'var(--sf-border)',
+                    }}
                     title="导出 BibTeX (导入 Zotero / JabRef)"
                   >
                     {exportedFormat === 'bibtex' ? '✓ .bib' : '.bib'}
                   </button>
                   <button
                     onClick={() => handleExport('ris')}
-                    className="text-xs px-2.5 py-1 border border-amber-300 rounded text-amber-700 hover:bg-amber-50 transition"
-                    title="导出 RIS (导入 EndNote / Mendeley / RefMan)"
+                    className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors"
+                    style={{
+                      color: exportedFormat === 'ris' ? 'var(--sf-accent)' : 'var(--sf-muted)',
+                    }}
+                    title="导出 RIS (导入 EndNote / Mendeley)"
                   >
                     {exportedFormat === 'ris' ? '✓ .ris' : '.ris'}
                   </button>
@@ -170,40 +211,74 @@ export function ReportPanel({
         </div>
 
         {loading && (
-          <div className="bg-[var(--sf-bg)] border border-slate-200 rounded-lg p-6 text-center text-themed-muted">
-            <div className="inline-block animate-spin w-5 h-5 border-2 border-brand-500 border-t-transparent rounded-full mb-2" />
-            <p className="text-sm">正在驱动 8 节点流水线检索中...</p>
-            <p className="text-xs text-themed-muted mt-1">查询分解 → 双源检索 → 引文扩展 → 三维排序 → 综述生成</p>
-          </div>
-        )}
-
-        {!loading && !report && !errorMsg && (
-          <div className="bg-white border border-dashed border-slate-300 rounded-lg p-12 text-center">
-            <p className="text-themed-muted text-sm">左侧输入研究问题并点击「搜索」开始</p>
-            <p className="text-themed-muted text-xs mt-2">
-              ScholarFlow 会自动从 Semantic Scholar + OpenAlex 拉取候选论文，并生成结构化综述。
+          <div
+            className="text-center py-16"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            <div
+              className="inline-block w-6 h-6 border-2 border-t-transparent rounded-full mb-4 animate-spin"
+              style={{ borderColor: 'var(--sf-accent)', borderTopColor: 'transparent' }}
+            />
+            <p
+              className="font-display italic text-base"
+              style={{ color: 'var(--sf-text)' }}
+            >
+              正在生成综述…
+            </p>
+            <p
+              className="font-mono text-[10px] uppercase tracking-[0.18em] mt-2"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              查询分解 → 双源检索 → 引文扩展 → 三维排序 → 综述生成
             </p>
           </div>
         )}
 
-        {/* Round 4 U4: 错误状态显示 + 重试按钮
-            此前错误状态仅显示"请稍后重试"文本，无重试按钮，
-            用户必须刷新页面才能再次搜索，体验差。
-            修复：当 errorMsg 存在时，渲染红色错误块 + 重试按钮。
-            优先级：errorMsg > report > 空状态（三者互斥展示）。 */}
+        {!loading && !report && !errorMsg && (
+          <div
+            className="py-20 text-center border-y"
+            style={{ borderColor: 'var(--sf-border)' }}
+          >
+            <p
+              className="font-display italic text-2xl"
+              style={{ color: 'var(--sf-text)' }}
+            >
+              静候您的研究问题
+            </p>
+            <p
+              className="font-body text-sm mt-3 max-w-md mx-auto leading-relaxed"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              在左侧输入问题并按 <span className="font-mono text-xs px-1.5 py-0.5" style={{ backgroundColor: 'var(--sf-bg-elev)' }}>检索</span> 开始。
+              ScholarFlow 会自动从 Semantic Scholar + OpenAlex 拉取候选论文,
+              并由 LLM 编织成结构化综述。
+            </p>
+          </div>
+        )}
+
+        {/* Round 4 U4: 错误状态显示 + 重试按钮 */}
         {!loading && !report && errorMsg && (
           <div
-            className="bg-red-50 border border-red-200 rounded-md p-4 text-center"
+            className="py-12 text-center"
             data-testid="report-error"
           >
-            <p className="text-red-700 text-sm mb-3">{errorMsg}</p>
+            <p
+              className="font-display italic text-lg"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              {errorMsg}
+            </p>
             {(lastQuery || query) && onRetry && (
               <button
                 type="button"
                 onClick={() => onRetry(lastQuery || query)}
-                className="px-4 py-1.5 bg-red-600 text-white text-sm rounded-md hover:bg-red-700 transition"
+                className="mt-5 px-5 py-2 text-sm font-display italic font-semibold transition-colors"
+                style={{
+                  backgroundColor: 'var(--sf-accent)',
+                  color: 'var(--sf-bg)',
+                }}
               >
-                重试
+                重试 →
               </button>
             )}
           </div>
@@ -211,26 +286,44 @@ export function ReportPanel({
 
         {!loading && report && (
           <article
-            className="report-body border border-slate-200 rounded-lg p-6 shadow-sm"
-            style={{ backgroundColor: 'var(--sf-bg)', color: 'var(--sf-text)' }}
+            className="report-body"
+            style={{ color: 'var(--sf-text)' }}
             dangerouslySetInnerHTML={{ __html: html }}
           />
         )}
 
-        {/* M-19 (R10.5) UI 差异化: 综述末尾的"原始文献来源"表格 — 知网/Google Scholar/SS
-            都不生成可核查来源表. 用 amber 突出信号, 让用户在实际使用中
-            看到 ScholarFlow 跟其他工具的差别, 而不是从 README 读"为什么用". */}
+        {/* M-19 (R10.5) UI 差异化: 综述末尾的"原始文献来源"表格提示.
+            Editorial 风格: 细线分隔 + mono 文字 + 缩进引用感. */}
         {!loading && report && html.includes('原始文献来源') && (
           <div
-            className="mt-2 px-3 py-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-md flex items-center gap-2"
+            className="mt-8 pt-4 border-t flex items-start gap-3 text-[11px] font-ui"
             data-testid="paper-anchors-different"
+            style={{ borderColor: 'var(--sf-border)' }}
             title="其他工具 (知网/Google Scholar/Semantic Scholar) 都不生成可核查的原始文献来源表"
           >
-            <span className="text-base">📎</span>
-            <span>
-              综述末尾已自动附原始文献来源表 (含 SS ID + 直链),
-              用户可逐条点开核对综述里说的"某论文 2017 年提出 Transformer"这类声明.
+            <span
+              className="font-mono text-base leading-none"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              ¶
             </span>
+            <span style={{ color: 'var(--sf-muted)' }}>
+              <span className="font-semibold" style={{ color: 'var(--sf-accent)' }}>
+                原始文献来源表
+              </span>{' '}
+              已附在综述末尾 (含 SS ID + 直链),
+              您可逐条点开核对综述里诸如「某论文 2017 年提出 Transformer」之类的声明。
+            </span>
+          </div>
+        )}
+
+        {/* 期刊页脚 — 极小 mono 标记, 假装 "本文完" */}
+        {!loading && report && (
+          <div
+            className="mt-12 pt-4 text-center font-mono text-[9px] uppercase tracking-[0.3em]"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            ❦ &nbsp; 本文完 &nbsp; ❦
           </div>
         )}
       </div>

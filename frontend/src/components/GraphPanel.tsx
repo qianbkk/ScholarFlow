@@ -7,11 +7,13 @@ interface Props {
 }
 
 // M-18: 4 类边的视觉颜色 (cites 实箭头 / co_cited 虚线 / same_venue 点线 / author_overlap 双向)
+// R10.5.4 Editorial: 用 ink/muted/border 替换 slate/purple/green/amber,
+// 4 类边靠 dasharray + 单一 accent 区分, 减少视觉噪音.
 const LINK_STYLES: Record<string, { stroke: string; dasharray?: string; marker?: string }> = {
-  cites: { stroke: '#64748b', marker: 'url(#arrow)' },                // slate-500
-  co_cited: { stroke: '#a855f7', dasharray: '4,3' },                    // purple-500, 虚线
-  same_venue: { stroke: '#10b981', dasharray: '2,2' },                  // emerald-500, 点线
-  author_overlap: { stroke: '#f59e0b', marker: 'url(#arrow-both)' },    // amber-500, 双向
+  cites: { stroke: '#1c1917', marker: 'url(#arrow)' },                // ink black
+  co_cited: { stroke: '#1c1917', dasharray: '4,3' },                    // ink black 虚线
+  same_venue: { stroke: '#1c1917', dasharray: '2,2' },                  // ink black 点线
+  author_overlap: { stroke: '#c2410c', marker: 'url(#arrow-both)' },    // burnt orange 双向
 };
 
 
@@ -21,16 +23,17 @@ const INTERACTION_HINTS = [
   '滚轮 = 缩放 · 空白处拖动 = 平移',
 ];
 
-// M-18: 社区色 (按 decade 区分)
+// M-18: 社区色 (R10.5.4 Editorial: 8 套"墨水 + 单一强调" 配色, 去掉红/紫/粉的糖果色)
+// 走"水彩印章" 渐变序列, 学术地图常用配色.
 const COMMUNITY_COLORS = [
-  '#3b82f6', // blue-500
-  '#8b5cf6', // violet-500
-  '#ec4899', // pink-500
-  '#f43f5e', // rose-500
-  '#ef4444', // red-500
-  '#f97316', // orange-500
-  '#eab308', // yellow-500
-  '#84cc16', // lime-500
+  '#c2410c', // burnt orange
+  '#44403c', // ink soft
+  '#78716c', // ink faded
+  '#7c2d12', // rust
+  '#9a3412', // terracotta
+  '#a8a29e', // stone
+  '#57534e', // ink muted
+  '#1c1917', // ink
 ];
 
 export function GraphPanel({ graph }: Props) {
@@ -115,7 +118,7 @@ export function GraphPanel({ graph }: Props) {
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
       .attr('fill', '#64748b');
-    // M-18: 双向 marker (author_overlap)
+    // M-18: 双向 marker (author_overlap) — Editorial: 用 burnt orange 强调
     defs
       .append('marker')
       .attr('id', 'arrow-both-end')
@@ -127,7 +130,7 @@ export function GraphPanel({ graph }: Props) {
       .attr('orient', 'auto')
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
-      .attr('fill', '#f59e0b');
+      .attr('fill', '#c2410c');
     defs
       .append('marker')
       .attr('id', 'arrow-both-start')
@@ -139,7 +142,7 @@ export function GraphPanel({ graph }: Props) {
       .attr('orient', 'auto')
       .append('path')
       .attr('d', 'M10,-5L0,0L10,5')
-      .attr('fill', '#f59e0b');
+      .attr('fill', '#c2410c');
 
     // Color scale: M-18 优先用 community 颜色 (如果 multi-decade), 否则用 relevance 颜色
     const communityCount = graph.metadata.community_count ?? 1;
@@ -262,7 +265,7 @@ export function GraphPanel({ graph }: Props) {
       .attr('fill', (d) =>
         useCommunityColor ? colorScale(d.community_id ?? 0) : colorScale(d.color_value)
       )
-      .attr('stroke', (d) => (d.id === selected ? '#ef4444' : '#1e293b'))
+      .attr('stroke', (d) => (d.id === selected ? '#c2410c' : '#1c1917'))
       .attr('stroke-width', (d) => (d.id === selected ? 3 : 1.2))
       .attr('stroke-opacity', (d) => {
         if (!selected) return 0.5;
@@ -303,7 +306,7 @@ export function GraphPanel({ graph }: Props) {
       .attr('font-size', 8)
       .attr('text-anchor', 'middle')
       .attr('dy', (d) => (d.size > 0 ? -d.size + 3 : -2))
-      .attr('fill', '#64748b')
+      .attr('fill', '#57534e')
       .attr('pointer-events', 'none');
 
     node
@@ -373,19 +376,45 @@ export function GraphPanel({ graph }: Props) {
     svg
       .selectAll<SVGGElement, SimNode>('g.node')
       .select('circle')
-      .attr('stroke', (d: any) => (d.id === selected ? '#ef4444' : '#1e293b'))
+      .attr('stroke', (d: any) => (d.id === selected ? '#c2410c' : '#1c1917'))
       .attr('stroke-width', (d: any) => (d.id === selected ? 3 : 1.2));
   }, [selected, graph]);
 
   return (
-    <aside className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full bg-[var(--sf-bg)] border-r lg:border-r-0 lg:border-l border-slate-200 dark:border-slate-700 flex flex-col">
-      <div className="px-4 py-2.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-200">引文关系图谱</h2>
+    // R10.5.4 Editorial: 左侧分隔线 (跟 QueryPanel 右侧对齐), 无圆角, 无 border-r
+    <aside
+      className="w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full flex flex-col"
+      style={{
+        backgroundColor: 'var(--sf-bg)',
+        borderLeft: '1px solid var(--sf-border)',
+      }}
+    >
+      <div
+        className="px-4 py-2.5 flex items-center justify-between border-b"
+        style={{ borderColor: 'var(--sf-border)' }}
+      >
+        <div className="flex items-baseline gap-2">
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.18em]"
+            style={{ color: 'var(--sf-accent)' }}
+          >
+            § 4
+          </span>
+          <h2
+            className="font-display text-sm italic font-semibold"
+            style={{ color: 'var(--sf-text)' }}
+          >
+            引文图谱
+          </h2>
+        </div>
         {graph && (
-          <span className="text-[10px] text-themed-muted font-mono">
-            {graph.metadata.total_papers}n / {graph.metadata.total_links}l
+          <span
+            className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            {graph.metadata.total_papers}n · {graph.metadata.total_links}l
             {graph.metadata.community_count && graph.metadata.community_count > 1 && (
-              <> · {graph.metadata.community_count} 社区</>
+              <> · {graph.metadata.community_count} 簇</>
             )}
           </span>
         )}
@@ -395,72 +424,99 @@ export function GraphPanel({ graph }: Props) {
 
         {hovered && (
           <div
-            className="absolute pointer-events-none bg-slate-900/95 text-white rounded-md px-3 py-2 text-xs max-w-xs shadow-xl z-10"
+            className="absolute pointer-events-none px-3 py-2 text-xs max-w-xs z-10 font-ui"
             style={{
               left: Math.min(
                 tooltipPos.x + 12,
                 (svgRef.current?.clientWidth || 400) - 280
               ),
               top: Math.min(tooltipPos.y + 12, (svgRef.current?.clientHeight || 600) - 140),
+              backgroundColor: 'var(--sf-text)',
+              color: 'var(--sf-bg)',
+              boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
             }}
           >
-            <p className="font-semibold mb-1 line-clamp-2">{hovered.title}</p>
-            <p className="text-slate-300 text-[10px]">
+            <p className="font-display italic font-semibold mb-1 line-clamp-2 text-[13px]">
+              {hovered.title}
+            </p>
+            <p
+              className="font-mono text-[10px] uppercase tracking-wider"
+              style={{ color: 'var(--sf-accent-soft)' }}
+            >
               {hovered.year} · {hovered.venue || hovered.source}
             </p>
-            <p className="text-slate-300 text-[10px] mt-1">
+            <p className="text-[10px] mt-1 opacity-80">
               Citations: {hovered.citation_count.toLocaleString()} · Score:{' '}
               {hovered.final_score?.toFixed(1) ?? '—'}
             </p>
-            {/* M-18: 4 类边元信息 + 中心度 + 社区标签 */}
             {hovered.in_degree !== undefined && (
-              <p className="text-slate-300 text-[10px] mt-1">
-                入度: {hovered.in_degree} · 出度: {hovered.out_degree} · PR:{' '}
+              <p className="text-[10px] mt-1 opacity-80">
+                入度 {hovered.in_degree} · 出度 {hovered.out_degree} · PR{' '}
                 {hovered.pagerank?.toFixed(2) ?? '—'}
                 {hovered.community_id !== undefined && (
-                  <> · Decade-{hovered.community_id}</>
+                  <> · 簇 {hovered.community_id}</>
                 )}
               </p>
             )}
             {hovered.abstract && (
-              <p className="text-themed-muted text-[10px] mt-1.5 line-clamp-3 leading-relaxed">
+              <p
+                className="text-[10px] mt-1.5 line-clamp-3 leading-relaxed"
+                style={{ color: 'var(--sf-accent-soft)' }}
+              >
                 {hovered.abstract}
               </p>
             )}
           </div>
         )}
 
-        {/* M-18: 4 类边图例 + community 颜色 */}
-        <div className="absolute bottom-2 left-2 bg-[var(--sf-bg)]/90 backdrop-blur rounded p-2 text-[10px] text-themed-muted space-y-0.5">
-          <div className="font-medium text-themed">边类型 (M-18 4 类)</div>
+        {/* M-18: 4 类边图例 + community 颜色 — Editorial 极简风 */}
+        <div
+          className="absolute bottom-2 left-2 p-2 text-[10px] space-y-0.5 font-mono"
+          style={{
+            backgroundColor: 'var(--sf-bg)',
+            border: '1px solid var(--sf-border)',
+            color: 'var(--sf-muted)',
+          }}
+        >
+          <div
+            className="font-semibold uppercase tracking-[0.15em] text-[9px]"
+            style={{ color: 'var(--sf-text)' }}
+          >
+            边类型
+          </div>
           <div className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-px" style={{ background: '#64748b' }} />
-            <span>cites 直接引用</span>
+            <span className="inline-block w-3 h-px" style={{ background: '#1c1917' }} />
+            <span>cites</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: '#a855f7', borderTop: '1px dashed #a855f7' }}
+              style={{ background: 'transparent', borderTop: '1px dashed #1c1917' }}
             />
-            <span>co_cited 共同引用</span>
+            <span>co-cited</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: '#10b981', borderTop: '1px dotted #10b981' }}
+              style={{ background: 'transparent', borderTop: '1px dotted #1c1917' }}
             />
-            <span>same_venue 同会议</span>
+            <span>same venue</span>
           </div>
           <div className="flex items-center gap-1.5">
             <span
               className="inline-block w-3 h-px"
-              style={{ background: '#f59e0b' }}
+              style={{ background: '#c2410c' }}
             />
-            <span>author_overlap 共同作者</span>
+            <span>author overlap</span>
           </div>
-          <div className="text-themed-muted pt-0.5">节点大小 = log(引用数) · 颜色 = 社区</div>
+          <div
+            className="pt-0.5 mt-1 border-t"
+            style={{ borderColor: 'var(--sf-border)' }}
+          >
+            节点大小 = log(引用数) · 颜色 = 社区
+          </div>
           {INTERACTION_HINTS.map((h) => (
-            <div key={h} className="text-themed-muted">{h}</div>
+            <div key={h}>{h}</div>
           ))}
         </div>
       </div>
