@@ -21,6 +21,12 @@ interface Props {
   // 顶层字段, 前端直接用, 替代之前从 papers[].is_fallback 单篇聚合的 useMemo 派生.
   isDegradedResponse?: boolean;
   fallbackPaperCount?: number;
+  // R10.5.5: 跨组件论文聚焦
+  selectedPaperId?: string | null;
+  onSelectPaper?: (paperId: string | null) => void;
+  // R10.5.5: 最近搜索 (localStorage LRU 5 条)
+  recentSearches?: string[];
+  onClearRecent?: () => void;
 }
 
 const SUGGESTIONS = [
@@ -31,18 +37,51 @@ const SUGGESTIONS = [
   'chain of thought reasoning in LLMs',
 ];
 
+// R10.5.5: 表单状态 (budget / maxIter / provider) 跨刷新持久化
+// 用户不需要每次都重新设预算 / 迭代次数 / provider, 提升"重复检索同一领域"的体验.
+const FORM_STORAGE_KEY = 'sf-form-state';
+
+interface PersistedForm {
+  budget: number;
+  maxIter: number;
+  provider: string;
+}
+
+function loadFormState(): Partial<PersistedForm> {
+  try {
+    const raw = localStorage.getItem(FORM_STORAGE_KEY);
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    return typeof obj === 'object' && obj !== null ? obj : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFormState(s: PersistedForm): void {
+  try {
+    localStorage.setItem(FORM_STORAGE_KEY, JSON.stringify(s));
+  } catch {
+    // 静默
+  }
+}
+
 export function QueryPanel({
   loading, onSearch, onReset, papers, lastQuery,
   currentStep = 0, elapsedSec = 0, pipelineSteps = [],
   isDegradedResponse = false, fallbackPaperCount = 0,
+  selectedPaperId = null, onSelectPaper,
+  recentSearches = [], onClearRecent,
 }: Props) {
+  // R10.5.5: 从 localStorage 恢复预算/迭代/provider 默认值
+  const persisted = loadFormState();
   const [query, setQuery] = useState('');
-  const [budget, setBudget] = useState(2.0);
-  const [maxIter, setMaxIter] = useState(3);
+  const [budget, setBudget] = useState<number>(typeof persisted.budget === 'number' ? persisted.budget : 2.0);
+  const [maxIter, setMaxIter] = useState<number>(typeof persisted.maxIter === 'number' ? persisted.maxIter : 3);
   // LLM provider 选择 — 拉取后端 /providers 列表（仅 has_key=true 可见）
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState<string>('');
-  const [selectedProvider, setSelectedProvider] = useState<string>('');  // 空 = 用默认
+  const [defaultProvider, setDefaultProvider] = useState<string>(persisted.provider || '');
+  const [selectedProvider, setSelectedProvider] = useState<string>(persisted.provider || '');  // 空 = 用默认
   const [providersLoading, setProvidersLoading] = useState(false);
 
   useEffect(() => {
@@ -61,16 +100,14 @@ export function QueryPanel({
         });
         setProviders(sorted);
         setDefaultProvider(resp.default_provider);
-        // 初始化为默认 provider (minimax 优先, 后端 default 次之, 最后空字符串)
-        // 旧逻辑: 用后端 default_provider 字段; 但 .env 可能配了 minimax 没 key,
-        // 那时 default_provider='minimax' 但 has_key=false, 默认 fallback 到第一个有 key 的.
-        let def = sorted.find(
-          (p) => p.id === resp.default_provider
-        );
-        if (!def && sorted.length > 0) {
-          def = sorted[0];  // 第一个 (排序后 minimax 优先)
+        // 初始化为默认 provider. 优先级: 持久化 > 后端 default_provider > 第一个.
+        let def = sorted.find((p) => p.id === selectedProvider);  // 持久化的仍合法
+        if (!def) def = sorted.find((p) => p.id === resp.default_provider);
+        if (!def && sorted.length > 0) def = sorted[0];
+        if (def) {
+          setSelectedProvider(def.id);
+          setDefaultProvider(def.id);
         }
-        if (def) setSelectedProvider(def.id);
       })
       .catch((err) => {
         // 静默失败：provider 下拉为空时回退到后端默认
@@ -82,6 +119,12 @@ export function QueryPanel({
     return () => { cancelled = true; };
   }, []);
 
+  // R10.5.5: budget / maxIter / provider 变更即写 localStorage
+  // (debounce 是不必要的 — 三个值都通过受控 input 触发, 量小)
+  useEffect(() => {
+    saveFormState({ budget, maxIter, provider: selectedProvider });
+  }, [budget, maxIter, selectedProvider]);
+
   const submit = (e?: React.FormEvent) => {
     e?.preventDefault();
     onSearch(query, budget, maxIter, selectedProvider || undefined);
@@ -91,11 +134,17 @@ export function QueryPanel({
     setQuery(s);
   };
 
+  // R10.5.5: 点击最近搜索直接回填 + 自动触发检索
+  // 比单纯回填更好: 用户意图明显, 立即重跑才是符合期望的行为
+  const useRecent = (s: string) => {
+    setQuery(s);
+    onSearch(s, budget, maxIter, selectedProvider || undefined);
+  };
+
   const handleReset = () => {
-    setQuery("");
-    setBudget(2.0);
-    setMaxIter(3);
-    setSelectedProvider(defaultProvider);
+    setQuery('');
+    // budget/maxIter/provider 保留用户偏好 (持久化, 重置搜索时不清),
+    // 这是符合预期的 — 用户改了预算希望下次还用
     onReset();
   };
 
@@ -132,12 +181,20 @@ export function QueryPanel({
             placeholder="输入研究问题…"
             rows={2}
             maxLength={2000}
+            data-search-input
             className="w-full font-body text-[15px] leading-relaxed border rounded-none p-2.5 resize-none transition-colors"
             style={{
               borderColor: 'var(--sf-border)',
               backgroundColor: 'var(--sf-bg)',
               color: 'var(--sf-text)',
               fontStyle: query ? 'normal' : 'italic',
+            }}
+            onKeyDown={(e) => {
+              // Ctrl/Cmd+Enter 也提交 — 用户多行 query 时不能只靠表单 submit 按钮
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                e.preventDefault();
+                submit();
+              }
             }}
           />
           {/* Round 4 U3: 实时字符计数, 颜色用 CSS 变量 */}
@@ -370,6 +427,67 @@ export function QueryPanel({
             ))}
           </div>
         </div>
+
+        {/* R10.5.5: 最近搜索 (localStorage LRU 5) — 点击即重跑 */}
+        {recentSearches.length > 0 && (
+          <div className="mt-3 pt-3 border-t" style={{ borderColor: 'var(--sf-border)' }}>
+            <div className="flex items-center justify-between mb-1.5">
+              <p
+                className="text-[9px] uppercase tracking-[0.18em] font-mono"
+                style={{ color: 'var(--sf-muted)' }}
+              >
+                最近搜索
+              </p>
+              {onClearRecent && (
+                <button
+                  type="button"
+                  onClick={onClearRecent}
+                  className="text-[9px] font-mono uppercase tracking-[0.15em] hover:opacity-100 opacity-60 transition"
+                  style={{ color: 'var(--sf-muted)' }}
+                  title="清除全部最近搜索"
+                >
+                  清除
+                </button>
+              )}
+            </div>
+            <div className="space-y-0.5">
+              {recentSearches.map((s, i) => (
+                <button
+                  key={`${s}-${i}`}
+                  type="button"
+                  onClick={() => useRecent(s)}
+                  className="group flex items-center gap-2 w-full text-left px-1.5 py-1 transition-colors"
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                  title={s}
+                >
+                  <span
+                    className="font-mono text-[9px] tabular-nums shrink-0 w-4"
+                    style={{ color: 'var(--sf-muted)' }}
+                  >
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <span
+                    className="font-body text-[12px] flex-1 min-w-0 truncate"
+                    style={{ color: 'var(--sf-text)' }}
+                  >
+                    {s}
+                  </span>
+                  <span
+                    className="font-mono text-[9px] opacity-0 group-hover:opacity-100 transition shrink-0"
+                    style={{ color: 'var(--sf-accent)' }}
+                  >
+                    ↵
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto min-h-0">
@@ -493,84 +611,101 @@ export function QueryPanel({
         {/* 论文列表 — Editorial: 序号用 Fraunces 衬线斜体 (像脚注编号),
             标题用 Newsreader 15px 衬线 (长阅读), 元数据 mono + 细线分隔. */}
         <ul>
-          {papers.map((p, i) => (
-            <li
-              key={p.paper_id || i}
-              className="px-4 py-2.5 cursor-pointer transition-colors border-b"
-              style={{ borderColor: 'var(--sf-border)' }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }}
-              onClick={() => {
-                // BUG-003 / VULN-004 修复：URL 协议白名单 + noopener/noreferrer
-                if (p.url && /^https?:\/\//i.test(p.url)) {
-                  window.open(p.url, '_blank', 'noopener,noreferrer');
-                }
-              }}
-              title={p.title}
-            >
-              <div className="flex items-start gap-2.5">
-                <span
-                  className="font-display italic text-sm leading-tight shrink-0 w-5 text-right tabular-nums"
-                  style={{ color: 'var(--sf-accent)' }}
-                >
-                  {String(i + 1).padStart(2, '0')}
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-start gap-1.5">
-                    <p
-                      className="font-body text-[14px] line-clamp-2 leading-snug flex-1"
-                      style={{ color: 'var(--sf-text)' }}
-                    >
-                      {p.title}
-                    </p>
-                    {p.is_fallback && (
-                      <span
-                        className="shrink-0 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5"
-                        style={{
-                          backgroundColor: 'var(--sf-accent-soft)',
-                          color: 'var(--sf-accent)',
-                        }}
-                        title="此论文来自后备 fallback 数据"
-                        data-testid="paper-fallback-badge"
-                      >
-                        fallback
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    className="flex items-center gap-2 mt-1 text-[10px] font-mono uppercase tracking-wider"
-                    style={{ color: 'var(--sf-muted)' }}
+          {papers.map((p, i) => {
+            const isSelected = p.paper_id && p.paper_id === selectedPaperId;
+            return (
+              <li
+                key={p.paper_id || i}
+                className="px-4 py-2.5 cursor-pointer transition-colors border-b"
+                style={{
+                  borderColor: 'var(--sf-border)',
+                  backgroundColor: isSelected ? 'var(--sf-bg-elev)' : undefined,
+                  borderLeft: isSelected ? '3px solid var(--sf-accent)' : '3px solid transparent',
+                  paddingLeft: isSelected ? '13px' : '16px',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+                onClick={(e) => {
+                  // R10.5.5: 单击只高亮 (跨组件聚焦), 不跳转
+                  // 双击或按住 Ctrl/Cmd 单击才打开 URL — 跟 GraphPanel 约定一致
+                  const wantsOpen = e.ctrlKey || e.metaKey || e.detail > 1;
+                  if (wantsOpen) {
+                    // BUG-003 / VULN-004 修复：URL 协议白名单 + noopener/noreferrer
+                    if (p.url && /^https?:\/\//i.test(p.url)) {
+                      window.open(p.url, '_blank', 'noopener,noreferrer');
+                    }
+                    return;
+                  }
+                  if (p.paper_id && onSelectPaper) {
+                    onSelectPaper(isSelected ? null : p.paper_id);
+                  }
+                }}
+                title={`${p.title}\n单击 = 跨组件聚焦 · 双击 / Ctrl+单击 = 打开论文`}
+              >
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className="font-display italic text-sm leading-tight shrink-0 w-5 text-right tabular-nums"
+                    style={{ color: 'var(--sf-accent)' }}
                   >
-                    <span className="tabular-nums">{p.year || '—'}</span>
-                    <span style={{ color: 'var(--sf-border)' }}>·</span>
-                    <span className="tabular-nums">{p.citation_count.toLocaleString()} cite</span>
-                    <span style={{ color: 'var(--sf-border)' }}>·</span>
-                    <span
-                      className="tabular-nums font-semibold"
-                      style={{ color: 'var(--sf-accent)' }}
-                    >
-                      ★{p.final_score.toFixed(1)}
-                    </span>
-                    {p.is_expanded && (
-                      <span
-                        className="ml-auto text-[9px] font-mono uppercase tracking-wider px-1"
-                        style={{
-                          borderLeft: '2px solid var(--sf-accent)',
-                          color: 'var(--sf-accent)',
-                        }}
+                    {String(i + 1).padStart(2, '0')}
+                  </span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-start gap-1.5">
+                      <p
+                        className="font-body text-[14px] line-clamp-2 leading-snug flex-1"
+                        style={{ color: 'var(--sf-text)' }}
                       >
-                        ext
+                        {p.title}
+                      </p>
+                      {p.is_fallback && (
+                        <span
+                          className="shrink-0 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5"
+                          style={{
+                            backgroundColor: 'var(--sf-accent-soft)',
+                            color: 'var(--sf-accent)',
+                          }}
+                          title="此论文来自后备 fallback 数据"
+                          data-testid="paper-fallback-badge"
+                        >
+                          fallback
+                        </span>
+                      )}
+                    </div>
+                    <div
+                      className="flex items-center gap-2 mt-1 text-[10px] font-mono uppercase tracking-wider"
+                      style={{ color: 'var(--sf-muted)' }}
+                    >
+                      <span className="tabular-nums">{p.year || '—'}</span>
+                      <span style={{ color: 'var(--sf-border)' }}>·</span>
+                      <span className="tabular-nums">{p.citation_count.toLocaleString()} cite</span>
+                      <span style={{ color: 'var(--sf-border)' }}>·</span>
+                      <span
+                        className="tabular-nums font-semibold"
+                        style={{ color: 'var(--sf-accent)' }}
+                      >
+                        ★{p.final_score.toFixed(1)}
                       </span>
-                    )}
+                      {p.is_expanded && (
+                        <span
+                          className="ml-auto text-[9px] font-mono uppercase tracking-wider px-1"
+                          style={{
+                            borderLeft: '2px solid var(--sf-accent)',
+                            color: 'var(--sf-accent)',
+                          }}
+                        >
+                          ext
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       </div>
     </aside>

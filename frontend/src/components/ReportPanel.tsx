@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import type { Paper } from '../types';
 
 // marked v14+：setOptions 已废弃，改用 marked.use()。
 // 多次调用 use() 会合并，所以这里只设一次。
@@ -21,15 +22,44 @@ interface Props {
   // 用户一键导入 Zotero / Mendeley / EndNote
   bibtex?: string;
   ris?: string;
+  // R10.5.5: 跨组件论文聚焦 — 报告内引用表 / 锚点
+  selectedPaperId?: string | null;
+  onSelectPaper?: (paperId: string | null) => void;
+  papers?: Paper[];
 }
 
 export function ReportPanel({
   report, loading, query,
   errorMsg = null, lastQuery = null, onRetry,
   bibtex = '', ris = '',
+  selectedPaperId = null, onSelectPaper,
+  papers = [],
 }: Props) {
   const [copied, setCopied] = useState(false);
   const [exportedFormat, setExportedFormat] = useState<string | null>(null);
+
+  // R10.5.5: 报告内的 paper_id 锚点 (后端 synthesis 节点会生成 [论文 N] 引用)
+  // 给 paper_id 生成 set, 渲染时在 report-body 末尾注入 data-paper-id 锚点
+  const paperIdSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of papers) if (p.paper_id) s.add(p.paper_id);
+    return s;
+  }, [papers]);
+
+  // R10.5.5: 选中论文变化时, 报告正文末尾的 paper_anchors 表对应行高亮 (CSS-only via data attr)
+  useEffect(() => {
+    const root = document.querySelector('.report-body');
+    if (!root) return;
+    // 移除旧高亮
+    root.querySelectorAll('[data-sf-selected]').forEach((el) =>
+      el.removeAttribute('data-sf-selected')
+    );
+    if (selectedPaperId) {
+      root
+        .querySelectorAll(`[data-paper-id="${CSS.escape(selectedPaperId)}"]`)
+        .forEach((el) => el.setAttribute('data-sf-selected', 'true'));
+    }
+  }, [selectedPaperId, report]);
 
   const html = useMemo(() => {
     if (!report) return '';
@@ -314,6 +344,89 @@ export function ReportPanel({
               已附在综述末尾 (含 SS ID + 直链),
               您可逐条点开核对综述里诸如「某论文 2017 年提出 Transformer」之类的声明。
             </span>
+          </div>
+        )}
+
+        {/* R10.5.5: 报告末尾的论文 quick-look 卡片网格
+            不依赖后端生成 (后端 marked 输出是固定 HTML 难以加 data-* 属性),
+            改用前端从 papers[] prop 渲染可点击的 paper_id 卡 → 跨组件聚焦 + 打开. */}
+        {!loading && report && papers.length > 0 && onSelectPaper && (
+          <div
+            className="mt-8 pt-4 border-t"
+            style={{ borderColor: 'var(--sf-border)' }}
+          >
+            <div className="flex items-baseline gap-2 mb-3">
+              <span
+                className="font-mono text-[10px] uppercase tracking-[0.18em]"
+                style={{ color: 'var(--sf-accent)' }}
+              >
+                § 引文
+              </span>
+              <h3
+                className="font-display italic text-sm font-semibold"
+                style={{ color: 'var(--sf-text)' }}
+              >
+                来源一览 ({papers.length})
+              </h3>
+            </div>
+            <ol className="space-y-1.5">
+              {papers.slice(0, 12).map((p, i) => {
+                const isSelected = p.paper_id && p.paper_id === selectedPaperId;
+                return (
+                  <li
+                    key={p.paper_id || i}
+                    data-paper-id={p.paper_id}
+                    data-sf-selected={isSelected ? 'true' : undefined}
+                    onClick={(e) => {
+                      const wantsOpen = e.ctrlKey || e.metaKey || e.detail > 1;
+                      if (wantsOpen) {
+                        if (p.url && /^https?:\/\//i.test(p.url)) {
+                          window.open(p.url, '_blank', 'noopener,noreferrer');
+                        }
+                        return;
+                      }
+                      if (p.paper_id) onSelectPaper(isSelected ? null : p.paper_id);
+                    }}
+                    className="flex items-baseline gap-3 py-1.5 cursor-pointer transition-colors"
+                    style={{
+                      color: 'var(--sf-text)',
+                      paddingLeft: '10px',
+                      borderLeft: isSelected
+                        ? '3px solid var(--sf-accent)'
+                        : '3px solid transparent',
+                    }}
+                    title={`${p.title}\n单击 = 跨组件聚焦 · 双击 / Ctrl+单击 = 打开论文`}
+                  >
+                    <span
+                      className="font-display italic text-sm shrink-0 w-5 text-right tabular-nums"
+                      style={{ color: 'var(--sf-accent)' }}
+                    >
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
+                    <span
+                      className="font-body text-[13px] flex-1 min-w-0 truncate"
+                      style={{ color: 'var(--sf-text)' }}
+                    >
+                      {p.title}
+                    </span>
+                    <span
+                      className="font-mono text-[10px] uppercase tracking-wider tabular-nums shrink-0"
+                      style={{ color: 'var(--sf-muted)' }}
+                    >
+                      {p.year || '—'} · ★{p.final_score.toFixed(1)}
+                    </span>
+                  </li>
+                );
+              })}
+              {papers.length > 12 && (
+                <li
+                  className="text-[10px] font-mono uppercase tracking-[0.15em] text-center pt-2"
+                  style={{ color: 'var(--sf-muted)' }}
+                >
+                  · 还有 {papers.length - 12} 篇见左侧论文列表 ·
+                </li>
+              )}
+            </ol>
           </div>
         )}
 

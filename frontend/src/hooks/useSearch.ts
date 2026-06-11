@@ -65,6 +65,40 @@ interface SSEBudgetExceededEvent {
 
 type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent;
 
+// R10.5.5 交互升级: 最近搜索 localStorage 持久化
+// 5 条上限, LRU 替换, 用 'sf-recent-searches' 命名空间
+const RECENT_KEY = 'sf-recent-searches';
+const RECENT_MAX = 5;
+
+function loadRecent(): string[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecent(queries: string[]): void {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(queries.slice(0, RECENT_MAX)));
+  } catch {
+    // 静默
+  }
+}
+
+// R10.5.5 交互升级: 成本超限结构化数据
+// 之前 budget_exceeded 只是 setError 字符串, 用户只能修改预算后手动重跑.
+// 现在暴露结构化数据 + 建议预算, App.tsx 显示"调高预算"按钮一键重跑.
+export interface BudgetExceeded {
+  cost_usd: number;
+  budget_usd: number;
+  message?: string;
+  node?: string;
+}
+
 export function useSearch() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +106,9 @@ export function useSearch() {
   const [lastQuery, setLastQuery] = useState('');
   const [currentStep, setCurrentStep] = useState(0);
   const [elapsedSec, setElapsedSec] = useState(0);
+  // R10.5.5: 成本超限结构化数据 + 最近搜索历史
+  const [budgetExceeded, setBudgetExceeded] = useState<BudgetExceeded | null>(null);
+  const [recentSearches, setRecentSearches] = useState<string[]>(loadRecent);
 
   const esRef = useRef<EventSource | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -88,6 +125,10 @@ export function useSearch() {
   // R10.5 Fix-P0-2.2-b: 全局兜底超时 timer, 防止 SSE 真死锁时 (e.g. 401 / 后端卡死)
   // 90s 仍无任何事件时强制报错, 不再让用户看 1000s loading.
   const globalTimeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff, 防止用户瞬时网络抖动
+  // (WIFI 切换 / VPN 重连) 整次搜索直接失败. 重试仍失败才显示 error.
+  const retryAttemptedRef = useRef<boolean>(false);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const stopFallbackProgress = useCallback(() => {
     if (fallbackTimerRef.current) {
@@ -110,6 +151,10 @@ export function useSearch() {
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
+      }
+      if (retryTimeoutRef.current) {
+        clearTimeout(retryTimeoutRef.current);
+        retryTimeoutRef.current = null;
       }
     };
   }, []);
@@ -228,10 +273,21 @@ export function useSearch() {
           return true;
         }
         if (payload.event === 'budget_exceeded') {
-          const costStr = typeof payload.cost_usd === 'number' ? payload.cost_usd.toFixed(4) : '?';
-          const budgetStr = typeof payload.budget_usd === 'number' ? payload.budget_usd.toFixed(2) : '?';
+          // R10.5.5: 暴露结构化数据给 App.tsx 显示"调高预算"一键恢复
+          // 之前只 setError 字符串, 用户必须手动改表单. 现在 App 读 budgetExceeded
+          // 显示 inline 按钮, 1.5x 当前预算重跑.
+          const costUsd = typeof payload.cost_usd === 'number' ? payload.cost_usd : 0;
+          const budgetUsd = typeof payload.budget_usd === 'number' ? payload.budget_usd : 0;
+          setBudgetExceeded({
+            cost_usd: costUsd,
+            budget_usd: budgetUsd,
+            message: payload.message,
+            node: payload.node,
+          });
+          const costStr = costUsd.toFixed(4);
+          const budgetStr = budgetUsd.toFixed(2);
           setError(
-            `成本已达 $${costStr} >= 预算 $${budgetStr}。请降低 max_iterations 或 budget 后重试。`
+            `成本已达 $${costStr} >= 预算 $${budgetStr}。点击右侧「调高预算」一键重试。`
           );
           return true;
         }
@@ -308,6 +364,14 @@ export function useSearch() {
       // 重试按钮 fallback 也会拿错. R10.5 SSE 重构时遗漏, 一直未恢复.
       setLastQuery(trimmed);
       setError(null);
+      // R10.5.5: 清掉旧的 budgetExceeded 状态, 新搜索给用户干净开始
+      setBudgetExceeded(null);
+      // R10.5.5: 把这次 query 加到最近搜索 (LRU 去重, 置顶)
+      setRecentSearches((prev) => {
+        const next = [trimmed, ...prev.filter((q) => q !== trimmed)].slice(0, RECENT_MAX);
+        saveRecent(next);
+        return next;
+      });
       // P1-11 fix (深度审计 §P1-11): 假进度计时器在真实 SSE 事件到来前
       // 一直显示 0.0s, 用户以为程序卡死. 启动 setInterval 200ms 推进 elapsedSec.
       // 在第一个真实 SSE 事件触发时由 stopFallbackProgress 清掉.
@@ -320,16 +384,47 @@ export function useSearch() {
       }, 200);
       // H6: bump generation
       genRef.current += 1;
+      // R10.5.5: 重置重试标志 — 新搜索允许一次网络重试
+      retryAttemptedRef.current = false;
       setLoading(true);
       try {
         await searchWithFetchStream(trimmed, budget, maxIter, provider);
       } catch (e: any) {
-        setError(e?.message || '搜索失败');
+        const msg = e?.message || '搜索失败';
+        // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff
+        // 判断 "网络错": 错误信息含 fetch/网络/timeout/aborted 等
+        // 不重试 budget_exceeded / 401 / 用户取消 / SSE 解析错 (这些是确定性问题)
+        const isNetworkError = /fetch failed|networkerror|timeout|aborted|failed to fetch/i.test(msg);
+        if (isNetworkError && !retryAttemptedRef.current) {
+          retryAttemptedRef.current = true;
+          // 静默重试, 不向用户报"网络错"再消失, 给个轻提示
+          setError(`网络抖动, 2s 后自动重试…`);
+          if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
+          retryTimeoutRef.current = setTimeout(() => {
+            // 重试前清 error, 避免闪烁
+            setError(null);
+            // 用同一组参数重跑
+            search(trimmed, budget, maxIter, provider);
+          }, 2000);
+          return;
+        }
+        setError(msg);
         setLoading(false);
       }
     },
     [searchWithFetchStream]
   );
+
+  // R10.5.5: 主动清除最近搜索
+  const clearRecentSearches = useCallback(() => {
+    setRecentSearches([]);
+    saveRecent([]);
+  }, []);
+
+  // R10.5.5: 主动清除 budgetExceeded (用于关闭恢复按钮提示)
+  const dismissBudgetExceeded = useCallback(() => {
+    setBudgetExceeded(null);
+  }, []);
 
   const reset = useCallback(() => {
     if (esRef.current) {
@@ -343,6 +438,11 @@ export function useSearch() {
     if (reconnectTimerRef.current) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
+    }
+    // R10.5.5: 重置时清 retry timeout (取消重试中网络)
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
     }
     // H6: bump generation
     genRef.current += 1;
@@ -375,5 +475,10 @@ export function useSearch() {
     currentStep,
     elapsedSec,
     pipelineSteps: PIPELINE_STEPS,
+    // R10.5.5: 新增导出 — 最近搜索 + 成本超限结构化数据 + 关闭
+    recentSearches,
+    clearRecentSearches,
+    budgetExceeded,
+    dismissBudgetExceeded,
   };
 }

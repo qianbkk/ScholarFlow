@@ -282,3 +282,17 @@ body {
   outline-offset: 2px;
   border-radius: 2px;
 }
+
+/* === R10.5.5: 跨组件论文聚焦 — 报告内锚点高亮 === */
+/* 报告末尾的 paper_anchors 表, 选中论文的对应行加左侧色条 + 软底色 */
+.report-body [data-paper-id] {
+  cursor: pointer;
+  transition: background-color 150ms ease;
+}
+.report-body [data-paper-id]:hover {
+  background-color: var(--sf-bg-elev);
+}
+.report-body [data-paper-id][data-sf-selected] {
+  background-color: var(--sf-accent-soft) !important;
+  box-shadow: inset 3px 0 0 var(--sf-accent);
+}

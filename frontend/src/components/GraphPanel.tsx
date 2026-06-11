@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import type { CitationGraph, GraphNode, SimNode, GraphLink } from '../types';
 
 interface Props {
   graph: CitationGraph | null;
+  // R10.5.5: 跨组件论文聚焦 — 外部 controlled selected + callback
+  selectedPaperId?: string | null;
+  onSelectPaper?: (paperId: string | null) => void;
 }
 
 // M-18: 4 类边的视觉颜色 (cites 实箭头 / co_cited 虚线 / same_venue 点线 / author_overlap 双向)
@@ -36,11 +39,78 @@ const COMMUNITY_COLORS = [
   '#1c1917', // ink
 ];
 
-export function GraphPanel({ graph }: Props) {
+export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const rootRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  // R10.5.5: 内部 selected 让位给外部 controlled selectedPaperId (受控优先)
+  // 点击节点 → 通知 App.tsx, App 通过 prop 回流. 保持单一数据源.
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  // R10.5.5: 当前可见节点 / 总节点 (供工具栏显示)
+  const [neighborCount, setNeighborCount] = useState<number | null>(null);
+
+  const selected = selectedPaperId;
+
+  // R10.5.5: 当前选中节点的 1 跳邻居数 (含自身) — 工具栏显示
+  useEffect(() => {
+    if (!graph || !selected) {
+      setNeighborCount(null);
+      return;
+    }
+    const ns = new Set<string>([selected]);
+    for (const l of graph.links) {
+      const sAny = l.source as unknown as string | { id: string };
+      const tAny = l.target as unknown as string | { id: string };
+      const sId = typeof sAny === 'string' ? sAny : sAny.id;
+      const tId = typeof tAny === 'string' ? tAny : tAny.id;
+      if (sId === selected) ns.add(tId);
+      if (tId === selected) ns.add(sId);
+    }
+    setNeighborCount(ns.size);
+  }, [graph, selected]);
+
+  // R10.5.5: fit-to-view — 计算所有节点的 bbox, 平滑缩放 + 平移到刚好覆盖
+  // 用户滚轮缩放过大/过小/拖偏后, 一键回正.
+  const fitToView = useCallback(() => {
+    if (!svgRef.current || !zoomRef.current) return;
+    const svg = d3.select(svgRef.current);
+    // 取 root <g> 实际渲染的 bbox (含 zoom transform)
+    const rootNode = rootRef.current?.node();
+    if (!rootNode) return;
+    const bbox = rootNode.getBBox();
+    if (bbox.width === 0 || bbox.height === 0) return;
+    const width = svgRef.current.clientWidth || 400;
+    const height = svgRef.current.clientHeight || 600;
+    // 加 20% 边距防边缘裁切
+    const padding = 1.2;
+    const scale = Math.min(
+      (width * padding) / bbox.width,
+      (height * padding) / bbox.height,
+      4  // 上限 4x, 跟 scaleExtent 一致
+    );
+    const tx = width / 2 - (bbox.x + bbox.width / 2) * scale;
+    const ty = height / 2 - (bbox.y + bbox.height / 2) * scale;
+    const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
+    // 750ms 平滑过渡 (普通 zoom 行为不带 transition, 用 selection.interrupt + transition)
+    svg.transition().duration(750).call(zoomRef.current.transform, transform);
+  }, []);
+
+  // R10.5.5: 键盘快捷键 "f" → fit-to-view (在面板聚焦时)
+  // 不在 App.tsx 全局监听, 因为 f 字母常用于输入; 只在 svg 容器 focus 时生效
+  // 简化: 直接在 svg 上加 tabIndex + onKeyDown
+  useEffect(() => {
+    const el = svgRef.current;
+    if (!el) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault();
+        fitToView();
+      }
+    };
+    el.addEventListener('keydown', onKey);
+    return () => el.removeEventListener('keydown', onKey);
+  }, [fitToView]);
 
   useEffect(() => {
     if (!svgRef.current) return;
@@ -91,6 +161,9 @@ export function GraphPanel({ graph }: Props) {
     // svg 调用 zoom (滚轮 + 拖动空白处平移); 节点上 d3.drag 会阻止事件冒泡
     // 让节点拖动和 svg 平移共存, 互不干扰 (drag 有 subject 范围限定).
     svg.call(zoom);
+    // R10.5.5: 保存 zoom + root 引用, 工具栏 fit-to-view / 重置缩放 用
+    zoomRef.current = zoom;
+    rootRef.current = root;
 
     // M-18: 计算邻居集合 (用于 click 高亮 1 跳邻居)
     const neighborSet = (id: string) => {
@@ -215,10 +288,11 @@ export function GraphPanel({ graph }: Props) {
       .on('mouseout', () => setHovered(null))
       .on('click', (_, d) => {
         // R10.5 Fix-Click-Conflict: 单击**只高亮**, 不跳 URL.
-        // 旧版单击直接 window.open 跳网页, 用户反馈"单击/双击功能失效",
-        // 因为单击立即跳转根本没机会触发双击. 新版单击 setSelected 高亮 1 跳
-        // 邻居, 跳 URL 改成双击 (符合常见图形交互约定: 单击=选中, 双击=打开).
-        setSelected((prev) => (prev === d.id ? null : d.id));
+        // R10.5.5: 高亮状态改为外部受控 — 通知 App.tsx 改 selectedPaperId.
+        // App.tsx 单一数据源, 论文列表 / 图谱节点 / 报告引用表 三者共享同一高亮.
+        if (onSelectPaper) {
+          onSelectPaper(selected === d.id ? null : d.id);
+        }
       })
       .call(
         d3
@@ -390,37 +464,96 @@ export function GraphPanel({ graph }: Props) {
       }}
     >
       <div
-        className="px-4 py-2.5 flex items-center justify-between border-b"
+        className="px-4 py-2.5 flex items-center justify-between border-b gap-2"
         style={{ borderColor: 'var(--sf-border)' }}
       >
-        <div className="flex items-baseline gap-2">
+        <div className="flex items-baseline gap-2 min-w-0">
           <span
-            className="font-mono text-[10px] uppercase tracking-[0.18em]"
+            className="font-mono text-[10px] uppercase tracking-[0.18em] shrink-0"
             style={{ color: 'var(--sf-accent)' }}
           >
             § 4
           </span>
           <h2
-            className="font-display text-sm italic font-semibold"
+            className="font-display text-sm italic font-semibold shrink-0"
             style={{ color: 'var(--sf-text)' }}
           >
             引文图谱
           </h2>
+          {/* R10.5.5: 选中节点时显示"邻居数" — 让用户感知 1 跳聚焦范围 */}
+          {selected && neighborCount !== null && (
+            <span
+              className="font-mono text-[9px] uppercase tracking-[0.12em] truncate"
+              style={{ color: 'var(--sf-accent)' }}
+              title="1 跳邻居数 (含自身)"
+            >
+              · {neighborCount} 邻居
+            </span>
+          )}
         </div>
-        {graph && (
-          <span
-            className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums"
-            style={{ color: 'var(--sf-muted)' }}
-          >
-            {graph.metadata.total_papers}n · {graph.metadata.total_links}l
-            {graph.metadata.community_count && graph.metadata.community_count > 1 && (
-              <> · {graph.metadata.community_count} 簇</>
-            )}
-          </span>
-        )}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {graph && (
+            <span
+              className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              {graph.metadata.total_papers}n · {graph.metadata.total_links}l
+              {graph.metadata.community_count && graph.metadata.community_count > 1 && (
+                <> · {graph.metadata.community_count} 簇</>
+              )}
+            </span>
+          )}
+          {/* R10.5.5: 图谱工具栏 — fit-to-view + 重置缩放 + 清选中 */}
+          {graph && (
+            <>
+              <button
+                type="button"
+                onClick={fitToView}
+                title="适配视图 (f)"
+                aria-label="适配视图"
+                className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
+                style={{
+                  color: 'var(--sf-muted)',
+                  borderColor: 'var(--sf-border)',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.color = 'var(--sf-accent)';
+                  e.currentTarget.style.borderColor = 'var(--sf-accent)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.color = 'var(--sf-muted)';
+                  e.currentTarget.style.borderColor = 'var(--sf-border)';
+                }}
+              >
+                ⊡
+              </button>
+              {selected && onSelectPaper && (
+                <button
+                  type="button"
+                  onClick={() => onSelectPaper(null)}
+                  title="清选中 (Esc)"
+                  aria-label="清选中"
+                  className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
+                  style={{
+                    color: 'var(--sf-accent)',
+                    borderColor: 'var(--sf-accent)',
+                  }}
+                >
+                  ✕
+                </button>
+              )}
+            </>
+          )}
+        </div>
       </div>
       <div className="flex-1 relative min-h-[400px] lg:min-h-0">
-        <svg ref={svgRef} className="w-full h-full" />
+        <svg
+          ref={svgRef}
+          className="w-full h-full"
+          tabIndex={0}
+          role="application"
+          aria-label="引文关系图谱 (按 f 适配视图, Esc 清选中)"
+        />
 
         {hovered && (
           <div

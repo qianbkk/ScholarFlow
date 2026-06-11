@@ -57,6 +57,8 @@ export default function App() {
   const {
     loading, error, result, lastQuery, search, reset,
     currentStep, elapsedSec, pipelineSteps,
+    recentSearches, clearRecentSearches,
+    budgetExceeded, dismissBudgetExceeded,
   } = useSearch();
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -69,6 +71,10 @@ export default function App() {
   const [authState, setAuthState] = useState<'loading' | 'unauthenticated' | 'authenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null);
   // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
+  // R10.5.5: 跨组件论文聚焦 — 论文列表 / 图谱节点 / 报告引用表 三者互相同步高亮
+  const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  // R10.5.5: 快捷键面板显示状态
+  const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
 
   useEffect(() => {
     healthCheck()
@@ -158,10 +164,86 @@ export default function App() {
   const handleSearch = useCallback(
     (q: string, budget: number, maxIter: number, provider?: string) => {
       setLastSearchOpts({ budget, maxIter, provider });
+      setSelectedPaperId(null);  // 新搜索清掉旧高亮
       search(q, budget, maxIter, provider);
     },
     [search]
   );
+
+  // R10.5.5: 跨组件论文聚焦回调
+  // QueryPanel / ReportPanel / GraphPanel 都会调它, 状态集中在这里, 三个面板共享
+  const handleSelectPaper = useCallback((paperId: string | null) => {
+    setSelectedPaperId(paperId);
+  }, []);
+
+  // R10.5.5: 成本超限恢复 — 1.5x 预算重跑
+  // 旧版用户必须改表单 → 点搜索. 新版显示"调高预算"按钮一键重跑, 预算 = max(原预算 * 1.5, 已花 * 1.2)
+  // 保证再次跑能 cover 已有支出 + 一些缓冲.
+  const handleBumpBudget = useCallback(() => {
+    if (!budgetExceeded || !lastQuery || !lastSearchOpts) return;
+    const newBudget = Math.max(
+      budgetExceeded.budget_usd * 1.5,
+      budgetExceeded.cost_usd * 1.2,
+      budgetExceeded.budget_usd + 0.5
+    );
+    const rounded = Math.round(newBudget * 100) / 100;  // 保留 2 位
+    setLastSearchOpts({ ...lastSearchOpts, budget: rounded });
+    setSelectedPaperId(null);
+    search(lastQuery, rounded, lastSearchOpts.maxIter, lastSearchOpts.provider);
+    dismissBudgetExceeded();
+  }, [budgetExceeded, lastQuery, lastSearchOpts, search, dismissBudgetExceeded]);
+
+  // R10.5.5: 全局键盘快捷键
+  // Cmd/Ctrl+K 或 / → 聚焦 query 输入框
+  // Esc → 取消当前搜索 (loading 时) 或关闭快捷键面板
+  // ? (shift+/) → 显示快捷键面板
+  // 输入框聚焦时禁用, 避免抢用户输入.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // 在输入框/textarea 中不抢快捷键 (用户正常输入 /)
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable);
+
+      if (showShortcuts && e.key === 'Escape') {
+        e.preventDefault();
+        setShowShortcuts(false);
+        return;
+      }
+
+      if (e.key === 'Escape' && loading) {
+        e.preventDefault();
+        reset();
+        return;
+      }
+
+      if (isInput) return;
+
+      // Cmd/Ctrl+K → 聚焦 query
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        document.querySelector<HTMLTextAreaElement>('[data-search-input]')?.focus();
+        return;
+      }
+      // / → 聚焦 query (GitHub / Slack 风格)
+      if (e.key === '/') {
+        e.preventDefault();
+        document.querySelector<HTMLTextAreaElement>('[data-search-input]')?.focus();
+        return;
+      }
+      // ? → 快捷键面板
+      if (e.key === '?') {
+        e.preventDefault();
+        setShowShortcuts((s) => !s);
+        return;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [loading, reset, showShortcuts]);
 
   return (
     // R10.5.4 Editorial Knowledge: 整体保持 4 套主题 CSS 变量驱动的 bg/text/border.
@@ -229,7 +311,7 @@ export default function App() {
 
       {error && (
         <div
-          className="mx-4 sm:mx-6 mt-3 px-4 py-2.5 text-xs flex items-center gap-2"
+          className="mx-4 sm:mx-6 mt-3 px-4 py-2.5 text-xs flex items-center gap-2 flex-wrap"
           style={{
             backgroundColor: 'var(--sf-bg-elev)',
             color: 'var(--sf-accent)',
@@ -237,7 +319,28 @@ export default function App() {
           }}
         >
           <span className="font-mono">[!]</span>
-          <span className="font-ui">{error}</span>
+          <span className="font-ui flex-1 min-w-0">{error}</span>
+          {/* R10.5.5: 成本超限时, error 旁显示"调高预算"按钮一键重跑 */}
+          {budgetExceeded && (
+            <button
+              type="button"
+              onClick={handleBumpBudget}
+              className="font-mono text-[10px] uppercase tracking-[0.12em] px-2.5 py-1 transition-colors"
+              style={{
+                backgroundColor: 'var(--sf-accent)',
+                color: 'var(--sf-bg)',
+              }}
+              data-testid="bump-budget-btn"
+            >
+              调高到 ${(
+                Math.max(
+                  budgetExceeded.budget_usd * 1.5,
+                  budgetExceeded.cost_usd * 1.2,
+                  budgetExceeded.budget_usd + 0.5
+                )
+              ).toFixed(2)} 重试 →
+            </button>
+          )}
         </div>
       )}
 
@@ -260,6 +363,12 @@ export default function App() {
             pipelineSteps={pipelineSteps}
             isDegradedResponse={result?.is_degraded_response ?? false}
             fallbackPaperCount={result?.fallback_paper_count ?? 0}
+            // R10.5.5: 跨组件论文聚焦
+            selectedPaperId={selectedPaperId}
+            onSelectPaper={handleSelectPaper}
+            // R10.5.5: 最近搜索
+            recentSearches={recentSearches}
+            onClearRecent={clearRecentSearches}
           />
           {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
               激活 R4 U4 死代码 (用户重试按钮生效).
@@ -278,10 +387,22 @@ export default function App() {
                 ? search(q, lastSearchOpts.budget, lastSearchOpts.maxIter, lastSearchOpts.provider)
                 : search(q)
             }
+            // R10.5.5: 报告内引用表 → 跨组件论文聚焦
+            selectedPaperId={selectedPaperId}
+            onSelectPaper={handleSelectPaper}
+            papers={result?.ranked_papers ?? []}
           />
-          <GraphPanel graph={result?.citation_graph ?? null} />
+          <GraphPanel
+            graph={result?.citation_graph ?? null}
+            // R10.5.5: 图谱节点 → 跨组件论文聚焦
+            selectedPaperId={selectedPaperId}
+            onSelectPaper={handleSelectPaper}
+          />
         </div>
       </div>
+
+      {/* R10.5.5: 快捷键面板 (按 ? 触发) */}
+      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
 
       {/* R10.5.3: 认证对话框 — 未登录时强制弹出 (OPEN_MODE=false).
           z-50 模态, 阻断所有下层交互, 防止用户绕过认证直接触发 search. */}
@@ -291,6 +412,114 @@ export default function App() {
           onSuccess={handleLoginSuccess}
         />
       )}
+    </div>
+  );
+}
+
+// R10.5.5: 快捷键说明浮层 — 期刊"版权页" 风格
+const SHORTCUTS: Array<{ keys: string[]; label: string; desc: string }> = [
+  { keys: ['⌘', 'K'],     label: '聚焦查询',     desc: '快速跳到研究问题输入框' },
+  { keys: ['/'],           label: '聚焦查询',     desc: '同上 (GitHub / Slack 风格)' },
+  { keys: ['Esc'],         label: '取消 / 关闭',  desc: '中断正在跑的检索流水线, 或关闭本面板' },
+  { keys: ['?'],           label: '快捷键',       desc: '显示本面板 (再次按 ? 关闭)' },
+];
+
+function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sf-fade"
+      onClick={onClose}
+      style={{ backgroundColor: 'rgba(13, 13, 13, 0.55)' }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="shortcuts-title"
+    >
+      <div
+        className="relative w-full max-w-md p-7 sf-rise font-ui"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          backgroundColor: 'var(--sf-bg)',
+          color: 'var(--sf-text)',
+          border: '1px solid var(--sf-border)',
+          boxShadow: '0 16px 48px rgba(0,0,0,0.10)',
+        }}
+      >
+        <div
+          className="absolute top-0 left-0 right-0 h-1"
+          style={{ backgroundColor: 'var(--sf-accent)' }}
+        />
+        <div className="flex items-start justify-between mb-5">
+          <div>
+            <div
+              className="font-mono text-[9px] uppercase tracking-[0.25em] mb-1"
+              style={{ color: 'var(--sf-accent)' }}
+            >
+              § Colophon · 版权页
+            </div>
+            <h2
+              id="shortcuts-title"
+              className="font-display italic font-semibold text-2xl leading-tight"
+            >
+              快捷键
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="关闭"
+            className="font-display italic text-2xl leading-none px-1"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            ×
+          </button>
+        </div>
+        <div className="space-y-2.5">
+          {SHORTCUTS.map((s, i) => (
+            <div
+              key={i}
+              className="flex items-center gap-4 py-2 border-b"
+              style={{ borderColor: 'var(--sf-border)' }}
+            >
+              <div className="flex items-center gap-1 shrink-0 w-24">
+                {s.keys.map((k, ki) => (
+                  <kbd
+                    key={ki}
+                    className="font-mono text-[10px] font-semibold px-1.5 py-0.5 min-w-[20px] text-center"
+                    style={{
+                      backgroundColor: 'var(--sf-bg-elev)',
+                      color: 'var(--sf-text)',
+                      border: '1px solid var(--sf-border)',
+                      borderBottomWidth: '2px',
+                    }}
+                  >
+                    {k}
+                  </kbd>
+                ))}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div
+                  className="font-display italic font-semibold text-[14px]"
+                  style={{ color: 'var(--sf-text)' }}
+                >
+                  {s.label}
+                </div>
+                <div
+                  className="text-[11px] font-body mt-0.5"
+                  style={{ color: 'var(--sf-muted)' }}
+                >
+                  {s.desc}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div
+          className="mt-5 pt-3 text-[10px] font-mono uppercase tracking-[0.18em] text-center"
+          style={{ color: 'var(--sf-muted)' }}
+        >
+          ❦ &nbsp; 按 ? 或 Esc 关闭 &nbsp; ❦
+        </div>
+      </div>
     </div>
   );
 }
