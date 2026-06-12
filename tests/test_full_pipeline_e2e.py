@@ -119,6 +119,19 @@ class TestFullPipelineE2E:
         assert constraints.get("year_range") is None, \
             f"year_range should be None for non-year query, got {constraints.get('year_range')}"
 
+    def test_query_type_classified(self, client, force_mock_api):
+        """R10.5.15 P1-D: query_decomposer 把 query 分类成 simple/survey/method/...
+        分类结果进 constraints.query_type 字段, 供下游 search/synth 节点用."""
+        # mock 模式下 LLM 不返回 query_type, fallback 走 'default'
+        r = _post_search(client, "transformer self-attention", budget=0.5)
+        assert r.status_code == 200
+        constraints = r.json().get("constraints") or {}
+        # query_type 字段必须在, 值是 5 类之一 + default
+        assert "query_type" in constraints
+        assert constraints["query_type"] in (
+            "simple", "survey", "method", "comparison", "latest", "default",
+        ), f"unexpected query_type: {constraints.get('query_type')}"
+
     def test_citation_graph_has_nodes(self, client, force_mock_api):
         """图谱节点数 ≥ 1 (mock 模式下应有 mock 论文之间引文关系)."""
         r = _post_search(client, "graph attention network", budget=0.5)

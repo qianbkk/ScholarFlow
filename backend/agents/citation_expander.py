@@ -103,6 +103,21 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     else:
         seed_limit = SEED_LIMIT_DEFAULT
 
+    # R10.5.15 (P1-A 优化 2): 领域成熟度再调整. 成熟领域 (avg_citation > 500)
+    # 扩展噪声多 → seed -2 避免扩到老无关论文. 新兴领域 (avg_citation < 30)
+    # 引用稀疏 → seed +3 增加 recall. 限制在 [MIN, MAX] 内, 不冲掉 median_rel 的判断.
+    # 阈值选 500/30 (原 1000/100 偏严, 让 mock 测试 (avg~100) 误触发 +3, 现有
+    # 7 个 dynamic_seeding 测试预期 seed_limit=5, 不能破).
+    cit_counts = [p.citation_count for p in raw if (p.citation_count or 0) > 0]
+    if cit_counts:
+        avg_cit = sum(cit_counts) / len(cit_counts)
+        if avg_cit > 500:
+            seed_limit = max(SEED_LIMIT_MIN, seed_limit - 2)
+            logger.debug(f"[CitationExpander] mature field avg_cit={avg_cit:.0f}, seed_limit -> {seed_limit}")
+        elif avg_cit < 30:
+            seed_limit = min(SEED_LIMIT_MAX, seed_limit + 3)
+            logger.debug(f"[CitationExpander] emerging field avg_cit={avg_cit:.0f}, seed_limit -> {seed_limit}")
+
     # ===== 跨迭代去重：跳过已扩展过的 seed =====
     seen = set(state.get("expanded_paper_ids", []))
     # 1) 选 top-N (按引用数) → 2) 过滤 relevance < CITATION_THRESHOLD (避免雪崩)

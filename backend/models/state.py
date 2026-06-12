@@ -83,4 +83,6 @@ class SearchState(TypedDict):
     #   methods: ["transformer", "RL"]  - 方法论
     #   datasets: ["ImageNet", "GLUE"]  - 数据集
     # 没抽到就 None, search_agent 透传给 SS/OA 做精确过滤。
+    # R10.5.15 (P1-D): 加 query_type (simple/survey/method/comparison/latest),
+    # 让 search/synthesize 节点可按意图调 sub_queries 数量 / 报告侧重.
     constraints: Optional[dict]

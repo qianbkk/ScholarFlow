@@ -54,6 +54,18 @@ _VENUE_HINTS = (
 
 _YEAR_RE = _re.compile(r"\b(?:19|20)\d{2}\b")
 
+# R10.5.15 (P1-D): 5 类 query_type 各自 sub_queries 数量上限.
+# 简单查询用少量 (节省 SS/OA 配额 + 减少噪声), 综述查询用多量 (覆盖度优先).
+# 跟 prompt 里"Number of sub_queries should match query_type"对齐.
+_QUERY_TYPE_LIMITS: dict[str, int] = {
+    "simple": 2,      # 单一技术点
+    "method": 4,      # 找特定方法
+    "comparison": 5,  # 对比型
+    "latest": 4,      # 最新进展
+    "survey": 6,      # 综述全貌
+    "default": 5,     # LLM 没说 / 兜底
+}
+
 
 def _fallback_constraints(query: str) -> dict:
     """从 query 文本里粗抽 venues / year_range / methods / datasets.
@@ -108,19 +120,18 @@ async def query_decompose_node(state: SearchState) -> SearchState:
     # 这是首个 LLM 调用节点：用户原始查询直接拼入 prompt，必须隔离。
     safe_query = wrap_user_input(state['original_query'], tag="user_query")
 
-    prompt = f"""Analyze this research query and decompose it into 4-5 focused sub-queries.
+    prompt = f"""Analyze this research query and decompose it into focused sub-queries.
 
 {safe_query}
 
 Output JSON format:
 {{
     "analysis": "Brief analysis of research intent in Chinese (1-2 sentences)",
+    "query_type": "simple | survey | method | comparison | latest",
     "sub_queries": [
         "sub-query 1 (English, focus on core topic)",
         "sub-query 2 (English, focus on methods)",
-        "sub-query 3 (English, focus on applications)",
-        "sub-query 4 (English, related technology/context)",
-        "sub-query 5 (English, broader background)"
+        "sub-query 3 (English, focus on applications)"
     ],
     "key_terms": ["term1", "term2", "term3"],
     "constraints": {{
@@ -131,10 +142,18 @@ Output JSON format:
     }}
 }}
 
+query_type 选择规则 (P1-D 自适应分解, R10.5.15):
+  - "simple"    : 单一技术点, 1-2 个 sub_queries 够. e.g. "transformer self-attention"
+  - "survey"    : 综述型 (想了解领域全貌), 5-6 个 sub_queries. e.g. "graph neural network overview"
+  - "method"    : 找特定方法, 3-4 sub_queries. e.g. "AlphaFold protein structure"
+  - "comparison": 对比型, 4-5 sub_queries (各对比维度). e.g. "BERT vs GPT vs RoBERTa"
+  - "latest"    : 找最新进展, 3-4 sub_queries (偏 recent). e.g. "RLHF alignment 2024"
+
 Rules:
 - All sub-queries MUST be in English (academic databases are English-dominant)
 - Each sub-query: 3-8 words, specific enough for academic search
 - Cover different angles, avoid repetition
+- Number of sub_queries should match query_type: simple=1-2, method=3-4, comparison=4-5, latest=3-4, survey=5-6
 - If original query is Chinese, translate to academic English
 - Extract structured constraints ONLY if the user query explicitly mentions them:
     * venues: e.g. "NeurIPS", "Nature", "CVPR" (publication venue constraints)
@@ -159,6 +178,10 @@ Rules:
 
     sub_queries: list[str] = []
     parsed = _extract_json_object(text)
+    # R10.5.15 (P1-D): 读 query_type 决定 sub_queries 数量上限
+    raw_type = (parsed or {}).get("query_type", "")
+    query_type = raw_type if raw_type in _QUERY_TYPE_LIMITS else "default"
+    max_subs = _QUERY_TYPE_LIMITS[query_type]
     if parsed:
         for q in parsed.get("sub_queries", []):
             if isinstance(q, str):
@@ -168,8 +191,8 @@ Rules:
     if not sub_queries:
         # 兜底：原始查询 + 派生变体
         sub_queries = _fallback_decompose(state["original_query"])
-    # 限制最多 5 个
-    sub_queries = sub_queries[:5]
+    # 限制 sub_queries 数量 — 按 query_type 自适应 (P1-D: 简单查询不浪费 API 配额)
+    sub_queries = sub_queries[:max_subs]
     if not sub_queries:
         sub_queries = [state["original_query"]]
 
@@ -180,6 +203,9 @@ Rules:
     for key, fb_val in fallback_c.items():
         if not constraints.get(key) and fb_val:
             constraints[key] = fb_val
+    # R10.5.15 (P1-D): 把 query_type 也塞进 constraints (跟前 4 维并列, 不破坏
+    # 现有约束 schema, 下游 search/synth 节点可读)
+    constraints["query_type"] = query_type
 
     cost_update = merge_usage_into_state(state, usage)
 

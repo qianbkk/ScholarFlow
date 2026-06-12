@@ -67,6 +67,11 @@ from backend.api import openalex as _oa_mod
 from backend.utils.proxy import get_proxy  # 预热代理缓存
 from backend.utils.sanitize import sanitize_query  # VULN-001
 from backend.utils.cache import get_cached_async, set_cached_async  # H4
+from backend.utils.audit_log import (  # R10.5.15 P1-C: 结构化审计
+    audit_search_started,
+    audit_search_completed,
+    audit_search_anomaly,
+)
 from backend.utils.semantic_cache import (  # R10.5.7 P0-1: 真实实现
     semantic_cache_stub_marker,
     get_semantic_cached,
@@ -433,6 +438,14 @@ async def search(req: SearchRequest, request: Request):
                 f"[/search] cache hit q='{safe_query[:40]}' "
                 f"cost=${cached_cost:.4f} tokens={cached_tokens}"
             )
+            # R10.5.15 (P1-C): cache hit 也算一次完成, 审计
+            audit_search_completed(
+                user_id=user.user_id, query=safe_query,
+                status="done", cost_usd=cached_cost,
+                duration_sec=_time.time() - t0,
+                papers_count=len(cached_response.get("ranked_papers") or []),
+                request_id=get_request_id(),
+            )
             return _build_search_response(
                 state_dict={}, elapsed=0.0, from_cache=True, cached_payload=cached_response
             )
@@ -447,6 +460,14 @@ async def search(req: SearchRequest, request: Request):
                 f"[/search] SEMANTIC cache hit q='{safe_query[:40]}' "
                 f"cost=${sem_cost:.4f} tokens={sem_tokens}"
             )
+            # R10.5.15 (P1-C): 语义 cache hit 也审计
+            audit_search_completed(
+                user_id=user.user_id, query=safe_query,
+                status="done", cost_usd=sem_cost,
+                duration_sec=_time.time() - t0,
+                papers_count=len(sem_response.get("ranked_papers") or []),
+                request_id=get_request_id(),
+            )
             return _build_search_response(
                 state_dict={}, elapsed=0.0, from_cache=True, cached_payload=sem_response
             )
@@ -456,6 +477,13 @@ async def search(req: SearchRequest, request: Request):
         # 已无意义,改为无 try 直接 await — 异常由外层 except Exception 兜底
         # 返回 500 (跟 R8 审计员建议一致: 走统一错误处理)
         req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
+        # R10.5.15 (P1-C): 审计日志 — started 事件, query/user 都哈希不存原文
+        audit_search_started(
+            user_id=user.user_id,
+            query=safe_query,
+            budget_usd=req.budget,
+            request_id=req_id,
+        )
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task
         try:
@@ -467,6 +495,14 @@ async def search(req: SearchRequest, request: Request):
         except asyncio.TimeoutError:
             # 超时仍要走 budget 归还, 不直接 raise 跳过
             logger.warning(f"[/search] sync timeout after 60s, recommend client switch to /search/stream (SSE). request_id={req_id}")
+            # R10.5.15 (P1-C): timeout 也审计
+            audit_search_completed(
+                user_id=user.user_id, query=safe_query,
+                status="timeout", cost_usd=0.0,
+                duration_sec=_time.time() - t0,
+                papers_count=0,
+                request_id=req_id, error="sync_timeout_60s",
+            )
             # budget 归还: 由于 task 还没完成, 不知道花了多少, 全额还
             return_amount = float(req.budget)
             await _return_budget(return_amount, user_id=user.user_id)
@@ -494,6 +530,23 @@ async def search(req: SearchRequest, request: Request):
             return_amount = 0.0
 
         response_obj = _build_search_response(final, elapsed)
+
+        # R10.5.15 (P1-C): 正常完成审计
+        audit_search_completed(
+            user_id=user.user_id, query=safe_query,
+            status=response_obj.status,
+            cost_usd=actual_cost,
+            duration_sec=elapsed,
+            papers_count=len(response_obj.ranked_papers or []),
+            request_id=req_id,
+        )
+        # 异常成本: cost > budget * 1.5 → 告警
+        if actual_cost > budget_limit_state * 1.5:
+            audit_search_anomaly(
+                user_id=user.user_id, query=safe_query,
+                cost_usd=actual_cost, threshold_usd=budget_limit_state,
+                request_id=req_id,
+            )
 
         # R10.5.9 落地: 双缓存写路径去重 (model_dump 1 次 + 并发)
         response_dict = response_obj.model_dump()
