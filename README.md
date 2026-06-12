@@ -289,7 +289,7 @@ ScholarFlow 还在积极迭代中，欢迎你参与！
 | `2` | 启动 - Docker 模式 (docker-compose) |
 | `3` | 停止 |
 | `4` | 重启 |
-| `5` | 查看状态 (PID + 端口 + curl 健康检查) |
+| `5` | 查看状态 (PID + 端口 + curl 健康检查 + ENVIRONMENT 档) |
 | `6` | 查看日志 (后30行 / 实时 tail) |
 | `7` | 安装依赖 (Python / Node / Docker 镜像) |
 | `8` | 清理缓存 (backend/.cache + logs + frontend/dist) |
@@ -297,6 +297,51 @@ ScholarFlow 还在积极迭代中，欢迎你参与！
 | `0` | 退出 |
 
 PID 文件在 `.run/`,日志在 `logs/`,都已加入 `.gitignore`。
+
+## 🎚 运行模式 (R10.5.12)
+
+后端通过 `ENVIRONMENT` 环境变量区分开发 / 测试 / 生产 — 直接决定**限流档**和**数据库目录**。
+
+| 档 | 用途 | `/search` 限流 | DB 目录 | 触发方式 |
+|---|---|---|---|---|
+| `dev` (默认) | 本地开发 | **30/min · 200/hour** | `backend/.cache` | 不设 / 设为 `dev` / `development` |
+| `test` | pytest / CI | 1000/min (基本不限) | `/tmp/scholarflow_test` (强制隔离) | `set ENVIRONMENT=test` (conftest.py 自动) |
+| `prod` | 正式部署 | **5/min · 20/hour** (旧值) | `backend/.cache` | `set ENVIRONMENT=prod` + 配 `OPEN_MODE=false` |
+
+### 怎么切换
+
+```bash
+# cmd (Windows) — 默认 dev, 不设即可
+python scholarflow.py start           # ENVIRONMENT=dev, 限流 30/min
+
+# 切到正式限流 — 部署前在 cmd 里
+set ENVIRONMENT=prod
+python scholarflow.py start           # 限流 5/min, 严格
+python scholarflow.py status          # 看顶部 "Mode: prod" + "Rate limit: ..."
+
+# bash (Linux / WSL / Mac)
+export ENVIRONMENT=prod
+python scholarflow.py start
+
+# pytest — 自动 test 档, 限流 1000/min, 不污染 dev 缓存
+pytest
+```
+
+### 什么时候选哪档
+
+- **日常开发 / 跑 demo** — 保持 `dev` (默认), 30/min 不卡手
+- **压测 / 联调 / 演示给同事** — `dev` 够用, 别用 `prod` 否则连点 6 次就 429
+- **正式上线 (高校 / Docker / K8s)** — `prod` + `OPEN_MODE=false` + K8s Secret 注入 API key
+- **CI / pytest** — `test` 自动生效, 无需手动设 (conftest.py 默认)
+
+### 数据库隔离
+
+- `dev` / `prod` 共用 `backend/.cache/search_cache.sqlite` — 跨模式共享缓存
+- `test` 强制 `/tmp` (或 Windows `%TEMP%\scholarflow_test`), 跑测试不污染真实缓存
+- 想彻底隔离: 在 `.env` 里设 `SCHOLARFLOW_DB_DIR=/your/path` (R10.5.12 新增)
+
+详细变更见 [CHANGELOG.md §Unreleased](CHANGELOG.md) + [docs/HANDOFF.md](docs/HANDOFF.md)。
+
 
 ## 🔒 Security & Privacy
 

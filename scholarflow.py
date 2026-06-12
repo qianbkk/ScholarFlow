@@ -184,10 +184,16 @@ def start_local():
     print(f"  [1/2] Starting backend (uvicorn :{BACKEND_PORT})...")
     backend_log = open(BACKEND_LOG, "w", encoding="utf-8", errors="replace")
     print(f"         log: {BACKEND_LOG}")
+    # R10.5.12: 透传 ENVIRONMENT 让后端走对应限流档 (dev/test/prod).
+    # 默认 dev, 想切 prod: shell 里 set ENVIRONMENT=prod 再 start.
+    child_env = os.environ.copy()
+    env_label = child_env.get("ENVIRONMENT", "dev (default)")
+    print(f"         ENVIRONMENT={env_label}")
     bp = subprocess.Popen(
         [sys.executable, "-m", "uvicorn", "backend.main:app",
          "--host", "127.0.0.1", "--port", str(BACKEND_PORT)],
         cwd=str(ROOT),
+        env=child_env,  # 显式传 env (Windows 默认会继承, 但显式更稳)
         stdout=backend_log,
         stderr=subprocess.STDOUT,
         creationflags=CREATE_NO_WINDOW,
@@ -221,8 +227,13 @@ def start_docker():
     if not (ROOT / "docker-compose.yml").exists():
         print(f"  {C.R}[error] docker-compose.yml not found{C.X}")
         return
-    print("  [1/1] docker compose up -d --build ...")
-    r = subprocess.run(["docker", "compose", "up", "-d", "--build"], cwd=str(ROOT))
+    # R10.5.12: 透传 ENVIRONMENT + SCHOLARFLOW_DB_DIR 给 docker compose 容器.
+    env_label = os.environ.get("ENVIRONMENT", "dev (default)")
+    print(f"  [1/1] docker compose up -d --build (ENVIRONMENT={env_label}) ...")
+    r = subprocess.run(
+        ["docker", "compose", "up", "-d", "--build"],
+        cwd=str(ROOT), env=os.environ.copy(),
+    )
     if r.returncode == 0:
         print(f"  {C.G}[done] docker containers started{C.X}")
     else:
@@ -262,6 +273,21 @@ def stop_local():
 
 def show_status():
     print(f"\n{C.H}  === Runtime Status ==={C.X}\n")
+    # R10.5.12: 模式 + 限流档 + DB 目录 — 方便用户确认当前在哪个 ENVIRONMENT.
+    env_label = os.environ.get("ENVIRONMENT", "dev (default)")
+    db_dir = os.environ.get("SCHOLARFLOW_DB_DIR") or str(ROOT / "backend" / ".cache")
+    print(f"  Mode:       {C.Y}{env_label}{C.X}")
+    print(f"  DB dir:     {db_dir}")
+    try:
+        # 读后端日志里最后出现的 RATE_LIMITS 行作为参考 (后端启动时打印)
+        if BACKEND_LOG.exists():
+            tail = BACKEND_LOG.read_text(encoding="utf-8", errors="replace").splitlines()[-50:]
+            rate_line = next((l for l in tail if "RATE_LIMITS" in l or "search=" in l), None)
+            if rate_line:
+                print(f"  Rate limit: {rate_line.strip()[:80]}")
+    except Exception:
+        pass
+    print()
     for label, port, pid_file in [
         ("Backend", BACKEND_PORT, BACKEND_PID_FILE),
         ("Frontend", FRONTEND_PORT, FRONTEND_PID_FILE),

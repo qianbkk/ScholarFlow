@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **ENVIRONMENT 模式 (dev / test / prod)** — 后端按环境分档限流 + DB 目录隔离, 解决"开发 5/min 20/hour 太严"+"不知道开发/正式怎么区分"两条用户反馈
+  - `dev` (默认): `/search` **30/min · 200/hour**, `/search/stream` 60/min · 500/hour, dev 友好
+  - `test`: 1000/min, pytest/CI 不撞限流
+  - `prod`: 5/min · 20/hour (旧值保留, 严格防滥用)
+  - 别名兼容: `development`/`dev`、`testing`/`test`、`production`/`prod`, 未知值兜底 `dev`
+- **SCHOLARFLOW_DB_DIR env** — 测试模式默认 `/tmp` (Windows `%TEMP%`), 强制隔离, 跑测试不污染 dev 缓存
+
+### Changed
+- `backend/config.py` — 6 处 `@limiter.limit` 改读 `_config.RATE_LIMITS_CURRENT[...]`, 不再硬编码
+- `backend/api/routes/auth.py` — 新增 `_parse_limit_string` 辅助解析 "30/minute;200/hour" 风格
+- `tests/conftest.py` — 强制 `ENVIRONMENT=test` + `SCHOLARFLOW_DB_DIR=tmp`, pytest 默认隔离
+- `scholarflow.py` — `start_local` / `start_docker` 透传 `ENVIRONMENT` 给子进程; `status` 页加 "Mode / DB dir / Rate limit" 三行
+- `.env.example` — 新增 `ENVIRONMENT=dev` 段 + `SCHOLARFLOW_DB_DIR` 注释
+- `README.md` — 新增"🎚 运行模式"章节: 三档对照表 + 切换命令 + pytest 默认
+
+### Tests
+- 新增 `tests/test_environment_config.py` — 19 个测试覆盖别名 / 三档限流 / 字符串解析 / DB 目录
+- 全量 **283 passed / 1 skipped** (R10.5.12 基线)
+
 ## [1.0.1] - 2026-06-10
 
 R10.5 审计 + 修复周期 (20+ commits 覆盖 3 轮 bug 批处理 + 白屏修复 + code-review + scholarflow.bat).
