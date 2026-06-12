@@ -89,28 +89,42 @@ async def search_node(state: SearchState) -> SearchState:
     # R10.5.14 (P0-B): 应用 query_decomposer 抽出的结构化约束 (year_range / venues).
     # SS/OA 的 search endpoint 都不支持精确 venue 过滤, 客户端二次过滤最稳.
     # 没传 constraints / 字段为 None 时跳过该维度, 行为跟未加约束一致.
+    # R10.5.16 (code-review fix): 跨 iter 合并后也要再过滤, 否则 iter 1 没过滤
+    # 的旧论文会"漏网"进 iter 2 的 unique_papers — 拆成 _apply_constraints helper,
+    # 在 merge 前 + merge 后都跑一遍.
     constraints = state.get("constraints") or {}
     yr = constraints.get("year_range")
     venues = constraints.get("venues")
-    if isinstance(yr, list) and len(yr) == 2:
-        lo, hi = int(yr[0]), int(yr[1])
-        before = len(unique_papers)
-        unique_papers = [
-            p for p in unique_papers
-            if (getattr(p, "year", 0) or 0) >= lo and (getattr(p, "year", 0) or 0) <= hi
-        ]
-        logger.info(f"[search_node] year_range=[{lo},{hi}] filter: {before} -> {len(unique_papers)}")
-    if isinstance(venues, list) and venues:
-        # 匹配规则: 论文 venue 字段 (Semantic Scholar 'venue' / OpenAlex primary_location.display_name)
-        # 大小写不敏感 + 子串包含 (e.g. 用户写 "NeurIPS", 论文 venue 可能是 "NeurIPS 2023")
-        norm_venues = [v.lower() for v in venues if v]
-        before = len(unique_papers)
-        unique_papers = [
-            p for p in unique_papers
-            if any(v in (getattr(p, "venue", "") or "").lower() for v in norm_venues)
-        ]
-        logger.info(f"[search_node] venues={venues} filter: {before} -> {len(unique_papers)}")
+    norm_venues = [v.lower() for v in venues if v] if isinstance(venues, list) else []
+
+    def _apply_constraints(papers: list[Paper]) -> list[Paper]:
+        """R10.5.16: 把 year_range + venues 约束应用到 paper list, 返回过滤后.
+        任一字段 None/空 跳过该维度. 调用方传入 任意 list 都能用."""
+        out = papers
+        if isinstance(yr, list) and len(yr) == 2:
+            lo, hi = int(yr[0]), int(yr[1])
+            before = len(out)
+            out = [
+                p for p in out
+                if (getattr(p, "year", 0) or 0) >= lo and (getattr(p, "year", 0) or 0) <= hi
+            ]
+            if before != len(out):
+                logger.info(f"[search_node] year_range=[{lo},{hi}] filter: {before} -> {len(out)}")
+        if norm_venues:
+            # 匹配规则: 论文 venue 字段 (Semantic Scholar 'venue' / OpenAlex primary_location.display_name)
+            # 大小写不敏感 + 子串包含 (e.g. 用户写 "NeurIPS", 论文 venue 可能是 "NeurIPS 2023")
+            before = len(out)
+            out = [
+                p for p in out
+                if any(v in (getattr(p, "venue", "") or "").lower() for v in norm_venues)
+            ]
+            if before != len(out):
+                logger.info(f"[search_node] venues={venues} filter: {before} -> {len(out)}")
+        return out
     # methods / datasets 不在客户端过滤 (论文字段不直接暴露), 由下游 rank / synthesize 利用
+
+    # 第二轮及以前合并后要再过滤一次 — 见 _apply_constraints docstring
+    unique_papers = _apply_constraints(unique_papers)
 
     # 第二轮及以后：与已有论文合并
     iteration = state.get("iteration", 0)
@@ -125,7 +139,11 @@ async def search_node(state: SearchState) -> SearchState:
                 except Exception as e:
                     logger.warning(f"[search_node] Paper deserialize failed: {scrub_sensitive(str(e))}, keys={list(d.keys())[:5]}")
                     continue
-            unique_papers = deduplicate_papers(existing_papers + unique_papers)
+            # R10.5.16: 合并后统一再过滤一次 — iter 1 的旧论文当年不满足当前 iter 的
+            # year_range/venues 时, 要被剔除 (否则用户查 2024 时拿到 2018 的 paper).
+            # 修复前只在 unique_papers 上过滤, iter 1 留下的旧论文漏网. (code-review)
+            merged = deduplicate_papers(existing_papers + unique_papers)
+            unique_papers = _apply_constraints(merged)
 
     logger.info(f"[search_node] iter={iteration} | sub_queries={len(sub_queries)} | unique={len(unique_papers)}")
 

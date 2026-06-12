@@ -87,15 +87,30 @@ def _fallback_constraints(query: str) -> dict:
     }
 
 
+def _sanitize_str_list(raw: object, *, cap: int = 8) -> list[str] | None:
+    """R10.5.16 (/simplify 抽): 规范化一个 str list 字段.
+
+    接受 list[str], 去除空白, cap 限长. 失败 (None / 非 list / 含非 str 元素) 返 None.
+    用于 query_decomposer 的 venues / methods / datasets 3 维约束清洗.
+    """
+    if not isinstance(raw, list) or not all(isinstance(v, str) for v in raw):
+        return None
+    return [v.strip() for v in raw if v.strip()][:cap]
+
+
 def _sanitize_constraints(raw: object) -> dict:
     """把 LLM/兜底输出规范化成 constraints dict, 字段全 None 也接受.
-    不抛错, 失败时返回全部 None 的占位."""
+    不抛错, 失败时返回全部 None 的占位.
+
+    R10.5.16 (/simplify 合并): 3 段 copy-paste (venues/methods/datasets) 改用
+    _sanitize_str_list helper; year_range 单算 (类型 + 范围校验不一样).
+    """
     out = {"venues": None, "year_range": None, "methods": None, "datasets": None}
     if not isinstance(raw, dict):
         return out
-    venues = raw.get("venues")
-    if isinstance(venues, list) and all(isinstance(v, str) for v in venues):
-        out["venues"] = [v.strip() for v in venues if v.strip()][:8]
+    out["venues"] = _sanitize_str_list(raw.get("venues"))
+    out["methods"] = _sanitize_str_list(raw.get("methods"))
+    out["datasets"] = _sanitize_str_list(raw.get("datasets"))
     yr = raw.get("year_range")
     if isinstance(yr, list) and len(yr) == 2:
         try:
@@ -104,12 +119,6 @@ def _sanitize_constraints(raw: object) -> dict:
                 out["year_range"] = [lo, hi]
         except (TypeError, ValueError):
             pass
-    methods = raw.get("methods")
-    if isinstance(methods, list) and all(isinstance(m, str) for m in methods):
-        out["methods"] = [m.strip() for m in methods if m.strip()][:8]
-    datasets = raw.get("datasets")
-    if isinstance(datasets, list) and all(isinstance(d, str) for d in datasets):
-        out["datasets"] = [d.strip() for d in datasets if d.strip()][:8]
     return out
 
 
@@ -197,7 +206,10 @@ Rules:
         sub_queries = [state["original_query"]]
 
     # R10.5.14 (P0-A): 抽结构化约束. LLM 输出优先, 兜底走正则.
-    constraints = _sanitize_constraints(parsed.get("constraints")) if parsed else _sanitize_constraints(None)
+    # R10.5.16 (/simplify): 删 if parsed else ternary — _sanitize_constraints 本身
+    # 已经处理非 dict 输入, ternary 是冗余.
+    raw_constraints = (parsed or {}).get("constraints")
+    constraints = _sanitize_constraints(raw_constraints)
     fallback_c = _fallback_constraints(state["original_query"])
     # 兜底补 LLM 没抽到的字段 (e.g. LLM 没识别 venue 缩写, 但正则识别了)
     for key, fb_val in fallback_c.items():

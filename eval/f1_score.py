@@ -86,6 +86,10 @@ async def run_eval(query: str, expected_titles: list[str], budget: float = 1.0) 
         "status": "decomposing",
         "error": None,
         "provider": None,  # 保持与 SearchState TypedDict 一致
+        "prev_iter_cost_usd": None,
+        "top5_summary_cache": None,
+        # R10.5.16: query_decomposer 抽的结构化约束, 初始 None
+        "constraints": None,
     }
     final = await search_graph.ainvoke(initial)
     retrieved = [p.get("title", "") for p in final.get("ranked_papers", [])[:20]]

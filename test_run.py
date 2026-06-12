@@ -55,6 +55,10 @@ async def main():
         "status": "decomposing",
         "error": None,
         "provider": None,  # 保持与 SearchState TypedDict 一致
+        "prev_iter_cost_usd": None,
+        "top5_summary_cache": None,
+        # R10.5.16: query_decomposer 抽的结构化约束, 初始 None
+        "constraints": None,
     }
 
     t0 = time.time()

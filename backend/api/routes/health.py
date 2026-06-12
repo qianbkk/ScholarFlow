@@ -21,6 +21,9 @@ from backend.config import LLM_PROVIDER, ENVIRONMENT, RATE_LIMITS_CURRENT, SCHOL
 from backend.api.services.providers import _get_providers_with_keys
 # R10.5 Fix-P0-Audit-1.2: 从 utils.network 导入, 切断 health → main 循环依赖
 from backend.utils.network import get_real_ip
+# R10.5.16 (/simplify + /code-review 合并): uptime 改从单源 runtime 拿,
+# 不再模块级 _START_TIME = time.time() — 跟 audit_log 共享同一 clock.
+from backend.utils.runtime import get_uptime_sec
 
 router = APIRouter(tags=["health"])
 # R9: /providers enumeration-vector 防护 — 该端点暴露 provider 拓扑 + has_key 状态,
@@ -36,8 +39,8 @@ router.on_shutdown = []  # type: ignore[attr-defined]
 
 logger = logging.getLogger(__name__)
 
-# R10.5.14 (P0-C): 进程级启动时间戳, 给 /health/detailed 算 uptime.
-_START_TIME = _time.time()
+# R10.5.14 (P0-C): uptime 改从 runtime.get_uptime_sec() 拿, 跟 audit_log 共用
+# (之前模块级 _START_TIME 跟 audit_log 各算一份, 跨 import 顺序会 drift).
 
 
 def _check_cache_writable() -> dict:
@@ -63,7 +66,12 @@ def _check_cache_writable() -> dict:
             last_error = f"mkdir {d}: {e}"
             continue
         # round-trip test
-        test_db = d / f"_healthcheck_{os.getpid()}.sqlite"
+        # R10.5.16 (code-review fix): 加 uuid 后缀, 防止同进程内 /health + /health/detailed
+        # 并发调用 (k8s liveness + readiness + 仪表盘同时) 时, 2 个 SQLite round-trip 共享
+        # 同一临时文件, Thread B 的 unlink 在 Thread A 的 INSERT 中途触发, Thread A 报
+        # "no such table" / "disk I/O error" → 假阳性 degraded. 每个 call 独立文件名即可.
+        import uuid as _uuid
+        test_db = d / f"_healthcheck_{os.getpid()}_{_uuid.uuid4().hex[:8]}.sqlite"
         # P1-5 fix (深度审计 §P1-5): try/finally 确保清理,
         # 防止 k8s 异常重启或频繁失败时 .cache/ 被 _healthcheck_*.sqlite 填满.
         try:
@@ -142,7 +150,7 @@ async def health_detailed():
         "status": "ok" if cache_check["writable"] else "degraded",
         "service": "ScholarFlow",
         "version": "1.0.0",
-        "uptime_sec": round(_time.time() - _START_TIME, 1),
+        "uptime_sec": round(get_uptime_sec(), 1),
         "environment": {
             "name": ENVIRONMENT,
             "is_dev": IS_DEV,

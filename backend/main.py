@@ -571,6 +571,21 @@ async def search(req: SearchRequest, request: Request):
         # 外层这里不能再 catch 后转 500, 否则 504 变 500 错误
         raise
     except Exception as e:
+        # R10.5.16 (code-review fix): 500 错误路径也审计. P1-12 要求
+        # search_completed 覆盖 done/error/budget_exceeded, 之前只到 timeout 没到
+        # 真正 except, SIEM 漏一类内部错误.
+        try:
+            audit_search_completed(
+                user_id=user.user_id, query=safe_query,
+                status="error", cost_usd=0.0,
+                duration_sec=_time.time() - t0,
+                papers_count=0,
+                request_id=get_request_id(),
+                error=f"{type(e).__name__}: {str(e)[:150]}",
+            )
+        except Exception as audit_err:
+            # 审计失败不能阻止 500 抛出
+            logger.warning(f"[/search] audit-on-error failed: {audit_err}")
         logger.error("[/search] error", exc_info=True)
         raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
     finally:

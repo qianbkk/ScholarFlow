@@ -34,8 +34,13 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# 进程级启动时间戳 (跟 /health/detailed 用的同源, 算 uptime)
-_START_TIME = time.time()
+# R10.5.16 (/simplify + /code-review 合并修复): uptime 改从 runtime 单源拿.
+# 之前模块级 _START_TIME = time.time() 跟 health.py 各算一份, import 顺序不同
+# 会 drift, devops 对比两个 endpoint 的 uptime 会发现不一致. 现在共用.
+from backend.utils.runtime import get_uptime_sec  # noqa: E402
+# R10.5.16: user_id 哈希改用 user_id.hash_user_id 单源 (跟 auth 路径一致).
+# 之前 5 处 _hash_user 重复实现, 任何 hash 策略变更都得 5 处同步.
+from backend.utils.user_id import hash_user_id as _hash_user  # noqa: E402
 
 # 默认路径: <project_root>/logs/audit.jsonl
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "logs" / "audit.jsonl"
@@ -56,12 +61,6 @@ def _hash_query(query: str) -> str:
     return "qh_" + hashlib.sha256((query or "").encode("utf-8")).hexdigest()[:16]
 
 
-def _hash_user(user_id: Optional[str]) -> Optional[str]:
-    if not user_id:
-        return None
-    return "u_" + hashlib.sha256(user_id.encode("utf-8")).hexdigest()[:12]
-
-
 def _emit(event: str, **fields) -> None:
     """写一条 JSONL 审计事件. 失败静默."""
     path = _resolve_audit_path()
@@ -71,7 +70,7 @@ def _emit(event: str, **fields) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         record = {
             "ts": time.time(),
-            "uptime_s": round(time.time() - _START_TIME, 2),
+            "uptime_s": round(get_uptime_sec(), 2),
             "event": event,
             **fields,
         }
