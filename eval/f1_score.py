@@ -68,29 +68,15 @@ async def run_eval(query: str, expected_titles: list[str], budget: float = 1.0) 
         }
     # Round 2 MEDIUM-005: budget 上限, 防止单次 eval 预留过多预算
     effective_budget = min(MAX_EVAL_BUDGET, max(0.1, float(budget)))
-    initial = {
-        "original_query": sanitized,
-        "sub_queries": [],
-        "raw_papers": [],
-        "expanded_papers": [],
-        "expanded_paper_ids": [],  # CRIT fix from main.py
-        "ranked_papers": [],
-        "report": "",
-        "citation_graph": {},
-        "iteration": 0,
-        "max_iterations": 2,
-        "total_tokens_used": 0,
-        "total_cost_usd": 0.0,
-        "budget_limit_usd": effective_budget,
-        "model_usage": {},
-        "status": "decomposing",
-        "error": None,
-        "provider": None,  # 保持与 SearchState TypedDict 一致
-        "prev_iter_cost_usd": None,
-        "top5_summary_cache": None,
-        # R10.5.16: query_decomposer 抽的结构化约束, 初始 None
-        "constraints": None,
-    }
+    # R10.5.17: 改用 make_initial_state 复用主路径 helper, 18 行 dict 消失.
+    # 任何 SearchState TypedDict 字段变更都自动同步到这里, 不再 4 处手改.
+    from backend.api.routes.models import make_initial_state
+    initial = make_initial_state(
+        sanitized,
+        max_iterations=2,
+        budget=effective_budget,
+        provider=None,
+    )
     final = await search_graph.ainvoke(initial)
     retrieved = [p.get("title", "") for p in final.get("ranked_papers", [])[:20]]
     metrics = compute_f1(retrieved, expected_titles)

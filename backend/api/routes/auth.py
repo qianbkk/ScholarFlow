@@ -176,8 +176,9 @@ async def register(req: RegisterRequest) -> AuthResponse:
     api_key = issue_key_for_email(req.email, display_name=req.display_name or req.email)
     if not api_key:
         raise HTTPException(status_code=400, detail="email 格式无效")
-    import hashlib
-    user_id = "u_" + hashlib.sha256(req.email.lower().encode()).hexdigest()[:12]
+    # R10.5.17: user_id 派生改用单源 helper (跟 audit log 一致).
+    from backend.utils.user_id import hash_user_id
+    user_id = hash_user_id(req.email)
     return AuthResponse(
         user_id=user_id,
         display_name=req.display_name or req.email,
@@ -203,8 +204,9 @@ async def login(req: RegisterRequest) -> AuthResponse:
     api_key = issue_key_for_email(req.email, display_name=req.display_name or req.email)
     if not api_key:
         raise HTTPException(status_code=400, detail="email 格式无效")
-    import hashlib
-    user_id = "u_" + hashlib.sha256(req.email.lower().encode()).hexdigest()[:12]
+    # R10.5.17: 同 register, 用 hash_user_id 单源
+    from backend.utils.user_id import hash_user_id
+    user_id = hash_user_id(req.email)
     return AuthResponse(
         user_id=user_id,
         display_name=req.display_name or req.email,

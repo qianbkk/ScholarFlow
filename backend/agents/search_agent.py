@@ -16,7 +16,7 @@ import logging
 from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.api import semantic_scholar, openalex
-from backend.utils.text_utils import deduplicate_papers
+from backend.utils.text_utils import deduplicate_papers, _safe_year
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 from backend.utils.async_helpers import bounded_gather  # VULN-004
 
@@ -104,10 +104,10 @@ async def search_node(state: SearchState) -> SearchState:
         if isinstance(yr, list) and len(yr) == 2:
             lo, hi = int(yr[0]), int(yr[1])
             before = len(out)
-            out = [
-                p for p in out
-                if (getattr(p, "year", 0) or 0) >= lo and (getattr(p, "year", 0) or 0) <= hi
-            ]
+            # R10.5.17: 用 _safe_year 替代 `getattr(p, "year", 0) or 0`,
+            # 区分 None (缺值) 跟 0 (合法极早/placeholder). 旧 anti-pattern
+            # 会把 year=0 误判为 falsy 过滤掉.
+            out = [p for p in out if lo <= _safe_year(p) <= hi]
             if before != len(out):
                 logger.info(f"[search_node] year_range=[{lo},{hi}] filter: {before} -> {len(out)}")
         if norm_venues:

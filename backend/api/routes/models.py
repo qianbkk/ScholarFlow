@@ -26,18 +26,23 @@ from backend.utils.export import papers_to_bibtex, papers_to_ris  # R10.5 P0
 from backend.utils.observability import get_request_id
 
 
-def _make_initial_state(
+def make_initial_state(
     safe_query: str,
     max_iterations: int,
     budget: float,
     provider: str,
     status: str = "decomposing",
+    *,
+    include_expanded_ids: bool = True,
 ) -> dict:
-    """构造 LangGraph SearchState 初始 dict.
+    """构造 LangGraph SearchState 初始 dict. R10.5.17 公开版 (原 _make_initial_state).
 
     Round 4 C2: 抽出来避免 /search 和 /search/stream 两处复制, 杜绝字段漂移。
+    R10.5.17: 公开给 3 个非主路径 caller 复用 (eval/f1_score.py + test_run.py +
+    tests/manual/verify_random_queries.py). 加 include_expanded_ids=False 兼容
+    R6 之前 caller 没 expanded_paper_ids 字段的旧路径.
     """
-    return {
+    out = {
         "original_query": safe_query,
         "sub_queries": [],
         "raw_papers": [],
@@ -68,6 +73,14 @@ def _make_initial_state(
         # 节点成功返回后会被覆盖. TypedDict 已声明该字段.
         "constraints": None,
     }
+    if not include_expanded_ids:
+        out.pop("expanded_paper_ids", None)
+    return out
+
+
+# R10.5.17: 保留旧 _make_initial_state 名字 (内部 5 处 caller 仍在用, 改名
+# 跨 PR 影响范围大). 行为跟 make_initial_state(include_expanded_ids=True) 等价.
+_make_initial_state = make_initial_state
 
 
 class SearchRequest(BaseModel):

@@ -38,28 +38,14 @@ async def main():
 
     # Step 2: 跑完整流水线
     print("--- 2) 驱动 LangGraph 工作流 ---")
-    initial = {
-        "original_query": query,
-        "sub_queries": [],
-        "raw_papers": [],
-        "expanded_papers": [],
-        "ranked_papers": [],
-        "report": "",
-        "citation_graph": {},
-        "iteration": 0,
-        "max_iterations": 1,         # 测试只跑 1 轮
-        "total_tokens_used": 0,
-        "total_cost_usd": 0.0,
-        "budget_limit_usd": 0.5,     # 测试用小预算
-        "model_usage": {},
-        "status": "decomposing",
-        "error": None,
-        "provider": None,  # 保持与 SearchState TypedDict 一致
-        "prev_iter_cost_usd": None,
-        "top5_summary_cache": None,
-        # R10.5.16: query_decomposer 抽的结构化约束, 初始 None
-        "constraints": None,
-    }
+    # R10.5.17: 复用 make_initial_state, 18 行 dict 消失.
+    from backend.api.routes.models import make_initial_state
+    initial = make_initial_state(
+        query,
+        max_iterations=1,         # 测试只跑 1 轮
+        budget=0.5,                # 测试用小预算
+        provider=None,
+    )
 
     t0 = time.time()
     try:

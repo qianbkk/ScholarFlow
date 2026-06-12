@@ -1,4 +1,5 @@
 """文本与论文去重工具。"""
+import hashlib
 import json
 import re
 from typing import Iterable, Optional
@@ -90,6 +91,28 @@ def _get_paper_attr(p, key: str, default=""):
             return default
         return val
     return default
+
+
+def _safe_year(p, default: int = 0) -> int:
+    """R10.5.17: 读 Paper.year, 区分 None (缺值) vs 0 (合法极早/placeholder).
+    旧 anti-pattern `getattr(p, 'year', 0) or 0` 把 year=0 误判为 falsy → 返 default.
+    用 _get_paper_attr 同样的 None 检查语义, 保留 0.
+    """
+    v = _get_paper_attr(p, "year", default)
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def hash_query(text: str, *, prefix: str = "qh_", trunc: int = 16) -> str:
+    """R10.5.17: SHA256 哈希 query 单源, 供 audit_log (PII 保护) +
+    semantic_cache (LRU key) 共用. prefix + trunc 控制格式.
+
+    默认 prefix='qh_', trunc=16: audit_log 用, 同 query 同 hash 便于聚合.
+    semantic_cache 调时可传 prefix='', trunc=32 拿完整 32 字符.
+    """
+    return prefix + hashlib.sha256((text or "").encode("utf-8")).hexdigest()[:trunc]
 
 
 def _merge_paper_meta(primary, secondary) -> None:

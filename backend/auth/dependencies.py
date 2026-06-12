@@ -163,9 +163,14 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
     # 已注册? 返已有 key
     conn = _connect_with_wal("auth")
     try:
+        # R10.5.17: user_id 派生改用 backend.utils.user_id.hash_user_id 单源.
+        # 之前 5 处 inline (3 在 auth/dependencies.py, 2 在 routes/auth.py) 用
+        # 3 种 normalize 策略 (无 lower / lower / lower+strip), SIEM 关联查询
+        # (audit log 跟 auth DB 互查) 会因为大小写算出不同 user_id.
+        from backend.utils.user_id import hash_user_id
         row = conn.execute(
             "SELECT api_key_hash FROM users WHERE user_id = ?",
-            (f"u_{hashlib.sha256(email.encode()).hexdigest()[:12]}",),
+            (hash_user_id(email),),
         ).fetchone()
     finally:
         conn.close()
@@ -175,9 +180,11 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
         new_hash = _hash_key(new_key)
         conn = _connect_with_wal("auth")
         try:
+            # R10.5.17: 同上, 用 hash_user_id 单源
+            from backend.utils.user_id import hash_user_id
             conn.execute(
                 "UPDATE users SET api_key_hash = ? WHERE user_id = ?",
-                (new_hash, f"u_{hashlib.sha256(email.encode()).hexdigest()[:12]}"),
+                (new_hash, hash_user_id(email)),
             )
             conn.commit()
         finally:
@@ -185,7 +192,9 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
         return new_key
 
     # 新用户: 用 email hash 作 user_id (确定性, 同 email 重新 login 拿到同 user)
-    user_id = "u_" + hashlib.sha256(email.encode()).hexdigest()[:12]
+    # R10.5.17: 用 backend.utils.user_id.hash_user_id 单源 (跟 audit log 一致).
+    from backend.utils.user_id import hash_user_id
+    user_id = hash_user_id(email)
     raw_key = _generate_key()
     key_hash = _hash_key(raw_key)
     now = time.time()

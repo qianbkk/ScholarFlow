@@ -24,7 +24,6 @@ text. 写文件追加 JSONL (一行一事件), 由 SIEM/Logstash 拉走.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
@@ -41,6 +40,9 @@ from backend.utils.runtime import get_uptime_sec  # noqa: E402
 # R10.5.16: user_id 哈希改用 user_id.hash_user_id 单源 (跟 auth 路径一致).
 # 之前 5 处 _hash_user 重复实现, 任何 hash 策略变更都得 5 处同步.
 from backend.utils.user_id import hash_user_id as _hash_user  # noqa: E402
+# R10.5.17: query 哈希改用 text_utils.hash_query 单源.
+# 之前 audit_log 跟 semantic_cache 各算一份, 策略可能 drift (大小写/截位).
+from backend.utils.text_utils import hash_query as _hash_query_text  # noqa: E402
 
 # 默认路径: <project_root>/logs/audit.jsonl
 _DEFAULT_PATH = Path(__file__).resolve().parents[2] / "logs" / "audit.jsonl"
@@ -57,8 +59,9 @@ def _resolve_audit_path() -> Optional[Path]:
 
 
 def _hash_query(query: str) -> str:
-    """SHA256 哈希 query 前 16 字符. 不会反推原文但同 query 同 hash, 便于聚合."""
-    return "qh_" + hashlib.sha256((query or "").encode("utf-8")).hexdigest()[:16]
+    """R10.5.17: 委托给 backend.utils.text_utils.hash_query 单源.
+    保留这个 wrapper 是为了不破坏外部调用."""
+    return _hash_query_text(query)
 
 
 def _emit(event: str, **fields) -> None:
@@ -76,8 +79,11 @@ def _emit(event: str, **fields) -> None:
         }
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    except Exception as e:
-        # 写失败不影响主流程, 但要 log warning 给运维
+    # R10.5.17: 收窄 except 到 (OSError, TypeError). 旧 except Exception 会
+    # 吞掉编程 bug (KeyError, AttributeError) — 字段重命名 / dict 构造错
+    # 时主流程静默走, audit log 缺数据, SIEM 看着正常实际漏事件.
+    except (OSError, TypeError) as e:
+        # 写失败 (磁盘满 / 权限 / 编码) 不影响主流程, 但要 log warning 给运维
         logger.warning(f"[audit_log] write failed: {type(e).__name__}: {e}")
 
 
