@@ -39,6 +39,7 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 
 from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
+import backend.config as _config
 from backend.utils.budget_guard import check_budget
 from backend.utils.cache import get_cached_async, set_cached_async
 from backend.utils.observability import get_request_id
@@ -90,8 +91,13 @@ def _sse_format(data: dict) -> str:
 
 
 # ===== /search =====
+# R10.5.12: 限流按 ENVIRONMENT 分档 (config.RATE_LIMITS_CURRENT).
+# dev 30/min, test 1000/min, prod 5/min (旧值).
+_search_limit = _config.RATE_LIMITS_CURRENT["search"]
+
+
 @router.post("/search", response_model=SearchResponse)
-@limiter.limit("5/minute;20/hour")
+@limiter.limit(_search_limit)
 async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。"""
     # VULN-001 Layer 0: 入口处净化用户 query
@@ -202,7 +208,7 @@ async def search(req: SearchRequest, request: Request):
 
 # ===== /search/cancel =====
 @router.post("/search/cancel")
-@limiter.limit("10/minute")
+@limiter.limit(_config.RATE_LIMITS_CURRENT["search_cancel"])
 async def cancel_search(req: SearchCancelRequest, request: Request):
     """用户主动取消进行中的搜索。"""
     logger.info(
@@ -223,7 +229,7 @@ async def cancel_search(req: SearchCancelRequest, request: Request):
 
 # ===== /search/stream (SSE) =====
 @router.get("/search/stream")
-@limiter.limit("5/minute;20/hour")
+@limiter.limit(_config.RATE_LIMITS_CURRENT["search_stream"])
 async def search_stream(
     request: Request,
     q: str = Query(..., min_length=1, max_length=2000, description="研究查询"),

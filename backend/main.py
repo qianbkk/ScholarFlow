@@ -89,6 +89,7 @@ from backend.config import (
     DEEPSEEK_API_KEY,
     get_provider_config,
 )
+import backend.config as _config  # R10.5.12: 限流按 ENVIRONMENT 分档
 from backend.middleware import install_security  # Round 5 M-3
 
 # ===== Submodule wiring (slim entrypoint) =====
@@ -386,8 +387,10 @@ app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/re
 
 
 # ===== /search (kept inline — see module docstring) =====
+# R10.5.12: 限流按 ENVIRONMENT 分档 (config.RATE_LIMITS_CURRENT).
+# dev 30/min, test 1000/min, prod 5/min (旧值).
 @app.post("/search", response_model=SearchResponse)
-@limiter.limit("5/minute;20/hour")
+@limiter.limit(_config.RATE_LIMITS_CURRENT["search"])
 async def search(req: SearchRequest, request: Request):
     """主搜索接口：触发完整 8 节点流水线。
 
@@ -527,7 +530,7 @@ async def search(req: SearchRequest, request: Request):
 
 # ===== /search/cancel =====
 @app.post("/search/cancel")
-@limiter.limit("10/minute")
+@limiter.limit(_config.RATE_LIMITS_CURRENT["search_cancel"])
 async def cancel_search(req: SearchCancelRequest, request: Request):
     """用户主动取消进行中的搜索。"""
     logger.info(
@@ -575,7 +578,7 @@ def _sse_format(data: dict) -> str:
 
 
 @app.get("/search/stream")
-@limiter.limit("5/minute;20/hour")
+@limiter.limit(_config.RATE_LIMITS_CURRENT["search_stream"])
 async def search_stream(
     request: Request,
     q: str = Query(..., min_length=1, max_length=2000, description="研究查询"),

@@ -60,8 +60,7 @@ class UserInfo(BaseModel):
 # (ForwardRef('RegisterRequest') + Query() 嵌套), 触发 Pydantic 'TypeAdapter
 # not fully defined' 错, 实际请求时 body 拿不到, 422 missing.
 #
-# 这里改用进程内 sliding window 限流 (5/minute;20/hour), 单进程足够:
-#  - 单 worker 部署: 进程内 deque, 原子操作
+# 这里改用进程内 sliding window 限流, 单进程足够:
 #  - 多 worker: 每个 worker 独立桶, 总容量 = N × limit. R11+ 上 Redis.
 # 防 enumeration 攻击核心是"防止短时间大量尝试", 进程内 N×limit 仍可控.
 # P0-3 fix (深度审计 §P0-3): _RATE_HISTORY 字典无界增长防护.
@@ -96,11 +95,36 @@ def _maybe_cleanup_rate_history() -> None:
         _RATE_HISTORY.popitem(last=False)
 
 
-def _check_rate_limit(client_ip: str, max_per_minute: int = 5, max_per_hour: int = 20) -> None:
+def _parse_limit_string(limit_str: str) -> tuple[int | None, int | None]:
+    """解析 "30/minute;200/hour" → (30, 200). None 表示无该窗口限制.
+
+    支持的语法 (跟 slowapi 一致):
+      "N/minute"     → (N, None)
+      "N/hour"       → (None, N)
+      "N/minute;M/hour" → (N, M)
+      "1000/minute"  → (1000, None) — 极大值实际等于不限
+    """
+    per_min: int | None = None
+    per_hour: int | None = None
+    for part in limit_str.split(";"):
+        part = part.strip()
+        if "/minute" in part:
+            per_min = int(part.split("/")[0])
+        elif "/hour" in part:
+            per_hour = int(part.split("/")[0])
+    return per_min, per_hour
+
+
+def _check_rate_limit(client_ip: str) -> None:
     """Sliding window 限流. 超限抛 429 (跟 slowapi 行为一致).
 
+    R10.5.12: 限流按 ENVIRONMENT 分档 (config.RATE_LIMITS_CURRENT['auth_login']):
+      dev  — 30/min 200/hour, test 1000/min (实际不限), prod 5/min 20/hour.
     P0-3 fix: 改用 OrderedDict + 定期清理, 防止字典无界增长.
     """
+    import backend.config as _config
+    limit_str = _config.RATE_LIMITS_CURRENT["auth_login"]
+    max_per_minute, max_per_hour = _parse_limit_string(limit_str)
     now = time.time()
     _maybe_cleanup_rate_history()
     history = _RATE_HISTORY.get(client_ip)
@@ -113,19 +137,20 @@ def _check_rate_limit(client_ip: str, max_per_minute: int = 5, max_per_hour: int
     # 清掉窗口外的时间戳
     while history and now - history[0] > 3600:
         history.popleft()
-    if len(history) >= max_per_hour:
+    if max_per_hour and len(history) >= max_per_hour:
         raise HTTPException(
             status_code=429,
             detail=f"注册/登录请求过于频繁, 每小时最多 {max_per_hour} 次",
         )
     # 1 分钟内子窗口
-    one_min_ago = now - 60
-    recent_minute = sum(1 for ts in history if ts > one_min_ago)
-    if recent_minute >= max_per_minute:
-        raise HTTPException(
-            status_code=429,
-            detail=f"注册/登录请求过于频繁, 每分钟最多 {max_per_minute} 次",
-        )
+    if max_per_minute:
+        one_min_ago = now - 60
+        recent_minute = sum(1 for ts in history if ts > one_min_ago)
+        if recent_minute >= max_per_minute:
+            raise HTTPException(
+                status_code=429,
+                detail=f"注册/登录请求过于频繁, 每分钟最多 {max_per_minute} 次",
+            )
     history.append(now)
 
 

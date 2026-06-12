@@ -30,6 +30,16 @@ if PROJECT_ROOT not in sys.path:
 # test_auth_api_key.py 显式 monkeypatch 改 OPEN_MODE, 测认证分支.
 os.environ.setdefault("OPEN_MODE", "true")
 
+# R10.5.12: 默认 ENVIRONMENT=test — pytest/CI 用, 限流最宽松 (1000/min),
+# SCHOLARFLOW_DB_DIR 强制 /tmp (或 Windows TEMP), 不污染 dev/prod 真实数据.
+# 本地开发者手跑 `pytest` 也是 test 模式 (不会改 backend/.cache).
+# 要手动切到 dev 模式跑后端: 在 shell 里 `export ENVIRONMENT=dev && uvicorn ...`
+os.environ.setdefault("ENVIRONMENT", "test")
+# 测试数据库目录 — 用 tmp_path 模式, 避免跑测试时锁住 dev 缓存
+import tempfile
+_TEST_DB_DIR = os.path.join(tempfile.gettempdir(), "scholarflow_test")
+os.environ.setdefault("SCHOLARFLOW_DB_DIR", _TEST_DB_DIR)
+
 
 import pytest
 

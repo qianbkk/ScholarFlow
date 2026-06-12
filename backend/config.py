@@ -54,6 +54,99 @@ def _getenv_ci(name: str, default: str = "") -> str:
     return default
 
 
+# ===== R10.5.12: ENVIRONMENT 模式区分 (dev / test / prod) =====
+# 用户反馈 §1: 5/min + 20/hour 限流对开发太严. 用户反馈 §2: 不知道怎么区分开发
+# 和正式使用. 引入 3 档:
+#   dev  (默认) — 本地开发, 限流宽松, 详细日志, mock 优先
+#   test — pytest/CI, mock 全开, 限流最宽松
+#   prod — 正式部署, 严格限流, INFO 日志
+_ENV_RAW = _getenv_ci("ENVIRONMENT", "dev").lower()
+# 规范化: development / production / testing 别名 → dev / prod / test
+ENV_ALIASES = {
+    "development": "dev",
+    "dev": "dev",
+    "testing": "test",
+    "test": "test",
+    "production": "prod",
+    "prod": "prod",
+}
+ENVIRONMENT = ENV_ALIASES.get(_ENV_RAW, "dev")
+IS_DEV = ENVIRONMENT == "dev"
+IS_TEST = ENVIRONMENT == "test"
+IS_PROD = ENVIRONMENT == "prod"
+
+# ===== R10.5.12: 限流配置 (按环境区分) =====
+# 旧实现统一 5/min 20/hour, 用户反馈对开发太严. 改按 ENVIRONMENT 分档:
+#   dev  — /search 30/min, /search/stream 60/min, /search/cancel 60/min
+#   test — /search 1000/min (基本不挡), 其他 1000/min
+#   prod — /search 5/min, 20/hour, /search/stream 5/min, 20/hour, /search/cancel 10/min (旧值)
+RATE_LIMITS = {
+    "dev": {
+        "search": "30/minute;200/hour",          # 开发宽松, 用户实测不卡
+        "search_stream": "60/minute;500/hour",  # SSE 流式更宽松
+        "search_cancel": "60/minute",           # 取消限流宽松
+        "auth_login": "30/minute;200/hour",     # 登录/注册也放宽
+    },
+    "test": {
+        "search": "1000/minute",                 # 测试不挡
+        "search_stream": "1000/minute",
+        "search_cancel": "1000/minute",
+        "auth_login": "1000/minute",
+    },
+    "prod": {
+        "search": "5/minute;20/hour",            # 旧值, 生产严格
+        "search_stream": "5/minute;20/hour",
+        "search_cancel": "10/minute",
+        "auth_login": "5/minute;20/hour",
+    },
+}
+RATE_LIMITS_CURRENT = RATE_LIMITS[ENVIRONMENT]
+
+
+# ===== R10.5.12: 数据库目录 (按环境区分, 测试隔离) =====
+# dev  / prod 共用 backend/.cache, test 强制 tmp_path 避免污染真实数据
+# 通过 SCHOLARFLOW_DB_DIR env 强制覆盖
+_SCHOLARFLOW_DB_DIR = _getenv_ci("SCHOLARFLOW_DB_DIR", "")
+if _SCHOLARFLOW_DB_DIR:
+    SCHOLARFLOW_DB_DIR = _SCHOLARFLOW_DB_DIR
+elif IS_TEST:
+    # 测试模式: 强制 /tmp, 避免 dev 缓存被污染. pytest conftest.py 还会再覆盖.
+    SCHOLARFLOW_DB_DIR = "/tmp" if os.name != "nt" else os.path.join(os.environ.get("TEMP", "C:\\"), "scholarflow_test")
+else:
+    # dev / prod: 默认 backend/.cache
+    SCHOLARFLOW_DB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache")
+
+# R10.5 修复 (用户实测: Windows shell env 有大写 MINIMAX_API_KEY,
+# load_dotenv(override=False) 看到同名变量就不覆盖, 但 os.getenv
+# 大小写敏感 → 永远读到空). 而且 Windows os.environ 大小写不敏感
+# 会让 ANTHROPIC_BASE_URL 拿到 MINIMAX_BASE_URL 的值 (字段错乱).
+# 最稳修法: 不靠 load_dotenv + os.getenv, 用 dotenv_values() 显式读 .env 文件.
+from dotenv import dotenv_values as _dotenv_values  # type: ignore[import]
+
+_DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+_DOTENV = _dotenv_values(_DOTENV_PATH) or {}
+
+
+def _getenv_ci(name: str, default: str = "") -> str:
+    """大小写不敏感读 env: 先 .env 显式读 (priority), 再 os.environ fallback."""
+    # 1) 优先 .env (用户本地 source of truth)
+    if name in _DOTENV and _DOTENV[name]:
+        return _DOTENV[name]
+    if name.lower() in _DOTENV and _DOTENV[name.lower()]:
+        return _DOTENV[name.lower()]
+    if name.upper() in _DOTENV and _DOTENV[name.upper()]:
+        return _DOTENV[name.upper()]
+    # 2) Fallback 到 os.environ (K8s / Docker / shell)
+    v = os.getenv(name, "")
+    if v:
+        return v
+    target = name.upper()
+    for key, val in os.environ.items():
+        if key.upper() == target and val:
+            return val
+    return default
+
+
 # 如果没有任何 LLM key，自动开启 mock
 # R10 (M-16): 列出顺序按"演示默认 → 备选"排 (MiniMax → Kimi → GLM → Anthropic)
 _has_any_llm_key = any([
