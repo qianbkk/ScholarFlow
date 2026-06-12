@@ -64,6 +64,9 @@ def _make_initial_state(
         # 修复: 显式补 None, 跟 TypedDict 声明对齐.
         "prev_iter_cost_usd": None,
         "top5_summary_cache": None,
+        # R10.5.14 (P0-A): query_decomposer 抽出的结构化约束. 初始 None,
+        # 节点成功返回后会被覆盖. TypedDict 已声明该字段.
+        "constraints": None,
     }
 
 
@@ -122,6 +125,10 @@ class SearchResponse(BaseModel):
     # 调用, 也避免前端重复格式化逻辑.
     bibtex: str = ""
     ris: str = ""
+    # R10.5.14 (P0-A): query_decomposer 抽出的结构化约束. 透传给前端, 用户
+    # 能看到"我这次查询被识别成 NeurIPS 2022 后 论文", 调试用. 字段全部
+    # Optional, 兜底时整字段 None.
+    constraints: Optional[dict] = None
 
 
 def _build_search_response(
@@ -190,4 +197,6 @@ def _build_search_response(
         # 不用再调单独的 /export 端点. 论文列表为空时输出空串.
         bibtex=papers_to_bibtex(ranked[:25]) if ranked else "",
         ris=papers_to_ris(ranked[:25]) if ranked else "",
+        # R10.5.14 (P0-A): constraints 透传
+        constraints=state_dict.get("constraints"),
     )

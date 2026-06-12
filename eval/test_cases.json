@@ -4,14 +4,16 @@
     "expected_papers": [
       "Highly Accurate Protein Structure Prediction with AlphaFold"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "biomedical"
   },
   {
     "query": "transformer self-attention mechanism",
     "expected_papers": [
       "Attention Is All You Need"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "ml_core"
   },
   {
     "query": "graph neural network molecular property",
@@ -20,14 +22,16 @@
       "Inductive Representation Learning on Large Graphs",
       "Molecular Representation Learning with Language Models"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "ml_gnn"
   },
   {
     "query": "diffusion model image generation",
     "expected_papers": [
       "Denoising Diffusion Probabilistic Models"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "cv_generation"
   },
   {
     "query": "reinforcement learning game playing",
@@ -35,7 +39,8 @@
       "Proximal Policy Optimization Algorithms",
       "Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "rl"
   },
   {
     "query": "RAG retrieval augmented generation",
@@ -43,6 +48,243 @@
       "Retrieval-Augmented Generation for Large Language Models: A Survey",
       "From Local to Global: A Graph RAG Approach to Query-Focused Summarization"
     ],
-    "budget": 0.5
+    "budget": 0.5,
+    "domain": "nlp_llm"
+  },
+
+  {
+    "query": "BERT pretraining language model",
+    "expected_papers": [
+      "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_llm"
+  },
+  {
+    "query": "ResNet deep residual learning image classification",
+    "expected_papers": [
+      "Deep Residual Learning for Image Recognition"
+    ],
+    "budget": 0.5,
+    "domain": "cv_classification"
+  },
+  {
+    "query": "GAN generative adversarial network",
+    "expected_papers": [
+      "Generative Adversarial Nets"
+    ],
+    "budget": 0.5,
+    "domain": "cv_generation"
+  },
+  {
+    "query": "Word2Vec distributed representations",
+    "expected_papers": [
+      "Efficient Estimation of Word Representations in Vector Space",
+      "Distributed Representations of Words and Phrases and their Compositionality"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_pretraining"
+  },
+  {
+    "query": "YOLO object detection real-time",
+    "expected_papers": [
+      "You Only Look Once: Unified, Real-Time Object Detection"
+    ],
+    "budget": 0.5,
+    "domain": "cv_detection"
+  },
+  {
+    "query": "VAE variational autoencoder",
+    "expected_papers": [
+      "Auto-Encoding Variational Bayes"
+    ],
+    "budget": 0.5,
+    "domain": "ml_generative"
+  },
+  {
+    "query": "DQN deep Q-network Atari",
+    "expected_papers": [
+      "Playing Atari with Deep Reinforcement Learning"
+    ],
+    "budget": 0.5,
+    "domain": "rl"
+  },
+  {
+    "query": "U-Net biomedical image segmentation",
+    "expected_papers": [
+      "U-Net: Convolutional Networks for Biomedical Image Segmentation"
+    ],
+    "budget": 0.5,
+    "domain": "biomedical"
+  },
+  {
+    "query": "GPT-3 in-context learning few-shot",
+    "expected_papers": [
+      "Language Models are Few-Shot Learners"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_llm"
+  },
+  {
+    "query": "ViT vision transformer image recognition",
+    "expected_papers": [
+      "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale"
+    ],
+    "budget": 0.5,
+    "domain": "cv_classification"
+  },
+  {
+    "query": "contrastive learning SimCLR",
+    "expected_papers": [
+      "A Simple Framework for Contrastive Learning of Visual Representations"
+    ],
+    "budget": 0.5,
+    "domain": "cv_pretraining"
+  },
+  {
+    "query": "LSTM long short-term memory",
+    "expected_papers": [
+      "Long Short-Term Memory"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_sequence"
+  },
+  {
+    "query": "molecular property prediction deep learning",
+    "expected_papers": [
+      "Molecular Representation Learning with Language Models"
+    ],
+    "budget": 0.5,
+    "domain": "chemistry"
+  },
+  {
+    "query": "neural machine translation attention",
+    "expected_papers": [
+      "Neural Machine Translation by Jointly Learning to Align and Translate"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_mt"
+  },
+  {
+    "query": "protein folding deep learning",
+    "expected_papers": [
+      "Highly Accurate Protein Structure Prediction with AlphaFold",
+      "Protein Structure Prediction Using Multiple Sequence Alignment and Convolutional Neural Networks"
+    ],
+    "budget": 0.5,
+    "domain": "biomedical"
+  },
+  {
+    "query": "graph neural network drug discovery",
+    "expected_papers": [
+      "Graph Attention Networks",
+      "Molecular Representation Learning with Language Models"
+    ],
+    "budget": 0.5,
+    "domain": "chemistry"
+  },
+  {
+    "query": "federated learning privacy preserving",
+    "expected_papers": [
+      "Communication-Efficient Learning of Deep Networks from Decentralized Data"
+    ],
+    "budget": 0.5,
+    "domain": "systems"
+  },
+  {
+    "query": "knowledge graph embedding TransE",
+    "expected_papers": [
+      "Translating Embeddings for Modeling Multi-relational Data"
+    ],
+    "budget": 0.5,
+    "domain": "ml_kg"
+  },
+  {
+    "query": "recommender system collaborative filtering matrix factorization",
+    "expected_papers": [
+      "Matrix Factorization Techniques for Recommender Systems"
+    ],
+    "budget": 0.5,
+    "domain": "recsys"
+  },
+  {
+    "query": "speech recognition deep learning end-to-end",
+    "expected_papers": [
+      "Deep Speech 2: End-to-End Speech Recognition in English and Mandarin"
+    ],
+    "budget": 0.5,
+    "domain": "speech"
+  },
+  {
+    "query": "anomaly detection unsupervised",
+    "expected_papers": [
+      "Isolation Forest"
+    ],
+    "budget": 0.5,
+    "domain": "ml_anomaly"
+  },
+  {
+    "query": "CRISPR gene editing machine learning",
+    "expected_papers": [
+      "DeepCRISPR: Deep Learning Approach for Predicting sgRNA On-Target Activity"
+    ],
+    "budget": 0.5,
+    "domain": "biomedical"
+  },
+  {
+    "query": "semantic segmentation autonomous driving",
+    "expected_papers": [
+      "SegNet: A Deep Convolutional Encoder-Decoder Architecture for Image Segmentation"
+    ],
+    "budget": 0.5,
+    "domain": "cv_segmentation"
+  },
+  {
+    "query": "self-supervised learning representation",
+    "expected_papers": [
+      "A Simple Framework for Contrastive Learning of Visual Representations"
+    ],
+    "budget": 0.5,
+    "domain": "ml_pretraining"
+  },
+  {
+    "query": "NeRF neural radiance fields 3D",
+    "expected_papers": [
+      "NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis"
+    ],
+    "budget": 0.5,
+    "domain": "cv_3d"
+  },
+  {
+    "query": "Transformer protein language model",
+    "expected_papers": [
+      "Highly Accurate Protein Structure Prediction with AlphaFold"
+    ],
+    "budget": 0.5,
+    "domain": "biomedical"
+  },
+  {
+    "query": "stable diffusion text-to-image latent diffusion",
+    "expected_papers": [
+      "High-Resolution Image Synthesis with Latent Diffusion Models"
+    ],
+    "budget": 0.5,
+    "domain": "cv_generation"
+  },
+  {
+    "query": "large language model alignment RLHF",
+    "expected_papers": [
+      "Training Language Models to Follow Instructions with Human Feedback"
+    ],
+    "budget": 0.5,
+    "domain": "nlp_llm"
+  },
+  {
+    "query": "transformer architecture encoder decoder",
+    "expected_papers": [
+      "Attention Is All You Need"
+    ],
+    "budget": 0.5,
+    "domain": "ml_core"
   }
 ]

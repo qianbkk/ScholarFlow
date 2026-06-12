@@ -76,3 +76,11 @@ class SearchState(TypedDict):
     # 字段重命名/清理脚本都可能误删。这里显式声明 + Optional[str] 允许 None,
     # 消除'约定俗成'漂移风险 (闭环 R5 S-1)。
     top5_summary_cache: Optional[str]
+
+    # R10.5.14: 结构化约束, query_decomposer 从用户 query 里抽 4 维:
+    #   venues: ["NeurIPS", "Nature"]   - 发表 venue
+    #   year_range: [2020, 2024]        - 时间范围 (可空表示无下/上限)
+    #   methods: ["transformer", "RL"]  - 方法论
+    #   datasets: ["ImageNet", "GLUE"]  - 数据集
+    # 没抽到就 None, search_agent 透传给 SS/OA 做精确过滤。
+    constraints: Optional[dict]

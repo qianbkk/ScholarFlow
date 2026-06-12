@@ -17,7 +17,7 @@ from fastapi import APIRouter, Request
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 
-from backend.config import LLM_PROVIDER
+from backend.config import LLM_PROVIDER, ENVIRONMENT, RATE_LIMITS_CURRENT, SCHOLARFLOW_DB_DIR, IS_DEV, IS_PROD, IS_TEST
 from backend.api.services.providers import _get_providers_with_keys
 # R10.5 Fix-P0-Audit-1.2: 从 utils.network 导入, 切断 health → main 循环依赖
 from backend.utils.network import get_real_ip
@@ -35,6 +35,9 @@ router.on_startup = []  # type: ignore[attr-defined]
 router.on_shutdown = []  # type: ignore[attr-defined]
 
 logger = logging.getLogger(__name__)
+
+# R10.5.14 (P0-C): 进程级启动时间戳, 给 /health/detailed 算 uptime.
+_START_TIME = _time.time()
 
 
 def _check_cache_writable() -> dict:
@@ -119,6 +122,39 @@ async def health():
         resp["cache"] = cache_check
         logger.warning(f"[health] cache not writable: {cache_check['error']}")
     return resp
+
+
+@router.get("/health/detailed")
+async def health_detailed():
+    """R10.5.14 (P0-C): 详细健康检查 — 运维监控 / 故障预警用.
+
+    跟 /health (k8s/load-balancer 用, 必须轻) 区别:
+      - /health: 进程在不在 + cache 写权限 + status
+      - /health/detailed: LLM provider 列表 + 启用状态 + current ENVIRONMENT
+        + 当前限流档 + DB dir + uptime, 给 devops dashboard 用
+
+    不限流 (跟 /health 一致), 但返回体积大, 监控调用频率不要太高.
+    不暴露 LLM API key / 用户数据, 只返配置拓扑.
+    """
+    providers = _get_providers_with_keys()
+    cache_check = _check_cache_writable()
+    return {
+        "status": "ok" if cache_check["writable"] else "degraded",
+        "service": "ScholarFlow",
+        "version": "1.0.0",
+        "uptime_sec": round(_time.time() - _START_TIME, 1),
+        "environment": {
+            "name": ENVIRONMENT,
+            "is_dev": IS_DEV,
+            "is_test": IS_TEST,
+            "is_prod": IS_PROD,
+            "db_dir": SCHOLARFLOW_DB_DIR,
+            "rate_limits": RATE_LIMITS_CURRENT,
+        },
+        "llm_providers": providers,
+        "llm_default": LLM_PROVIDER.lower(),
+        "cache": cache_check,
+    }
 
 
 @router.get("/providers")
