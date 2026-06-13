@@ -12,6 +12,9 @@ import {
   fetchMe,
   logout as authLogout,
   type UserInfo,
+  fetchRuntimeMode,
+  setRuntimeMode,
+  type RuntimeMode,
 } from './services/api';
 
 // Round 6 SIMPLIFY (REDUNDANT-004): 修复 onRetry 闭包丢失用户表单状态 bug
@@ -75,6 +78,26 @@ export default function App() {
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
   // R10.5.5: 快捷键面板显示状态
   const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
+  // R10.5.20: Runtime mode (mock / real) 状态. 启动时从后端拉, 切换时调
+  // /admin/runtime-mode POST. 切换即时生效, 不需要重启.
+  const [runtimeMode, setRuntimeModeState] = useState<RuntimeMode | null>(null);
+
+  useEffect(() => {
+    fetchRuntimeMode()
+      .then((info) => setRuntimeModeState(info.mode))
+      .catch(() => setRuntimeModeState('real'));  // 失败兜底
+  }, []);
+
+  const handleChangeRuntimeMode = useCallback((mode: RuntimeMode) => {
+    setRuntimeModeState(mode);  // 乐观更新
+    setRuntimeMode(mode)
+      .then((info) => setRuntimeModeState(info.mode))
+      .catch(() => {
+        // 失败回滚
+        setRuntimeModeState((prev) => prev);
+        console.warn('setRuntimeMode failed, rolled back');
+      });
+  }, []);
 
   useEffect(() => {
     healthCheck()
@@ -372,6 +395,9 @@ export default function App() {
             // R10.5.5: 最近搜索
             recentSearches={recentSearches}
             onClearRecent={clearRecentSearches}
+            // R10.5.20: Runtime mode (mock/real) 切换
+            runtimeMode={runtimeMode ?? undefined}
+            onChangeRuntimeMode={handleChangeRuntimeMode}
           />
           {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
               激活 R4 U4 死代码 (用户重试按钮生效).

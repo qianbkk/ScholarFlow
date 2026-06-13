@@ -27,6 +27,10 @@ interface Props {
   // R10.5.5: 最近搜索 (localStorage LRU 5 条)
   recentSearches?: string[];
   onClearRecent?: () => void;
+  // R10.5.20: runtime mode (mock / real) 切换. App.tsx 持有 state + 拉/设 API,
+  // 这里只接收 + emit.
+  runtimeMode?: 'mock' | 'real';
+  onChangeRuntimeMode?: (mode: 'mock' | 'real') => void;
 }
 
 const SUGGESTIONS = [
@@ -68,6 +72,7 @@ function saveFormState(s: PersistedForm): void {
 
 export function QueryPanel({
   loading, onSearch, onReset, papers, lastQuery,
+  runtimeMode, onChangeRuntimeMode,
   currentStep = 0, elapsedSec = 0, pipelineSteps = [],
   isDegradedResponse = false, fallbackPaperCount = 0,
   selectedPaperId = null, onSelectPaper,
@@ -152,9 +157,11 @@ export function QueryPanel({
   // R10.5.6 Fix: 表单可折叠 — 有结果时给论文列表腾空间
   // (旧版表单 + 示例 + 最近搜索 堆太满, 论文列表被挤出可视区)
   const [formCollapsed, setFormCollapsed] = useState<boolean>(false);
-  // 自动折叠: 用户搜索过且当前不在加载中, 给论文列表让位
+  // R10.5.20: 不再自动折叠. 旧逻辑 "hasResults && !loading → 折叠" 让用户搜索
+  // 完必须点 "▾ 展开" 才能改 query 再搜, UX 不友好. 改成 "只响应用户主动折叠按钮",
+  // 标题旁加 "再来一次" 快速重搜按钮.
   const hasResults = papers.length > 0;
-  const shouldCollapseForm = formCollapsed || (hasResults && !loading);
+  const shouldCollapseForm = formCollapsed;
   const [showRecent, setShowRecent] = useState<boolean>(false);  // 最近搜索 popover
 
   // R10.5.10 Fix: popover Esc 关闭 + 点外部关闭 (旧实现只有关闭 × 按钮, 用户
@@ -186,7 +193,7 @@ export function QueryPanel({
         data-form-section
         data-collapsed={shouldCollapseForm ? 'true' : 'false'}
       >
-        {/* 栏目标题 — Editorial 风格: 序号 + 衬线斜体 + 折叠按钮 */}
+        {/* 栏目标题 — Editorial 风格: 序号 + 衬线斜体 + "再来一次" 按钮 + 折叠按钮 */}
         <div className="flex items-baseline justify-between gap-2 mb-2">
           <div className="flex items-baseline gap-2 min-w-0">
             <span
@@ -202,27 +209,58 @@ export function QueryPanel({
               研究查询
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={() => setFormCollapsed((c) => !c)}
-            aria-label={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
-            title={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
-            className="font-mono text-[10px] uppercase tracking-[0.12em] px-1.5 py-0.5 transition-colors border shrink-0"
-            style={{
-              color: 'var(--sf-muted)',
-              borderColor: 'var(--sf-border)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = 'var(--sf-accent)';
-              e.currentTarget.style.borderColor = 'var(--sf-accent)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = 'var(--sf-muted)';
-              e.currentTarget.style.borderColor = 'var(--sf-border)';
-            }}
-          >
-            {shouldCollapseForm ? '▾ 展开' : '▴ 折叠'}
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {/* R10.5.20: 搜索完成后, 标题旁加 "再来一次" 按钮让用户快速重搜
+                (旧版自动折叠让用户感知不到 query 还可改) */}
+            {hasResults && !loading && (
+              <button
+                type="button"
+                onClick={() => submit()}
+                disabled={!query.trim()}
+                aria-label="用当前 query 重新检索"
+                title="用当前 query 重新检索 (改 query 后点这里重跑)"
+                data-testid="re-search-btn"
+                className="font-mono text-[10px] uppercase tracking-[0.12em] px-1.5 py-0.5 transition-colors border shrink-0 disabled:opacity-40 disabled:cursor-not-allowed"
+                style={{
+                  color: 'var(--sf-accent)',
+                  borderColor: 'var(--sf-accent)',
+                }}
+                onMouseEnter={(e) => {
+                  if (query.trim()) {
+                    e.currentTarget.style.backgroundColor = 'var(--sf-accent)';
+                    e.currentTarget.style.color = 'var(--sf-bg)';
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                  e.currentTarget.style.color = 'var(--sf-accent)';
+                }}
+              >
+                ↻ 再来一次
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setFormCollapsed((c) => !c)}
+              aria-label={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
+              title={shouldCollapseForm ? '展开查询表单' : '折叠查询表单'}
+              className="font-mono text-[10px] uppercase tracking-[0.12em] px-1.5 py-0.5 transition-colors border shrink-0"
+              style={{
+                color: 'var(--sf-muted)',
+                borderColor: 'var(--sf-border)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.color = 'var(--sf-accent)';
+                e.currentTarget.style.borderColor = 'var(--sf-accent)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.color = 'var(--sf-muted)';
+                e.currentTarget.style.borderColor = 'var(--sf-border)';
+              }}
+            >
+              {shouldCollapseForm ? '▾ 展开' : '▴ 折叠'}
+            </button>
+          </div>
         </div>
         {/* 折叠态: 单行紧凑摘要 (回填内容 + 折叠后保留一个快搜图标按钮) */}
         {shouldCollapseForm ? (
@@ -268,7 +306,9 @@ export function QueryPanel({
             data-search-input
             className="w-full font-body text-[14px] leading-relaxed border rounded-none px-2.5 py-1.5 resize-none transition-colors"
             style={{
-              borderColor: 'var(--sf-border)',
+              // R10.5.20: 搜索完成 (有结果) 时边框高亮 accent 色, 暗示"可改 query 再搜"
+              borderColor: hasResults && !loading ? 'var(--sf-accent)' : 'var(--sf-border)',
+              borderWidth: hasResults && !loading ? '1.5px' : '1px',
               backgroundColor: 'var(--sf-bg)',
               color: 'var(--sf-text)',
               fontStyle: query ? 'normal' : 'italic',
@@ -389,6 +429,50 @@ export function QueryPanel({
               />
             </label>
           </div>
+
+          {/* R10.5.20: Mock / Real 数据源切换 (前端 UI 控制)
+              后端 /admin/runtime-mode 改 _runtime_mode_override, 业务函数查
+              is_runtime_mock() 走 mock 路径. 切换即时生效, 无需重启. */}
+          {onChangeRuntimeMode && runtimeMode && (
+            <div
+              className="flex items-center gap-3 text-[10.5px] font-mono uppercase tracking-wider pt-0.5"
+              data-testid="runtime-mode-toggle"
+            >
+              <span style={{ color: 'var(--sf-muted)' }}>数据源</span>
+              <label className="flex items-center gap-1 cursor-pointer" title="Mock 数据: 内置论文, 无网络, 不烧钱">
+                <input
+                  type="radio"
+                  name="runtime-mode"
+                  value="mock"
+                  checked={runtimeMode === 'mock'}
+                  onChange={() => onChangeRuntimeMode('mock')}
+                  disabled={loading}
+                  data-testid="runtime-mode-mock"
+                  className="cursor-pointer disabled:cursor-not-allowed"
+                  style={{ accentColor: 'var(--sf-accent)' }}
+                />
+                <span style={{ color: runtimeMode === 'mock' ? 'var(--sf-accent)' : 'var(--sf-text)' }}>
+                  演示
+                </span>
+              </label>
+              <label className="flex items-center gap-1 cursor-pointer" title="真实 API: Semantic Scholar + OpenAlex, 需要 key">
+                <input
+                  type="radio"
+                  name="runtime-mode"
+                  value="real"
+                  checked={runtimeMode === 'real'}
+                  onChange={() => onChangeRuntimeMode('real')}
+                  disabled={loading}
+                  data-testid="runtime-mode-real"
+                  className="cursor-pointer disabled:cursor-not-allowed"
+                  style={{ accentColor: 'var(--sf-accent)' }}
+                />
+                <span style={{ color: runtimeMode === 'real' ? 'var(--sf-accent)' : 'var(--sf-text)' }}>
+                  真实
+                </span>
+              </label>
+            </div>
+          )}
 
           <div className="flex items-stretch gap-0">
             {loading ? (

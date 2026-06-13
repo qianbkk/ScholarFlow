@@ -74,7 +74,7 @@ export function UserBadge({ user, openMode, onLogout, loading }: Props) {
         onClick={() => setOpen((o) => !o)}
         aria-label="用户菜单"
         aria-expanded={open}
-        title={`用户: ${user.display_name}`}
+        title={`用户: ${user.display_name} (多用户认证模式 — 每人独立 budget + 搜索历史)`}
         className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-mono uppercase tracking-[0.12em] transition-colors"
         style={{
           backgroundColor: 'var(--sf-bg)',

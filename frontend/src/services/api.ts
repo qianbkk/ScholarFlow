@@ -99,6 +99,32 @@ export async function healthCheck(): Promise<{ status: string; service: string; 
   return resp.json();
 }
 
+// ===== R10.5.20: Runtime Mode 切换 (前端 UI 控制 mock/real) =====
+export type RuntimeMode = 'mock' | 'real';
+
+export interface RuntimeModeInfo {
+  mode: RuntimeMode;
+  source: 'runtime' | 'env';  // 'runtime' = 前端切了, 'env' = env LLM_MOCK/API_MOCK 兜底
+}
+
+export async function fetchRuntimeMode(): Promise<RuntimeModeInfo> {
+  const resp = await fetch(`${API_BASE}/admin/runtime-mode`, {
+    headers: { ...authHeaders() },
+  });
+  if (!resp.ok) throw new Error(`fetchRuntimeMode failed: ${resp.status}`);
+  return resp.json();
+}
+
+export async function setRuntimeMode(mode: RuntimeMode): Promise<RuntimeModeInfo> {
+  const resp = await fetch(`${API_BASE}/admin/runtime-mode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ mode }),
+  });
+  if (!resp.ok) throw new Error(`setRuntimeMode failed: ${resp.status}`);
+  return resp.json();
+}
+
 // ===== R10.5 Fix-P0-B: Auth 端点 =====
 export interface AuthResponse {
   user_id: string;

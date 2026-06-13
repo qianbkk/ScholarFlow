@@ -263,6 +263,108 @@ KIMI_API_KEY=sk-...
 
 ---
 
+## 🎮 使用模式 (R10.5.20 — 3 种模式 + 前端可视化)
+
+ScholarFlow 启动后有 **3 种模式** 可以选,每种对应不同使用场景。下面讲清楚怎么用、什么区别。
+
+### 📊 模式对照表
+
+| 模式 | 触发方式 | 多用户 | 数据源 | 烧钱 | 谁用 |
+|------|---------|--------|--------|------|------|
+| **🔓 单用户开发** | `.env` 设 `OPEN_MODE=true` + 重启 | ❌ 所有人共享 `dev-user` | Mock / Real (二选一) | 取决于数据源 | 本地开发 / 演示 |
+| **🔐 多用户认证** | 默认 (`OPEN_MODE=false`) | ✅ 每用户独立 budget | Mock / Real (二选一) | 取决于数据源 | 生产 / 团队 |
+| **📦 Mock 数据** | 前端 QueryPanel "演示" radio | 跟前两个叠加 | ❌ 内置论文 | ❌ 0 | 离线 / 演示 |
+| **🌐 真实 API** | 前端 QueryPanel "真实" radio | 跟前两个叠加 | ✅ SS + OpenAlex | ✅ LLM cost | 真检索 |
+
+### 🎯 模式 1: 单用户开发 (最快上手)
+
+适合: **本地试用 / 演示 / 离线**
+
+```bash
+# 1. 编辑 .env
+echo "OPEN_MODE=true" >> .env
+
+# 2. 启动 (任意 dev / docker / scholarflow.py)
+python scholarflow.py start_local
+
+# 3. 浏览器打开 http://127.0.0.1:5173
+#    → 跳过登录, 直接进主界面, 看到 user_id = "dev-user"
+```
+
+**界面特征**:
+- 顶部右上角徽标: 🔓 `开发模式` (灰色, 鼠标悬停有 tooltip)
+- 不用注册账号, 不用管理 API key
+- 所有搜索共享 `dev-user` 账户的 budget 池
+
+### 🔐 模式 2: 多用户认证 (生产推荐)
+
+适合: **生产部署 / 团队协作 / 独立 budget**
+
+```bash
+# 1. .env 确保 OPEN_MODE 未设 (默认 false)
+unset OPEN_MODE   # bash / 或编辑 .env 删掉这一行
+
+# 2. 启动 (OPEN_MODE=false 启动后 lifespan 检测)
+python scholarflow.py start_local
+
+# 3. 首次打开 → 弹 LoginDialog, 选 "新用户注册" 填邮箱
+#    → 拿到 API key (格式 sf_xxx), 浏览器自动存到 localStorage
+#    → 之后所有请求自动带 X-API-Key header, 进主界面
+```
+
+**界面特征**:
+- 顶部右上角徽标: ● `你的名字 ▾` (彩色, 点开有 dropdown 退出)
+- 鼠标悬停徽标 tooltip: "用户: 张三 (多用户认证模式 — 每人独立 budget + 搜索历史)"
+- 同一邮箱注册 / 登录 → 同一 user_id (R10.5.16 Fix-X3 修复)
+- 没 X-API-Key → 401 (前端 LoginDialog 兜底, 不会白屏)
+- 已注册用户 `/auth/login` 复用 (不需要重置)
+
+### 📦 / 🌐 模式 3: Mock / Real 数据源 (运行时切换)
+
+适合: **离线演示 ↔ 真检索** 切换
+
+**默认**: 走环境变量 `LLM_MOCK` / `API_MOCK` (启动时锁定)
+
+**R10.5.20 新增**: 前端 QueryPanel 底部"数据源" radio, 运行时切换:
+
+```
+┌─────────────────────────┐
+│ § 1 研究查询            │
+│ ┌─────────────────────┐ │
+│ │ 输入研究问题…       │ │
+│ └─────────────────────┘ │
+│ 模型 [MiniMax ▼]  预算 2  迭代 3 │
+│ 数据源 ◯ 演示 ⊙ 真实    │ ← 切换这里!
+│ ┌─────────────────────┐ │
+│ │ 检索 →             │ │
+│ └─────────────────────┘ │
+└─────────────────────────┘
+```
+
+- **演示** (`mock`): 内置论文 (backend/.cache/data), 0 网络, 0 烧钱
+- **真实** (`real`): Semantic Scholar + OpenAlex 真 API + LLM 真调用
+- 切换即时生效, **不需要重启后端**
+- 后端 `/api/v1/admin/runtime-mode` 端点控制 (per-worker, 跟熔断器同模型)
+
+### 💡 常见组合
+
+- **离线演示**: OPEN_MODE=true + Mock (默认推荐给评委看)
+- **本地真检索**: OPEN_MODE=true + Real (开发调试, 烧自己钱)
+- **生产部署**: OPEN_MODE=false + Real (用户多, 烧钱归自己)
+- **生产演示**: OPEN_MODE=false + Mock (做培训, 不烧钱)
+
+### 🛠 故障排查
+
+| 症状 | 原因 | 修法 |
+|------|------|------|
+| 顶部一直"载入" | `/auth/me` 网络错 | 检查后端 8000 端口 (或 scholarflow.py show_status) |
+| LoginDialog 一直弹 | X-API-Key 失效 / 没存 | 重新 `/auth/login` 拿 key |
+| 搜索返 401 | 用了旧 key | 退出 → 重登录 |
+| 数据源切了没生效 | 没等 2s | UI 切换 → 等 1-2s → 看到 accent 色高亮才生效 |
+| 切 Mock 后还是真 API | 多 worker 部署 | 单 worker dev 立即生效; 4 worker 部署下 1/N 请求走 mock (R11+ 切 Redis) |
+
+---
+
 ## 📜 License
 
 MIT — see [LICENSE](LICENSE).
