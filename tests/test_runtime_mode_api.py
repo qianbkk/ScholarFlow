@@ -40,7 +40,7 @@ def _isolate(monkeypatch, tmp_path):
 def _client():
     from backend.auth import dependencies as auth_deps
     with TestClient(main_mod.app) as c:
-        # OPEN_MODE=true 跳过 auth, 简化测试
+        # OPEN_MODE=true + ADMIN_USER_IDS=dev-user (conftest autouse 默认) 都跳过
         from unittest.mock import patch
         with patch.object(auth_deps, "OPEN_MODE", True):
             yield c

@@ -39,6 +39,10 @@ os.environ.setdefault("ENVIRONMENT", "test")
 import tempfile
 _TEST_DB_DIR = os.path.join(tempfile.gettempdir(), "scholarflow_test")
 os.environ.setdefault("SCHOLARFLOW_DB_DIR", _TEST_DB_DIR)
+# R10.5.21: admin 端点测试白名单. 默认 dev-user 可改, 跟 OPEN_MODE=true 一致
+# (都是 dev 模式). test_admin_runtime_mode_auth.py 的 admin_client fixture
+# 会显式 override 此值测 fail-closed 分支.
+os.environ.setdefault("ADMIN_USER_IDS", "dev-user")
 
 
 import pytest
@@ -109,6 +113,16 @@ def _reset_global_state(request):
             from backend.utils import runtime_mode
             if hasattr(runtime_mode, "_runtime_mode_override"):
                 runtime_mode._runtime_mode_override["mode"] = "auto"
+        except (ImportError, AttributeError):
+            pass
+        # R10.5.21: admin 鉴权白名单测试默认含 dev-user, 让 R10.5.20 的
+        # /admin/runtime-mode POST 测试 (test_runtime_mode_api) 仍能跑通.
+        # 任何显式测 fail-closed 的 test (test_admin_runtime_mode_auth) 用
+        # admin_client fixture 显式覆盖.
+        try:
+            from backend.auth import dependencies as auth_deps
+            if hasattr(auth_deps, "ADMIN_USER_IDS"):
+                auth_deps.ADMIN_USER_IDS = frozenset({"dev-user"})
         except (ImportError, AttributeError):
             pass
     except (ImportError, AttributeError):
