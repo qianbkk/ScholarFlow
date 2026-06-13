@@ -7,7 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### R10.5.19 — P.txt + Q.txt 审计 12 项落地 (f15219f, ec477a3)
+**触发:** D:/Users/桌面/P.txt (ScholarFlow 安全与架构审计) + Q.txt (10 万用户上线压力审计) 两份独立审计报告 (2026-06-13)
+**结果:** 8/12 真实修源码, 4/12 文档化接受
+
+#### P0/P1+ 真实 bug (R10.5.19-p0 f15219f)
+- **修复 1:** `useSearch.ts` 全局 90s 兜底超时永远不触发 (genRef bump 顺序错). 后端崩溃/网络断开时用户看 1000s loading, R10.5.8 "防 SSE 真死锁" 注释实为死代码. 修复: bump → capture → setTimeout.
+- **修复 2:** `synthesis_agent.py` 4 处缺 `sanitize_paper_content` (ranker_agent 早有的 Fix-X6). 攻击者 arXiv 恶意 abstract 注入 LLM 报告 prompt. 修复: 4 字段 (title/venue/url/abstract) 全部 wrap sanitize.
+- **修复 3:** `/search` 60s timeout 路径**双倍归还** budget (内层 `_return_budget` + 外层 finally 又一次). 修复: 内层调完后显式 `return_amount = 0.0` 让 finally 跳过.
+- **修复 4:** `budget.py` 2 个 async 函数体同步 sqlite3 I/O 阻塞事件循环 (4 worker × 100 RPS 累计延迟). 修复: 抽 `_check_and_reserve_sync` / `_return_budget_sync`, async 体 `await asyncio.to_thread(...)`. 跟 cache.py to_thread 范式一致.
+
+#### P2/P3 真实改 + 文档化 (R10.5.19-p2 ec477a3)
+- **修复 5:** `main.py /search` 改回标准 `Depends(get_current_user)` 注入. 旧实现 (R10.5 Fix-P0-B) 因静态 guard regex 拒绝 `)` 字符, 改成函数体手动 await — 测试驱动腐化. 修复: 静态 guard 改 `ast` 解析, OpenAPI /docs 现在正确显示 X-API-Key 要求.
+- **修复 6:** `_in_flight_searches` 死引用累积兜底. 加 `_in_flight_searches_age` 时间戳字典 + lifespan 启动 `_periodic_in_flight_gc` task 每 5 min 扫一次, 删注册 > 10 min 的 stale entry.
+- **修复 7:** `synthesis_agent._verify_citations_in_report` 加 DOI regex (doi.org / aclanthology.org / openreview.net 域名), 加文本中裸 DOI 模式匹配.
+- **文档化:** 熔断器进程级单例 (4-worker 实际失败阈值 = N×3, 计划 R11+ 上 Redis) + `/search/stream` `?api_key=` query param 兼容 (lifespan `[DEPRECATION]` warning, R11+ 移除) + OPEN_MODE=true 时 `[SECURITY]` 醒目警告 + SECURITY.md 4 个 langgraph CVE 加 CVSS / Exploit 列.
+
+#### Tests
+- 新增 `tests/test_synthesis_sanitize.py` (9 tests) — 注入向量 + 静态契约 + 行为
+- 新增 `tests/test_budget_double_return.py` (2 tests) — 正反向验证 R10.5.19 修复后只调 1 次
+- 新增 `tests/test_budget_nonblocking.py` (2 tests) — 验证 budget async 不阻塞事件循环 (后台 ticks ≥ 18/20)
+- 全量 **317 passed / 1 skipped** (基线 304 + 13 新测试, 0 回归)
+- Playwright E2E (`tests/manual/verify_r10_5_19_frontend.py`, gitignored): UI 渲染 + 报告 + 图谱 + ErrorBoundary 未触发 ✅
+
+### R10.5.18 — 仓库精简 (1cab55b)
+- 删 `requirements.lock` (手写近似 lockfile, 必 drift)
+- frontend 移 `playwright` 误入 dep (-1.0GB) + `@types/dompurify` 归位 devDependencies
+- `.gitignore` 收口: `*.diff` 通用 + 校赛材料/ 规则
+- 删工作树临时文件 (r10_5_diff.txt / recent_diff.txt / - / backend.log)
+- `docs/HANDOFF.md` HEAD 引用 d54eaa4 → 1009778
+
+### ENVIRONMENT 模式 (R10.5.12 — c9f6606)
 - **ENVIRONMENT 模式 (dev / test / prod)** — 后端按环境分档限流 + DB 目录隔离, 解决"开发 5/min 20/hour 太严"+"不知道开发/正式怎么区分"两条用户反馈
   - `dev` (默认): `/search` **30/min · 200/hour**, `/search/stream` 60/min · 500/hour, dev 友好
   - `test`: 1000/min, pytest/CI 不撞限流
@@ -15,7 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 别名兼容: `development`/`dev`、`testing`/`test`、`production`/`prod`, 未知值兜底 `dev`
 - **SCHOLARFLOW_DB_DIR env** — 测试模式默认 `/tmp` (Windows `%TEMP%`), 强制隔离, 跑测试不污染 dev 缓存
 
-### Changed
+### Changed (R10.5.12)
 - `backend/config.py` — 6 处 `@limiter.limit` 改读 `_config.RATE_LIMITS_CURRENT[...]`, 不再硬编码
 - `backend/api/routes/auth.py` — 新增 `_parse_limit_string` 辅助解析 "30/minute;200/hour" 风格
 - `tests/conftest.py` — 强制 `ENVIRONMENT=test` + `SCHOLARFLOW_DB_DIR=tmp`, pytest 默认隔离
@@ -23,7 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `.env.example` — 新增 `ENVIRONMENT=dev` 段 + `SCHOLARFLOW_DB_DIR` 注释
 - `README.md` — 新增"🎚 运行模式"章节: 三档对照表 + 切换命令 + pytest 默认
 
-### Tests
+### Tests (R10.5.12)
 - 新增 `tests/test_environment_config.py` — 19 个测试覆盖别名 / 三档限流 / 字符串解析 / DB 目录
 - 全量 **283 passed / 1 skipped** (R10.5.12 基线)
 

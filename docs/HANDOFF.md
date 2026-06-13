@@ -1,10 +1,13 @@
 # ScholarFlow R10.5+ AI 接手清单
 
 > **目的**: 把审计报告 XYZ + live 验证 + R10.5 已完成项整理成可交接清单,供其他 AI 继续执行。
-> **当前 HEAD**: `1009778` (R10.5.17 /simplify 5 项合并,master 已 push)
-> **测试基线**: 304 passed / 1 skipped / 0 failed (~99s)
-> **Build 基线**: tsc clean / vite build clean / 13 routes
-> **审计报告**: `D:\Users\桌面\ScholarFlow 架构审计报告XYZ.txt` (14 项问题)
+> **当前 HEAD**: `ec477a3` (R10.5.19-p2 / 8 项 P2/P3 改进,master 已 push)
+> **测试基线**: 317 passed / 1 skipped / 0 failed (~130s)
+> **Build 基线**: tsc clean / vite build clean / 24 routes
+> **审计报告**:
+>   - `D:\Users\桌面\ScholarFlow 架构审计报告XYZ.txt` (14 项, R10.5 完成)
+>   - `D:\Users\桌面\P.txt` (P.txt 安全与架构审计 10 项, R10.5.19 完成 8 修 2 文档化)
+>   - `D:\Users\桌面\Q.txt` (Q.txt 10 万用户上线审计 4 项, R10.5.19 完成)
 
 ---
 
@@ -43,6 +46,17 @@
 | `443fe6d` | P1 审计 4 项 (引文动态 + 性能基准 + 审计日志 + 意图分类) | 4-bug batch |
 | `150811e` | /simplify + /code-review 11 项合并修复 (runtime/user_id/sanitize/跨 iter/500 audit) | 11-bug batch |
 | `1009778` | /simplify 5 项 (hash_user_id 5 caller 单源 + hash_query+_safe_year + make_initial_state + narrow except) | 5-bug batch |
+
+### ✅ 已完成 (R10.5.18, 1 commit, 仓库精简)
+| Commit | 内容 |
+|---|---|
+| `1cab55b` | 删 requirements.lock + playwright 误入 frontend + .gitignore 收口 + 临时文件 + HANDOFF 同步 |
+
+### ✅ 已完成 (R10.5.19, 2 commits, P.txt + Q.txt 12 项审计)
+| Commit | 内容 | 阻塞性 |
+|---|---|---|
+| `f15219f` | 4 项 P0/P1+ 真实 bug (useSearch 90s 超时 + synthesis 注入 + budget 双倍归还 + budget 阻塞事件循环) | **P0/P1+ 止血** |
+| `ec477a3` | 8 项 P2/P3 (static guard 改 AST + in-flight GC + 熔断器 doc + URL api_key deprecate + OPEN_MODE 警告 + CVE 严重程度 + synthesis grounding DOI) | 5 修 + 3 文档化 |
 
 ### ✅ Live 端到端验证通过
 - /health 200
@@ -303,4 +317,4 @@ Day 5: CI 4 job 验证
 
 ---
 
-*最后更新: 2026-06-13 by R10.5.18 (仓库精简). 任何疑问看 commit message + 审计报告 XYZ.*
+*最后更新: 2026-06-13 by R10.5.19 (P.txt + Q.txt 12 项审计). 任何疑问看 commit message + 审计报告 XYZ / P.txt / Q.txt.*
