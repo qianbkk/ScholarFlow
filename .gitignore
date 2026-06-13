@@ -65,6 +65,16 @@ playwright_runs/
 tests/manual/
 tests/__pycache__/
 
+# ===== R10.5.18: 收口验证/审计临时文件 =====
+# 历史 diff dump (developer 临时导出的 git diff, 用完即弃)
+# e2e_screenshots/ + e2e_*.py 是 R10.5 阶段性 bug 复现脚本 (Playwright +
+# 真实 LLM, 不可重跑), git history 已经记录了当时状态, 不需要再追踪.
+# 比赛材料 (docx/mp4) 本地保留, 体积大且不属于代码.
+tests/e2e_screenshots/
+tests/e2e_*.py
+*.diff
+校赛材料/
+
 # ===== 标准开源仓库标配 (入仓) =====
 # README.md / LICENSE / VERSION / CHANGELOG.md / CONTRIBUTING.md
 # / CODE_OF_CONDUCT.md / SECURITY.md / .env.example 全部保留入仓
@@ -72,7 +82,3 @@ tests/__pycache__/
 # + CI workflow — 标准仓库必须有, R10.5 重新纳入跟踪
 # tests/ + pytest.ini 同步入仓 — CI 跑 'pytest tests/' 必须能定位到
 # 实际文件 + 配置 (testpaths + norecursedirs=manual).
-
-tests/e2e_screenshots/
-tests/e2e_*.py
-recent_diff.txt

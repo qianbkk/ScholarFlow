@@ -1,14 +1,14 @@
 # ScholarFlow R10.5+ AI 接手清单
 
 > **目的**: 把审计报告 XYZ + live 验证 + R10.5 已完成项整理成可交接清单,供其他 AI 继续执行。
-> **当前 HEAD**: `d54eaa4` (R10.5.1 docs+config sync,master 已 push)
-> **测试基线**: 230 passed / 1 skipped / 0 failed (~95s)
+> **当前 HEAD**: `1009778` (R10.5.17 /simplify 5 项合并,master 已 push)
+> **测试基线**: 304 passed / 1 skipped / 0 failed (~99s)
 > **Build 基线**: tsc clean / vite build clean / 13 routes
 > **审计报告**: `D:\Users\桌面\ScholarFlow 架构审计报告XYZ.txt` (14 项问题)
 
 ---
 
-## 0. 当前状态 (2026-06-10)
+## 0. 当前状态 (2026-06-13)
 
 ### ✅ 已完成 (R10.5, 4 commits)
 | Commit | 内容 | 阻塞性 |
@@ -33,6 +33,16 @@
 | `61c41b1` | 全面修复审计 + 1000s loading 死锁 | final audit |
 | `9e76fde` | CI CVE 白名单 (PYSEC-2026-83 + CVE-2026-27794) | CI fix |
 | `d54eaa4` | scholarflow.bat 一键管理脚本 | ops |
+
+### ✅ 已完成 (R10.5.12 - R10.5.17, 6 commits)
+| Commit | 内容 | 阻塞性 |
+|---|---|---|
+| `c9f6606` | ENVIRONMENT 模式 (dev/test/prod) + 限流按档放宽 | dev 体验 |
+| `4baf66d` | ENVIRONMENT 模式文档/启动脚本/CHANGELOG 同步 | docs |
+| `9b5c5e4` | P0 审计 5 项 (约束提取 + 详细健康 + 35 case + E2E) | 5-bug batch |
+| `443fe6d` | P1 审计 4 项 (引文动态 + 性能基准 + 审计日志 + 意图分类) | 4-bug batch |
+| `150811e` | /simplify + /code-review 11 项合并修复 (runtime/user_id/sanitize/跨 iter/500 audit) | 11-bug batch |
+| `1009778` | /simplify 5 项 (hash_user_id 5 caller 单源 + hash_query+_safe_year + make_initial_state + narrow except) | 5-bug batch |
 
 ### ✅ Live 端到端验证通过
 - /health 200
@@ -293,4 +303,4 @@ Day 5: CI 4 job 验证
 
 ---
 
-*最后更新: 2026-06-09 by R10.5 Fix-X 系列. 任何疑问看 commit message + 审计报告 XYZ.*
+*最后更新: 2026-06-13 by R10.5.18 (仓库精简). 任何疑问看 commit message + 审计报告 XYZ.*
