@@ -11,8 +11,9 @@ export default defineConfig({
       // 路由, 旧 rewrite `path.replace(/^\/api/, '')` 会把 /api/v1/* 剥成 /v1/*,
       // 但后端没有 /v1/* 路由 (注册的是 /api/v1/* 和 /search/* alias), 全部 404.
       // 修复: 不做 rewrite, 路径原样转发, 后端 /api/v1/* 直接命中.
+      // R10.5.20: dev 端口 8000 经常被占, 实际本地后端用 8766, proxy 跟实际端口对齐.
       '/api': {
-        target: 'http://127.0.0.1:8000',
+        target: 'http://127.0.0.1:8766',
         changeOrigin: true,
         // rewrite 已移除 — 后端路由前缀包含 /api/v1, 不能再剥 /api.
       },

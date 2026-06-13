@@ -9,6 +9,7 @@ import logging
 import os
 import httpx
 from backend.config import SEMANTIC_SCHOLAR_API_KEY, API_MOCK
+from backend.utils.runtime_mode import is_runtime_mock  # R10.5.20: 前端可切 mock/real
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers, mark_as_expanded
 from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
@@ -91,7 +92,7 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
 
 async def search_papers(query: str, limit: int = 50) -> list[Paper]:
     """搜索论文。"""
-    if API_MOCK:
+    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env API_MOCK
         # Mock 模式：返回基于关键词匹配的论文
         papers = get_mock_papers(query, limit=limit)
         # 模拟 API 延迟
@@ -157,7 +158,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
 
 async def get_references(paper_id: str, limit: int = 30) -> list[Paper]:
     """获取一篇论文的参考文献列表（backward citations: 该论文引用了谁）。"""
-    if API_MOCK:
+    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env API_MOCK
         await asyncio.sleep(0.03)
         # 在 mock 数据里找这个 paper，然后返回它存的 references
         all_papers = get_all_mock_papers()
@@ -221,7 +222,7 @@ async def get_citations(paper_id: str, limit: int = 20) -> list[Paper]:
     犀利评论 #8 修复：补充前向引文扩展路径，避免"Matthew effect"——高引论文的
     references 通常是 5-10 年前的，缺少 2025/2026 的最新 preprints。
     """
-    if API_MOCK:
+    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env API_MOCK
         await asyncio.sleep(0.03)
         # 在 mock 数据里找这个 paper
         all_papers = get_all_mock_papers()

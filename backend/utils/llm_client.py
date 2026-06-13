@@ -28,6 +28,7 @@ from backend.config import (
     DEEPSEEK_BASE_URL,
     get_provider_config,
 )
+from backend.utils.runtime_mode import is_runtime_mock  # R10.5.20: 前端可切 mock/real
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
@@ -605,7 +606,7 @@ async def call_llm(
     Returns: (response_text, usage_info)
     """
     # ===== Mock 模式 =====
-    if LLM_MOCK:
+    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env LLM_MOCK
         return await _call_mock(prompt, task_type, json_mode)
 
     provider = (provider or LLM_PROVIDER).lower()

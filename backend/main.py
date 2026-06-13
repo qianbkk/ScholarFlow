@@ -950,6 +950,61 @@ app.add_api_route(
 )
 
 
+# ===== R10.5.20: Runtime Mode 切换 (前端 UI 控制 mock/real) =====
+
+from pydantic import BaseModel as _BaseModel
+from backend.utils.runtime_mode import (
+    get_runtime_mode,
+    set_runtime_mode,
+    is_runtime_mock,
+)
+
+
+class RuntimeModeResponse(_BaseModel):
+    mode: str  # "mock" | "real"
+    source: str  # "runtime" (前端切了) | "env" (env LLM_MOCK/API_MOCK 兜底)
+
+
+class RuntimeModeRequest(_BaseModel):
+    mode: str  # "mock" | "real" | "auto"
+
+
+async def get_runtime_mode_endpoint() -> RuntimeModeResponse:
+    """返回当前 runtime mode + 来源 (env / runtime)."""
+    rt_mode = get_runtime_mode()
+    if rt_mode in ("mock", "real"):
+        return RuntimeModeResponse(mode=rt_mode, source="runtime")
+    # auto: 走 env 兜底, 告诉前端当前是 mock 还是 real
+    return RuntimeModeResponse(
+        mode="mock" if is_runtime_mock() else "real",
+        source="env",
+    )
+
+
+async def set_runtime_mode_endpoint(req: RuntimeModeRequest) -> RuntimeModeResponse:
+    """切换 runtime mode. 'auto' = 恢复 env 行为.
+
+    R10.5.20: 进程级 (per-worker) 状态, 4-worker Gunicorn 部署下每个 worker
+    独立 (跟 circuit_breaker.py 同模型), 用户切到 mock 后只有 1/N 请求
+    走 mock. 短期接受, R11+ 切到 Redis. 文档化在 runtime_mode.py 模块头.
+    """
+    if req.mode not in ("mock", "real", "auto"):
+        raise HTTPException(status_code=400, detail=f"mode 必须是 mock/real/auto, 收到 {req.mode!r}")
+    set_runtime_mode(req.mode)  # type: ignore[arg-type]
+    return RuntimeModeResponse(
+        mode=req.mode,  # type: ignore[arg-type]
+        source="runtime",
+    )
+
+
+app.add_api_route(
+    "/api/v1/admin/runtime-mode", get_runtime_mode_endpoint, methods=["GET"],
+)
+app.add_api_route(
+    "/api/v1/admin/runtime-mode", set_runtime_mode_endpoint, methods=["POST"],
+)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)

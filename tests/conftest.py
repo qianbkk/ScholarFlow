@@ -103,6 +103,14 @@ def _reset_global_state(request):
             semantic_cache.clear_semantic_cache()
         except (ImportError, AttributeError):
             pass
+        # R10.5.20: runtime_mode._runtime_mode_override 是 module-level dict,
+        # 跨 test 残留会导致"auto" 起始假设被打破. 重置回 "auto" 走 env 兜底.
+        try:
+            from backend.utils import runtime_mode
+            if hasattr(runtime_mode, "_runtime_mode_override"):
+                runtime_mode._runtime_mode_override["mode"] = "auto"
+        except (ImportError, AttributeError):
+            pass
     except (ImportError, AttributeError):
         pass
 

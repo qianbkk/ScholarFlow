@@ -9,6 +9,7 @@ import logging
 import os
 import httpx
 from backend.config import OPENALEX_EMAIL, API_MOCK
+from backend.utils.runtime_mode import is_runtime_mock  # R10.5.20: 前端可切 mock/real
 from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
 from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
@@ -130,7 +131,7 @@ def _reconstruct_abstract(inverted_index: dict | None) -> str:
 
 async def search_papers(query: str, limit: int = 50) -> list[Paper]:
     """通过 OpenAlex 搜索论文。"""
-    if API_MOCK:
+    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env API_MOCK
         await asyncio.sleep(0.05)
         # 优先返回 OpenAlex 源（mock_data 里 source=openalex 的）
         all_papers = get_mock_papers(query, limit=limit * 2)
