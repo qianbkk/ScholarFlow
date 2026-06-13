@@ -182,102 +182,122 @@ async def _check_and_reserve_budget(estimated_cost: float, user_id: str = "dev-u
     (共享锁), `_save_*_to_db` 才开 BEGIN IMMEDIATE, 中间窗口另一个 worker
     读到的仍是旧值, 两次 reserve 各自相加, 后写覆盖, total 偏小.
     修复: 开一个连接, 整个 check + update 在单事务内, 写完 commit 再 close.
+
+    R10.5.19 P1 修复 (P.txt 审计 #4): 把 SQLite I/O offload 到线程池, 不再
+    阻塞 asyncio 事件循环. 旧实现: async 函数体里直接 conn.execute + commit,
+    在 100 RPS 高并发下每次 reserve 阻塞事件循环 ~1-5ms (SQLite WAL 写锁),
+    4 worker × 100 RPS 累计延迟线性增长. 修复: 抽 `_check_and_reserve_sync`
+    同步函数, async 函数体 `await asyncio.to_thread(...)` 包裹, `_budget_lock`
+    仍在 async 层保留 (跨 await 串行化).
     """
     async with _budget_lock:
-        from backend.utils.cache import _connect_with_wal
-        conn = _connect_with_wal("budget")
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            # 1) 读 (在 IMMEDIATE 事务内, 其他 writer 排队)
-            if user_id == "dev-user":
+        await asyncio.to_thread(
+            _check_and_reserve_sync, estimated_cost, user_id
+        )
+
+
+def _check_and_reserve_sync(estimated_cost: float, user_id: str) -> None:
+    """_check_and_reserve_budget 的同步临界区. 通过 asyncio.to_thread 调用.
+    内部 BEGIN IMMEDIATE + 读 + 写 + commit 全部在 default ThreadPoolExecutor
+    线程里跑, 不阻塞 asyncio 事件循环.
+
+    Raises:
+        HTTPException(503): 预算耗尽 或 DB schema 错 (no such table fixture 兼容)
+    """
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("budget")
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        # 1) 读 (在 IMMEDIATE 事务内, 其他 writer 排队)
+        if user_id == "dev-user":
+            row = conn.execute(
+                "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+            ).fetchone()
+            spent = float(row[0]) if row else 0.0
+            reserved = 0.0  # 旧表无 reserved 字段, 兼容
+            reset_ts = float(row[1]) if row else _time.time()
+        else:
+            # R10.5 code-review-X4: 区分"表不存在"(R10.5 之前 fixture 兼容)
+            # 和"其他 DB 错误"(production 应暴露 500). 旧实现裸 except Exception
+            # 早 return → 表不存在时 silently 让请求通过, cap 完全失效 (隐藏 config bug).
+            try:
                 row = conn.execute(
-                    "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+                    "SELECT spent_usd, reserved_usd, last_reset_hour "
+                    "FROM budget_user WHERE user_id=?",
+                    (user_id,),
                 ).fetchone()
-                spent = float(row[0]) if row else 0.0
-                reserved = 0.0  # 旧表无 reserved 字段, 兼容
-                reset_ts = float(row[1]) if row else _time.time()
-            else:
-                # R10.5 code-review-X4: 区分"表不存在"(R10.5 之前 fixture 兼容)
-                # 和"其他 DB 错误"(production 应暴露 500). 旧实现裸 except Exception
-                # 早 return → 表不存在时 silently 让请求通过, cap 完全失效 (隐藏 config bug).
-                try:
-                    row = conn.execute(
-                        "SELECT spent_usd, reserved_usd, last_reset_hour "
-                        "FROM budget_user WHERE user_id=?",
-                        (user_id,),
-                    ).fetchone()
-                except Exception as e:
-                    conn.rollback()
-                    # OperationalError "no such table" → fixture 兼容: 让请求通过 (无 budget 跟踪)
-                    # 其他 sqlite3.Error → production 错: 抛出 500 让 ops 知道
-                    err_msg = str(e)
-                    if "no such table" in err_msg or "no such column" in err_msg:
-                        logger.warning(
-                            f"[budget] budget_user 表/列不存在, 跳过 cap 检查 (likely 测试 fixture): {err_msg}"
-                        )
-                        return  # 不抛, 让请求继续
-                    logger.error(f"[budget] DB 错误: {err_msg}")
-                    raise HTTPException(503, detail=f"预算系统暂时不可用: {err_msg[:100]}")
-                if row is None:
-                    # 首次 reserve: 初始化 row
-                    spent = 0.0
-                    reserved = 0.0
-                    reset_ts = _time.time()
-                else:
-                    spent = float(row[0])
-                    reserved = float(row[1])
-                    reset_ts = float(row[2])
-            now = _time.time()
-            if now - reset_ts > 3600:
+            except Exception as e:
+                conn.rollback()
+                # OperationalError "no such table" → fixture 兼容: 让请求通过 (无 budget 跟踪)
+                # 其他 sqlite3.Error → production 错: 抛出 500 让 ops 知道
+                err_msg = str(e)
+                if "no such table" in err_msg or "no such column" in err_msg:
+                    logger.warning(
+                        f"[budget] budget_user 表/列不存在, 跳过 cap 检查 (likely 测试 fixture): {err_msg}"
+                    )
+                    return  # 不抛, 让请求继续
+                logger.error(f"[budget] DB 错误: {err_msg}")
+                raise HTTPException(503, detail=f"预算系统暂时不可用: {err_msg[:100]}")
+            if row is None:
+                # 首次 reserve: 初始化 row
                 spent = 0.0
                 reserved = 0.0
-                reset_ts = now
-            # Per-user 隔离: 各自 hour 预算 = global 1/10 (5 美元)
-            if user_id == "dev-user":
-                hour_cap = get_global_hourly_budget()
+                reset_ts = _time.time()
             else:
-                hour_cap = 5.0
-            if spent + estimated_cost > hour_cap:
-                # R10.5 Fix-X4: 抛错前先 rollback, 释放写锁
-                conn.rollback()
-                raise HTTPException(
-                    503,
-                    detail=f"用户 {user_id} 本小时预算上限 ${hour_cap:.2f} 已达, 请稍后重试",
-                )
-            # 2) 写 (在同事务内, 下一 worker 读到的是新值)
-            new_spent = spent + estimated_cost
-            new_reserved = reserved + estimated_cost
-            if user_id == "dev-user":
-                conn.execute(
-                    "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
-                    (new_spent, reset_ts),
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO budget_user (user_id, spent_usd, reserved_usd, "
-                    "last_reset_hour, updated_at) VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(user_id) DO UPDATE SET "
-                    "spent_usd=excluded.spent_usd, "
-                    "reserved_usd=excluded.reserved_usd, "
-                    "last_reset_hour=excluded.last_reset_hour, "
-                    "updated_at=excluded.updated_at",
-                    (user_id, new_spent, new_reserved, reset_ts, _time.time()),
-                )
-            conn.commit()
-            set_budget_reset_ts(reset_ts)
-        except HTTPException:
-            raise
-        except Exception as e:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            raise
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+                spent = float(row[0])
+                reserved = float(row[1])
+                reset_ts = float(row[2])
+        now = _time.time()
+        if now - reset_ts > 3600:
+            spent = 0.0
+            reserved = 0.0
+            reset_ts = now
+        # Per-user 隔离: 各自 hour 预算 = global 1/10 (5 美元)
+        if user_id == "dev-user":
+            hour_cap = get_global_hourly_budget()
+        else:
+            hour_cap = 5.0
+        if spent + estimated_cost > hour_cap:
+            # R10.5 Fix-X4: 抛错前先 rollback, 释放写锁
+            conn.rollback()
+            raise HTTPException(
+                503,
+                detail=f"用户 {user_id} 本小时预算上限 ${hour_cap:.2f} 已达, 请稍后重试",
+            )
+        # 2) 写 (在同事务内, 下一 worker 读到的是新值)
+        new_spent = spent + estimated_cost
+        new_reserved = reserved + estimated_cost
+        if user_id == "dev-user":
+            conn.execute(
+                "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                (new_spent, reset_ts),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO budget_user (user_id, spent_usd, reserved_usd, "
+                "last_reset_hour, updated_at) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(user_id) DO UPDATE SET "
+                "spent_usd=excluded.spent_usd, "
+                "reserved_usd=excluded.reserved_usd, "
+                "last_reset_hour=excluded.last_reset_hour, "
+                "updated_at=excluded.updated_at",
+                (user_id, new_spent, new_reserved, reset_ts, _time.time()),
+            )
+        conn.commit()
+        set_budget_reset_ts(reset_ts)
+    except HTTPException:
+        raise
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 async def _return_budget(amount: float, user_id: str = "dev-user") -> None:
@@ -289,56 +309,64 @@ async def _return_budget(amount: float, user_id: str = "dev-user") -> None:
 
     实现: 加 asyncio.Lock + BEGIN IMMEDIATE,与 reserve 路径一致,
     保证多 worker 间的 read-modify-write 原子性。
+
+    R10.5.19 P1 修复 (P.txt 审计 #4): SQLite I/O offload 到 ThreadPoolExecutor
+    (同 _check_and_reserve_budget). 跟 cache.py 的 to_thread 范式一致.
     """
     if amount <= 0:
         return
     async with _budget_lock:
-        from backend.utils.cache import _connect_with_wal
-        conn = _connect_with_wal("budget")
-        try:
-            conn.execute("BEGIN IMMEDIATE")  # 立即获取写锁,防多 worker TOCTOU
-            if user_id == "dev-user":
-                # OPEN_MODE dev-user 走旧 budget_state 'global' (向后兼容)
+        await asyncio.to_thread(_return_budget_sync, amount, user_id)
+
+
+def _return_budget_sync(amount: float, user_id: str) -> None:
+    """_return_budget 的同步临界区. 通过 asyncio.to_thread 调用."""
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("budget")
+    try:
+        conn.execute("BEGIN IMMEDIATE")  # 立即获取写锁,防多 worker TOCTOU
+        if user_id == "dev-user":
+            # OPEN_MODE dev-user 走旧 budget_state 'global' (向后兼容)
+            row = conn.execute(
+                "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+            ).fetchone()
+            if row is None:
+                return
+            total = float(row[0])
+            reset_ts = float(row[1])
+            new_total = max(0.0, total - amount)
+            conn.execute(
+                "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
+                (new_total, reset_ts),
+            )
+        else:
+            # 多用户路径走 budget_user
+            try:
                 row = conn.execute(
-                    "SELECT total, reset_ts FROM budget_state WHERE key='global'"
+                    "SELECT spent_usd, reserved_usd, last_reset_hour "
+                    "FROM budget_user WHERE user_id=?",
+                    (user_id,),
                 ).fetchone()
-                if row is None:
-                    return
-                total = float(row[0])
-                reset_ts = float(row[1])
-                new_total = max(0.0, total - amount)
-                conn.execute(
-                    "UPDATE budget_state SET total=?, reset_ts=? WHERE key='global'",
-                    (new_total, reset_ts),
-                )
-            else:
-                # 多用户路径走 budget_user
-                try:
-                    row = conn.execute(
-                        "SELECT spent_usd, reserved_usd, last_reset_hour "
-                        "FROM budget_user WHERE user_id=?",
-                        (user_id,),
-                    ).fetchone()
-                except Exception:
-                    # 旧 test fixture 没 _init_db(), 表不存在
-                    conn.rollback()
-                    return
-                if row is None:
-                    return  # 用户不存在
-                spent = float(row[0])
-                reserved = float(row[1])
-                reset_ts = float(row[2])
-                new_spent = max(0.0, spent - amount)
-                new_reserved = max(0.0, reserved - amount)
-                conn.execute(
-                    "UPDATE budget_user SET spent_usd=?, reserved_usd=?, "
-                    "last_reset_hour=?, updated_at=? WHERE user_id=?",
-                    (new_spent, new_reserved, reset_ts, _time.time(), user_id),
-                )
-            conn.commit()
-            set_budget_reset_ts(reset_ts)
-        finally:
-            conn.close()
+            except Exception:
+                # 旧 test fixture 没 _init_db(), 表不存在
+                conn.rollback()
+                return
+            if row is None:
+                return  # 用户不存在
+            spent = float(row[0])
+            reserved = float(row[1])
+            reset_ts = float(row[2])
+            new_spent = max(0.0, spent - amount)
+            new_reserved = max(0.0, reserved - amount)
+            conn.execute(
+                "UPDATE budget_user SET spent_usd=?, reserved_usd=?, "
+                "last_reset_hour=?, updated_at=? WHERE user_id=?",
+                (new_spent, new_reserved, reset_ts, _time.time(), user_id),
+            )
+        conn.commit()
+        set_budget_reset_ts(reset_ts)
+    finally:
+        conn.close()
 
 
 # ===== R10.5 Fix-P0-B: per-user budget DB 助手 =====

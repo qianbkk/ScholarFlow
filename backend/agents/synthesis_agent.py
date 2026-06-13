@@ -10,6 +10,7 @@ import re
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
+from backend.utils.text_utils import sanitize_paper_content  # R10.5.19 P0 修复: 跟 ranker_agent 对齐, 防 arXiv 摘要间接 prompt 注入
 
 logger = logging.getLogger(__name__)
 
@@ -78,10 +79,10 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
         }
 
     papers_text = "\n\n".join([
-        f"**[Paper {i+1}]** {p.get('title','')}\n"
-        f"Year: {p.get('year','')} | Citations: {p.get('citation_count',0)} | Venue: {p.get('venue','')}\n"
-        f"Relevance: {p.get('relevance_score',0):.1f}/10 | URL: {p.get('url','')}\n"
-        f"Abstract: {p.get('abstract','')[:200]}"
+        f"**[Paper {i+1}]** {sanitize_paper_content(p.get('title',''), max_len=120)}\n"
+        f"Year: {p.get('year','')} | Citations: {p.get('citation_count',0)} | Venue: {sanitize_paper_content(p.get('venue',''), max_len=80)}\n"
+        f"Relevance: {p.get('relevance_score',0):.1f}/10 | URL: {sanitize_paper_content(p.get('url',''), max_len=200)}\n"
+        f"Abstract: {sanitize_paper_content(p.get('abstract',''), max_len=200)}"
         for i, p in enumerate(ranked)
     ])
     # ===== 纵深防御 (VULN-001 Layer 1) =====

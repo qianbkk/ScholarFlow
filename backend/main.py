@@ -506,6 +506,11 @@ async def search(req: SearchRequest, request: Request):
             # budget 归还: 由于 task 还没完成, 不知道花了多少, 全额还
             return_amount = float(req.budget)
             await _return_budget(return_amount, user_id=user.user_id)
+            # R10.5.19 P0 修复: 显式归零, 防外层 finally 重复归还.
+            # 旧代码: L507-508 设 return_amount = req.budget + 调一次 _return_budget,
+            # 然后 raise HTTPException 504 → 走 finally (L591) → return_amount 仍
+            # = req.budget → 再调一次 _return_budget(req.budget) → 用户凭空 +budget.
+            return_amount = 0.0
             raise HTTPException(
                 status_code=504,
                 detail="Sync search timeout. Use /api/v1/search/stream (SSE) for long queries.",

@@ -380,9 +380,17 @@ export function useSearch() {
       // R10.5.8 code-review 修复: 启动 90s 全局兜底超时, 防 SSE 真死锁
       // (e.g. 后端卡死/连接挂起) 时用户看 1000s loading. 收到首个 SSE
       // 事件后由 stopFallbackProgress 清掉, 正常流程不受影响.
+      //
+      // R10.5.19 P0 修复: bump generation 必须在 setTimeout **之前**, 否则
+      // 旧代码 `myGenAtStart = N` → setTimeout → 立刻 `genRef.current = N+1`
+      // → 90s 后 setTimeout 检查 `N !== N+1` 永远 return, 兜底超时永远不触发.
+      // 正确顺序: 先 bump (genRef.current = N+1), 再捕获 (myGenAtStart = N+1),
+      // setTimeout 检查 `N+1 !== genRef.current` 才能正确识别"是否有新搜索发生".
       if (globalTimeoutTimerRef.current) {
         clearTimeout(globalTimeoutTimerRef.current);
       }
+      // H6: bump generation FIRST, then capture
+      genRef.current += 1;
       const myGenAtStart = genRef.current;
       globalTimeoutTimerRef.current = setTimeout(() => {
         // 检查 gen: 用户可能已经在 90s 内启动新搜索, 旧 timer 不应报错
@@ -391,8 +399,6 @@ export function useSearch() {
         setLoading(false);
         genRef.current += 1;  // 防止后续事件污染 result
       }, GLOBAL_TIMEOUT_MS);
-      // H6: bump generation
-      genRef.current += 1;
       // R10.5.5: 重置重试标志 — 新搜索允许一次网络重试
       retryAttemptedRef.current = false;
       setLoading(true);
