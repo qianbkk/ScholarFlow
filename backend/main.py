@@ -102,7 +102,7 @@ import types
 import backend.api.services.budget as _budget_svc
 from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router  # R10.5 Fix-P0-B
-from backend.auth.dependencies import User, get_current_user  # R10.5 Fix-P0-B
+from backend.auth.dependencies import User, get_current_user, require_admin  # R10.5.21 鉴权
 from backend.api.services.budget import (
     _init_budget_table,
     _load_budget_from_db,
@@ -312,6 +312,27 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"[lifespan] in_flight_gc error: {e}")
     asyncio.create_task(_periodic_in_flight_gc())
+    # R10.5.21 (J.txt + K.txt 审计 #2): 定期 WAL checkpoint 防止多 worker
+    # 部署下 -wal 文件无限增长. 5 分钟一次 PASSIVE 模式 (不阻塞读).
+    async def _periodic_wal_checkpoint():
+        from backend.utils.cache import wal_checkpoint_all
+        WAL_GC_INTERVAL_SEC = 300  # 5 min
+        while True:
+            try:
+                await asyncio.sleep(WAL_GC_INTERVAL_SEC)
+                sizes = await asyncio.to_thread(wal_checkpoint_all)
+                # 只 log 非 0, 避免每 5 分钟刷 INFO
+                non_zero = {k: v for k, v in sizes.items() if v > 1024 * 1024}  # > 1MB
+                if non_zero:
+                    logger.info(
+                        f"[lifespan] wal_checkpoint: large WAL files (MB+): "
+                        f"{ {k: f'{v / 1024 / 1024:.1f}MB' for k, v in non_zero.items()} }"
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[lifespan] wal_checkpoint error: {e}")
+    asyncio.create_task(_periodic_wal_checkpoint())
     # 启动：恢复 budget 状态（service 模块导入时已跑一次 _load_budget_state，
     # 此处显式再跑一次 — 显式 > 隐式，避免依赖 service 模块副作用）
     _load_budget_state()
@@ -970,7 +991,10 @@ class RuntimeModeRequest(_BaseModel):
 
 
 async def get_runtime_mode_endpoint() -> RuntimeModeResponse:
-    """返回当前 runtime mode + 来源 (env / runtime)."""
+    """返回当前 runtime mode + 来源 (env / runtime).
+
+    GET 公开 — 不影响安全, 前端启动时拉取方便, 不暴露任何用户态.
+    """
     rt_mode = get_runtime_mode()
     if rt_mode in ("mock", "real"):
         return RuntimeModeResponse(mode=rt_mode, source="runtime")
@@ -981,16 +1005,24 @@ async def get_runtime_mode_endpoint() -> RuntimeModeResponse:
     )
 
 
-async def set_runtime_mode_endpoint(req: RuntimeModeRequest) -> RuntimeModeResponse:
+async def set_runtime_mode_endpoint(
+    req: RuntimeModeRequest,
+    _admin: User = Depends(require_admin),  # R10.5.21 鉴权
+) -> RuntimeModeResponse:
     """切换 runtime mode. 'auto' = 恢复 env 行为.
 
     R10.5.20: 进程级 (per-worker) 状态, 4-worker Gunicorn 部署下每个 worker
     独立 (跟 circuit_breaker.py 同模型), 用户切到 mock 后只有 1/N 请求
     走 mock. 短期接受, R11+ 切到 Redis. 文档化在 runtime_mode.py 模块头.
+
+    R10.5.21 (J.txt + K.txt 审计 #1): 必须 admin 身份. 没配置 ADMIN_USER_IDS
+    时所有 POST 默认 403 拒绝 (fail-closed). 配置示例 (.env):
+        ADMIN_USER_IDS=u_abc123,u_def456
     """
     if req.mode not in ("mock", "real", "auto"):
         raise HTTPException(status_code=400, detail=f"mode 必须是 mock/real/auto, 收到 {req.mode!r}")
     set_runtime_mode(req.mode)  # type: ignore[arg-type]
+    logger.info(f"[admin] runtime_mode → {req.mode} (by {_admin.user_id[:8]}***)")
     return RuntimeModeResponse(
         mode=req.mode,  # type: ignore[arg-type]
         source="runtime",

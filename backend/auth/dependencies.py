@@ -152,6 +152,81 @@ async def get_current_user(
     return user
 
 
+# ===== R10.5.21 修复 (J.txt + K.txt 审计 #1) =====
+# Admin 端点保护: admin/runtime-mode 切 mock/real 影响全系统 LLM 花费,
+# 默认必须 fail-closed. 设计:
+#   - OPEN_MODE=true: 拒绝 POST (dev-user 是合成账户, 不能让所有 dev 都能改全局)
+#     唯一豁免: ADMIN_USER_IDS env 含 "dev-user" 显式 (默认不含)
+#   - OPEN_MODE=false: 要求 X-API-Key, user_id 必须在 ADMIN_USER_IDS (逗号分隔) 白名单
+#   - GET (查询当前模式) 仍开放 — 不影响安全, 方便前端启动时拉取
+_ADMIN_USER_IDS_RAW = os.getenv("ADMIN_USER_IDS", "").strip()
+ADMIN_USER_IDS: frozenset[str] = frozenset(
+    uid.strip() for uid in _ADMIN_USER_IDS_RAW.split(",") if uid.strip()
+)
+
+
+async def require_admin(
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+) -> User:
+    """Admin 端点依赖. 严格 fail-closed, 跟 get_current_user 区别:
+
+    1. OPEN_MODE=true → 拒绝 (返 403), 除非 ADMIN_USER_IDS 显式包含 "dev-user"
+    2. OPEN_MODE=false → 校验 X-API-Key, user_id 必须在 ADMIN_USER_IDS 白名单
+
+    ADMIN_USER_IDS 没配 → 任何 POST admin/* 都返 403 (默认安全).
+
+    顺序: 先按 OPEN_MODE 决定认证策略, 再判 401/403:
+      - OPEN_MODE=true + 无 dev-user 白名单 → 403 (不需要 key, 单纯拒绝)
+      - OPEN_MODE=true + 有 dev-user 白名单 → 200 (合成 dev-user)
+      - OPEN_MODE=false + 无 key → 401 (需要 key 才能继续)
+      - OPEN_MODE=false + key 错 / 不在白名单 → 401 / 403
+    """
+    if OPEN_MODE:
+        # 显式列表含 "dev-user" 才放行
+        if "dev-user" in ADMIN_USER_IDS:
+            logger.warning(
+                "[SECURITY] OPEN_MODE=true + ADMIN_USER_IDS=dev-user: "
+                "dev user 可改全局 LLM mode, 仅本地开发用"
+            )
+            return User(
+                user_id="dev-user",
+                display_name="Open Mode Dev (admin)",
+                created_at=0.0,
+                is_dev_user=True,
+            )
+        raise HTTPException(
+            status_code=403,
+            detail="OPEN_MODE=true 下 admin 端点默认拒绝. "
+                   "如需在 dev 开放, 设 ADMIN_USER_IDS=dev-user (注意安全).",
+        )
+    # OPEN_MODE=false: 必须 key
+    if not x_api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Admin 端点需要 X-API-Key header. "
+                   "在 .env 设 ADMIN_USER_IDS=<逗号分隔 user_id 白名单> 授权.",
+        )
+    user = _lookup_user_by_key(x_api_key)
+    if not user:
+        raise HTTPException(status_code=401, detail="API Key 无效或已撤销")
+    if not ADMIN_USER_IDS:
+        raise HTTPException(
+            status_code=403,
+            detail="Admin 端点未配置白名单. 在 .env 设 ADMIN_USER_IDS=<user_id> 授权.",
+        )
+    if user.user_id not in ADMIN_USER_IDS:
+        # 模糊化日志: 不暴露白名单内容给攻击者
+        logger.warning(
+            f"[SECURITY] non-admin user {user.user_id[:8]}*** tried admin endpoint"
+        )
+        raise HTTPException(
+            status_code=403,
+            detail=f"User {user.user_id} 无 admin 权限. 联系管理员加入 ADMIN_USER_IDS 白名单.",
+        )
+    logger.info(f"[admin] user {user.user_id[:8]}*** granted admin access")
+    return user
+
+
 # ===== 业务逻辑 (auth 服务本身) =====
 def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
     """若 email 已注册, 返已有 key (重新登录); 否则注册新用户.

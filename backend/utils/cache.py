@@ -82,14 +82,34 @@ _FILENAMES = {"cache": "search_cache.sqlite", "budget": "budget.sqlite", "auth":
 
 
 def _init_db_paths() -> dict[str, Path]:
-    """根据 env 一次性解析 3 类表路径. 模块导入时跑一次."""
+    """根据 env 一次性解析 3 类表路径. 模块导入时跑一次.
+
+    R10.5.21 (J.txt + K.txt 审计 #2): 4-worker Gunicorn 部署下, 三类表共用
+    同一 SQLite 文件会争同一把写锁. 检测到 Gunicorn 多 worker 时 (≥2)
+    自动切换到 3 文件分存储, 避免 budget BEGIN IMMEDIATE 拖慢 search cache 读.
+
+    触发条件: GUNICORN_WORKERS (gunicorn 启动脚本里 `workers=N` 注入) 或
+    WEB_CONCURRENCY (K8s/Heroku 标准) ≥ 2.
+    """
     override_dir = os.environ.get("SCHOLARFLOW_DB_DIR")
+    if not override_dir:
+        # 多 worker 部署默认分文件 (除非显式 SCHOLARFLOW_DB_DIR 共用)
+        gunicorn_workers = int(os.getenv("GUNICORN_WORKERS", "1") or "1")
+        web_conc = int(os.getenv("WEB_CONCURRENCY", "1") or "1")
+        if max(gunicorn_workers, web_conc) >= 2:
+            logger.info(
+                f"[cache] detected multi-worker deployment "
+                f"(GUNICORN_WORKERS={gunicorn_workers}, "
+                f"WEB_CONCURRENCY={web_conc}) — auto-splitting 3 tables into "
+                f"separate SQLite files to avoid cross-table WAL write contention"
+            )
+            return {role: _CACHE_DIR / filename for role, filename in _FILENAMES.items()}
     if override_dir:
         d = Path(override_dir)
         d.mkdir(parents=True, exist_ok=True)
         return {role: d / filename for role, filename in _FILENAMES.items()}
     default = _CACHE_DIR / _FILENAMES["cache"]
-    # 默认: 三类表共用 search_cache.sqlite (向后兼容)
+    # 默认: 三类表共用 search_cache.sqlite (向后兼容, 单进程 dev 用)
     return {role: default for role in _FILENAMES}
 
 
@@ -274,6 +294,44 @@ def _init_db_once() -> None:
     _init_db()
     _DB_INITIALIZED = True
     _DB_INITIALIZED_PATH = str(_DB)
+
+
+def wal_checkpoint_all() -> dict[str, int]:
+    """R10.5.21 (J.txt + K.txt 审计 #2): 对所有 3 类 SQLite 跑 PASSIVE WAL
+    checkpoint, 防止长跑 multi-worker 部署下 WAL 文件无限增长.
+
+    PASSIVE 模式: 不阻塞读, 尽量 checkpoint. 不会等所有 reader 完成.
+    返回每个 role 的 wal_size_after (字节), 0 = 没有 WAL (auto checkpoint
+    成功或从没写过).
+
+    推荐: 在 FastAPI lifespan 里用 asyncio 每 5 分钟跑一次:
+        while not shutdown:
+            await asyncio.sleep(300)
+            await asyncio.to_thread(wal_checkpoint_all)
+    """
+    results: dict[str, int] = {}
+    for role in _FILENAMES:
+        try:
+            conn = _connect_with_wal(role)
+            try:
+                # PRAGMA wal_checkpoint(PASSIVE) returns (busy, log_pages, checkpointed_pages)
+                row = conn.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()
+                # role-specific connection points to role's file
+                wal_size = 0
+                try:
+                    db_path = _DB_PATHS[role]
+                    wal_path = db_path.with_suffix(db_path.suffix + "-wal")
+                    if wal_path.exists():
+                        wal_size = wal_path.stat().st_size
+                except Exception:
+                    pass
+                results[role] = wal_size
+            finally:
+                conn.close()
+        except Exception as e:
+            _cache_logger.warning(f"[cache] wal_checkpoint {role} failed: {e}")
+            results[role] = -1
+    return results
 
 
 def cache_key(
