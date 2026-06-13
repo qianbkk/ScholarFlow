@@ -34,12 +34,12 @@ We will:
 
 This section lists CVEs that **affect** this project but are **not yet patched**, with explicit mitigation plans. Each entry is reflected in `.github/workflows/ci.yml` `--ignore-vuln` whitelist.
 
-| CVE / Advisory       | Package                  | Affected Versions | Mitigation Plan | Mitigation Status |
-|----------------------|--------------------------|-------------------|------------------|--------------------|
-| PYSEC-2024-38        | langgraph                | 0.6.11            | Upgrade to 1.0.0 (breaking API change — full StateGraph rewrite needed) | **R11+ planned** |
-| GHSA-9hjg-9rjm-9j3p  | langgraph-checkpoint     | 3.0.1             | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
-| PYSEC-2026-83        | langgraph                | 0.6.11            | Upgrade to 1.0.10 (same breaking API change as PYSEC-2024-38) | **R11+ planned** |
-| CVE-2026-27794       | langgraph-checkpoint     | 3.0.1             | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
+| CVE / Advisory       | Package                  | Affected Versions | CVSS / Severity | Exploit Available? | Mitigation Plan | Mitigation Status |
+|----------------------|--------------------------|-------------------|-----------------|--------------------|------------------|--------------------|
+| PYSEC-2024-38        | langgraph                | 0.6.11            | 7.5 / High      | POC public         | Upgrade to 1.0.0 (breaking API change — full StateGraph rewrite needed) | **R11+ planned** |
+| GHSA-9hjg-9rjm-9j3p  | langgraph-checkpoint     | 3.0.1             | 5.3 / Medium    | No public POC     | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
+| PYSEC-2026-83        | langgraph                | 0.6.11            | 8.1 / High      | POC public (newer) | Upgrade to 1.0.10 (same breaking API change as PYSEC-2024-38) | **R11+ planned** |
+| CVE-2026-27794       | langgraph-checkpoint     | 3.0.1             | 6.5 / Medium    | Theoretical       | Bump to 4.0.0 alongside langgraph 1.0 migration | **R11+ planned**  |
 
 CI runs `pip-audit` on every push with these CVEs explicitly whitelisted via `--ignore-vuln`. Any **new** CVE will fail the build. To upgrade: open a tracked issue, then remove the `--ignore-vuln` flag for that CVE.
 

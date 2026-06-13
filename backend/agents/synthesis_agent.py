@@ -241,7 +241,7 @@ def h_escape(s: str) -> str:
 
 # ===== M-2 (P0-A 综述幻觉) 修复: Grounding 验证 + 来源锚点 =====
 
-def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, list[str]]:
+def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, list[dict]]:
     """检查综述中引用的论文是否能在 ranked_papers 中找到对应。
 
     R10.5.10 Fix (用户反馈 §4): 旧实现用 `**粗体**` 当"引用" → LLM 综述里所有
@@ -250,13 +250,23 @@ def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, l
       1. 真正的"引用"是 `[N]` 数字引用 (LLM 综述里 1/2/3... 对应 ranked 列表)
          或 SS paper_id (e.g. `arxiv:2401.12345`)
       2. 数字引用 [N] 范围 1..len(ranked), 越界算"unverified"
-      3. 显式 markdown 链接 [text](url) 中 url 形如 semantic_scholar / arxiv 的,
-         提取 paper_id 比对 ranked 集合
+      3. 显式 markdown 链接 [text](url) 中 url 形如 semantic_scholar / arxiv /
+         doi.org / aclanthology.org / openreview.net 的, 提取 paper_id 或 DOI
+         比对 ranked 集合
       4. 旧 `**粗体**` 模式直接删除 (语义错的)
+
+    R10.5.19 已知限制 (P.txt #10): 此函数**只检查 [N] 数字引用 + SS/arxiv/DOI URL
+    链接** 两种形式. LLM 实际还可能:
+      - 引用真实论文名但捏造引用数/年份
+      - 使用 Author-year 格式 (Author et al., 2024)
+      - 编造 DOI / arxiv ID
+    函数名 'grounding 验证' 略有误导, 实际只检测 `[N]` 数字范围 + 显式 URL
+    锚定. 完整 grounding 需要 LLM 内部 RAG 验证或二次 LLM 比对, 排期 R11+.
 
     Returns:
         report: 原报告 (透传)
-        unverified: 列表, 每个元素是 dict {kind: 'index'|'id'|'text', value: ..., reason: ...}
+        unverified: 列表, 每个元素是 dict {kind: 'index'|'id', value: ..., reason: ...}
+            ('text' kind 是 R10.5.10 之前的残留, 现已删除.)
     """
     unverified: list[dict] = []
 
@@ -296,14 +306,21 @@ def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, l
                 except ValueError:
                     pass
 
-    # 2) 显式 markdown 链接 [text](url) — 提取 SS paper_id
+    # 2) 显式 markdown 链接 [text](url) — 提取 paper_id / DOI
+    # R10.5.19 扩展: 旧实现只匹配 semantic_scholar / arxiv 域名, 现加 doi.org /
+    # aclanthology.org / openreview.net (R10.5.10 验证: SS + arxiv 是主要来源,
+    # 但 LLM 偶尔会引用 DOI / OpenReview 链接).
     # 旧实现: 任何 [text](url) 都算 "citation" → 噪声巨大 (脚注/参考链接都中招)
-    # 修复: 只匹配 semantic_scholar / arxiv 域名的 URL
+    # 修复: 只匹配学术域名 + 抽 paper_id / DOI 比对 ranked 集合
     ss_id_pattern = re.compile(
-        r'\[([^\]]+)\]\((https?://(?:www\.)?(?:semanticscholar\.org|arxiv\.org)/[^\)]+)\)'
+        r'\[([^\]]+)\]\((https?://(?:www\.)?(?:semanticscholar\.org|arxiv\.org|doi\.org|'
+        r'aclanthology\.org|openreview\.net)/[^\)]+)\)'
     )
+    # DOI 模式 (从 URL 末尾或文本里抽 "10.xxxx/yyyy")
+    doi_pattern = re.compile(r'10\.\d{4,9}/[-._;()/:A-Z0-9]+', re.IGNORECASE)
     referenced_ids: set[str] = set()
     ranked_ids = {p.get('paper_id', '') for p in ranked if p.get('paper_id')}
+    ranked_dois = {p.get('doi', '').lower() for p in ranked if p.get('doi')}
     for match in ss_id_pattern.finditer(report):
         text = match.group(1)
         url = match.group(2)
@@ -311,6 +328,19 @@ def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, l
         path = url.rstrip('/').split('/')[-1]
         if not path:
             continue
+        # DOI 链接: 抽 DOI 比对
+        if 'doi.org' in url:
+            doi = path.lower()
+            if doi in ranked_dois:
+                referenced_ids.add(doi)
+                continue
+            unverified.append({
+                'kind': 'id',
+                'value': f'[{text}]({url[:60]}...)',
+                'reason': f'DOI "{doi[:40]}" 不在 ranked_papers 集合中',
+            })
+            continue
+        # paper_id 链接 (SS / arxiv / aclanthology / openreview)
         paper_id = path.split('?')[0]  # 去 query string
         if paper_id in ranked_ids:
             referenced_ids.add(paper_id)
@@ -320,6 +350,13 @@ def _verify_citations_in_report(report: str, ranked: list[dict]) -> tuple[str, l
                 'value': f'[{text}]({url[:60]}...)',
                 'reason': f'paper_id "{paper_id[:30]}" 不在 ranked_papers 集合中',
             })
+
+    # 3) 文本中裸 DOI (R10.5.19 加): LLM 有时会写 "DOI: 10.xxxx/yyyy" 而不带链接
+    if ranked_dois:
+        for doi_match in doi_pattern.finditer(report):
+            doi = doi_match.group(0).lower()
+            if doi in ranked_dois:
+                referenced_ids.add(doi)
 
     # 数字引用 vs ranked 列表的差集 = 未引用论文 (不是问题, 不报)
     # unranked_indices (越界) 已加进 unverified

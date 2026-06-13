@@ -30,6 +30,9 @@ logger = logging.getLogger(__name__)
 
 
 # ===== 配置 =====
+# R10.5.19 (Q.txt #1): 默认值仍为 false (生产安全), 但 README 写错.
+# 修正: 代码默认 = false (强制认证), 本地开发请在 .env 设 OPEN_MODE=true.
+# lifespan 启动时会检测, OPEN_MODE=true 时打印醒目 [SECURITY] 警告.
 OPEN_MODE = os.getenv("OPEN_MODE", "").lower() in ("1", "true", "yes")
 # OPEN_MODE=true 时所有请求共享 'dev-user' 虚拟账户, 行为跟 R10.5 之前一致.
 # 生产部署必设 OPEN_MODE=false 强制认证.

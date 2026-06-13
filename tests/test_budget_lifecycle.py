@@ -438,28 +438,34 @@ def test_budget_return_on_success_returns_diff(client, monkeypatch):
 
 
 def test_main_py_handles_exception_in_search():
-    """[from budget_try_finally] Source-level check: /search must handle generic Exception and call _return_budget."""
+    """[from budget_try_finally] Source-level check: /search must handle generic Exception and call _return_budget.
+
+    R10.5.19 修复 (Q.txt #4): 旧实现用 regex r"async def search\\([^)]*\\):" 锁定
+    函数签名, 拒绝 `Depends(get_current_user)` 注入 (Depends 表达式含 `)`).
+    改用 AST 解析 (importlib + ast) 提取真实函数体, 不依赖源码格式.
+    """
+    import ast
+    import inspect
     from pathlib import Path
-    src = Path(main_mod.__file__).read_text(encoding="utf-8")
 
-    import re
-    search_block = re.search(
-        r"async def search\([^)]*\):.*?(?=\n@app\.)",
-        src,
-        flags=re.DOTALL,
-    )
-    if search_block is None:
-        search_block = re.search(
-            r"async def search\([^)]*\):.*?(?=\nasync def |\n@app\.|\ndef )",
-            src,
-            flags=re.DOTALL,
-        )
-    assert search_block is not None, "could not locate search() function in main.py"
+    src_path = Path(main_mod.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(src_path)
 
-    body = search_block.group(0)
-    has_except_handler = "except Exception" in body
+    search_fn = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "search":
+            # 找顶层的 (直接在 module 里定义, 不嵌套)
+            if isinstance(node, ast.AsyncFunctionDef):
+                search_fn = node
+                break
+
+    assert search_fn is not None, "could not locate search() function in main.py"
+
+    # 提取函数源码 (用 ast.get_source_segment 配合原始 src)
+    body_src = ast.get_source_segment(src_path, search_fn) or ""
+    has_except_handler = "except Exception" in body_src
     assert has_except_handler, "search() must have an except Exception handler"
-    assert "_return_budget" in body, (
+    assert "_return_budget" in body_src, (
         "CRITICAL-002 FAIL: /search function body must call _return_budget on the "
         "exception path so reserved budget is returned."
     )

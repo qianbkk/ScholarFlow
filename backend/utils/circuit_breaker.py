@@ -12,6 +12,16 @@ mock, 避免把故障拖成"用户在 UI 看到加载 150s 才拿到降级结果
 
 线程安全: Python 异步单线程事件循环, 普通赋值已原子, 无需 Lock.
 
+R10.5.19 (P.txt #3) 重要文档:
+- ss_breaker / oa_breaker 是**进程级**单例 (Python 模块级全局变量).
+- 4-worker Gunicorn 部署下, 每个 worker 进程各持一份 breaker 状态,
+  实际失败阈值 = N × failure_threshold (默认 3 × 4 = 12 次跨进程累积).
+- 单进程内: 用户 A 触发 OPEN, 30s 内所有其他用户的 SS 请求立即降级
+  (这是 P.txt 担忧的场景, 接受为 known limitation).
+- 跨进程共享状态: 计划迁移到 Redis INCR + EXPIRE (跟 budget_state 一起),
+  排期 R11+.
+- 单 worker (uvicorn dev 模式) 部署则无跨进程问题, 行为可预期.
+
 用法:
     breaker = CircuitBreaker(name="semantic_scholar", failure_threshold=3, recovery_timeout=30.0)
 

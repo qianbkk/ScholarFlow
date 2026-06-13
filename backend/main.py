@@ -239,6 +239,9 @@ sys.modules[__name__].__class__ = _ScholarFlowMainModule
 # Round 6 M2: in-flight search task table — 让 /search/cancel 真能停 in-flight pipeline
 # key: request_id (string, FastAPI middleware 注入), value: asyncio.Task wrapping search_graph.ainvoke
 _in_flight_searches: dict[str, "asyncio.Event | asyncio.Task"] = {}
+# R10.5.19 (Q.txt #3): GC 字典, 记录每个 in_flight 注册时间, 让 _periodic_in_flight_gc
+# 删超期 entry (异常路径跳过 finally 时的兜底).
+_in_flight_searches_age: dict[str, float] = {}
 
 
 @asynccontextmanager
@@ -253,6 +256,21 @@ async def lifespan(app: FastAPI):
     from backend.utils.cache import _init_db_once
     _init_db_once()
     logger.info("[lifespan] DB schema initialized (users + budget_user + search_cache + budget_state)")
+    # R10.5.19 (Q.txt #1): OPEN_MODE=true 时打印醒目 [SECURITY] 警告,
+    # 防止运维误部署到生产环境却不知道认证被关闭.
+    from backend.auth.dependencies import OPEN_MODE
+    if OPEN_MODE:
+        logger.warning(
+            "[SECURITY] OPEN_MODE=true — 跳过所有 API Key 认证, 所有请求共享 "
+            "'dev-user' 虚拟账户. 仅限本地开发! 生产部署必须设 OPEN_MODE=false."
+        )
+    # R10.5.19 (P.txt #5 / Q.txt #1): /search/stream 仍接受 ?api_key= query param
+    # (EventSource 兼容). 计划 R11+ 完全移除, 现在 startup 打印 deprecation 提醒.
+    logger.warning(
+        "[DEPRECATION] /search/stream 仍接受 ?api_key= query param (EventSource 兼容). "
+        "前端已全部走 fetch + X-API-Key header. 该参数计划 R11+ 移除, "
+        "部署时务必在 Nginx/CDN 日志中过滤 api_key 防泄露."
+    )
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_proxy)
@@ -270,6 +288,30 @@ async def lifespan(app: FastAPI):
             except Exception as e:
                 logger.warning(f"[lifespan] periodic health refresh error: {e}")
     asyncio.create_task(_periodic_health_refresh())
+    # R10.5.19 (Q.txt #3): 定期 GC _in_flight_searches 字典, 防异常路径
+    # (异步 generator GC / 客户端断连 / streaming response 中断) 跳过
+    # finally 块导致死引用累积. 每 5 分钟扫一次, 删注册 > 10 分钟的 entry.
+    async def _periodic_in_flight_gc():
+        GC_INTERVAL_SEC = 300  # 5 min
+        ENTRY_TTL_SEC = 600    # 10 min
+        while True:
+            try:
+                await asyncio.sleep(GC_INTERVAL_SEC)
+                now = _time.time()
+                stale = [
+                    rid for rid in _in_flight_searches
+                    if _in_flight_searches_age.get(rid, now) < now - ENTRY_TTL_SEC
+                ]
+                for rid in stale:
+                    _in_flight_searches.pop(rid, None)
+                    _in_flight_searches_age.pop(rid, None)
+                if stale:
+                    logger.info(f"[lifespan] in_flight_gc: removed {len(stale)} stale entries")
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[lifespan] in_flight_gc error: {e}")
+    asyncio.create_task(_periodic_in_flight_gc())
     # 启动：恢复 budget 状态（service 模块导入时已跑一次 _load_budget_state，
     # 此处显式再跑一次 — 显式 > 隐式，避免依赖 service 模块副作用）
     _load_budget_state()
@@ -396,15 +438,20 @@ app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/re
 # dev 30/min, test 1000/min, prod 5/min (旧值).
 @app.post("/search", response_model=SearchResponse)
 @limiter.limit(_config.RATE_LIMITS_CURRENT["search"])
-async def search(req: SearchRequest, request: Request):
-    """主搜索接口：触发完整 8 节点流水线。
+async def search(
+    req: SearchRequest,
+    request: Request,
+    user: User = Depends(get_current_user),
+):
+    """主搜索接口: 触发完整 8 节点流水线.
 
-    R10.5 Fix-P0-B: API Key 认证. 用 Header 手动调 get_current_user
-    而非 Depends 注入, 是为了避免 Depends 闭包被 static guard 测试
-    (`r"async def search\\([^)]*\\):"`) 误判 (Depends 表达式含 `)`).
+    R10.5.19 修复 (Q.txt #4): 改回标准 Depends 注入. 旧实现 (R10.5 Fix-P0-B)
+    为了避免静态 guard 测试 (regex r"async def search\\([^)]*\\):") 误判
+    Depends 表达式 (含 `)`), 改成函数体里手动 await get_current_user —
+    这是测试驱动腐化, 破坏 OpenAPI 文档自动生成 (/docs 不显示 X-API-Key).
+    修复: 静态 guard 测试改用 AST 解析 (test_budget_lifecycle.py 重构),
+    /search 恢复标准 FastAPI Depends 注入.
     """
-    # R10.5 Fix-P0-B: 注入 user (Header 模式保持签名简单)
-    user = await get_current_user(x_api_key=request.headers.get("X-API-Key"))
     # VULN-001 Layer 0: 入口处净化用户 query
     try:
         safe_query = sanitize_query(req.query)
@@ -486,6 +533,7 @@ async def search(req: SearchRequest, request: Request):
         )
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task
+        _in_flight_searches_age[req_id] = _time.time()
         try:
             # R10.5.1 V3-fix (HH.txt §1): 同步 /search 超时从 480s → 60s.
             # 原 480s 是早期没有 SSE 时的妥协, 公网网关 (Cloudflare 100s, ALB 60s)
@@ -517,6 +565,7 @@ async def search(req: SearchRequest, request: Request):
             )
         finally:
             _in_flight_searches.pop(req_id, None)
+            _in_flight_searches_age.pop(req_id, None)
         elapsed = _time.time() - t0
 
         actual_cost = float(final.get("total_cost_usd", 0.0))
@@ -697,6 +746,7 @@ async def search_stream(
     req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
     cancel_event = asyncio.Event()
     _in_flight_searches[req_id] = cancel_event
+    _in_flight_searches_age[req_id] = _time.time()
 
     async def event_generator():
         return_amount = budget
@@ -866,6 +916,7 @@ async def search_stream(
         finally:
             # R10.5 Fix-Cancel: 清理 _in_flight_searches, 防止 dict 累积死引用.
             _in_flight_searches.pop(req_id, None)
+            _in_flight_searches_age.pop(req_id, None)
             if return_amount > 0.01:
                 try:
                     await _return_budget(return_amount, user_id=user.user_id)
