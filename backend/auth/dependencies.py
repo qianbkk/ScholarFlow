@@ -159,10 +159,50 @@ async def get_current_user(
 #     唯一豁免: ADMIN_USER_IDS env 含 "dev-user" 显式 (默认不含)
 #   - OPEN_MODE=false: 要求 X-API-Key, user_id 必须在 ADMIN_USER_IDS (逗号分隔) 白名单
 #   - GET (查询当前模式) 仍开放 — 不影响安全, 方便前端启动时拉取
+#
+# R10.5.25.1 修复 (浏览器验证发现 UX 阻塞): OPEN_MODE=false + ADMIN_USER_IDS
+# 空 → 任何注册用户切 mock/real 都 403. 用户首次跑产品模式时无任何 admin
+# 能用 radio. 修复: 引入 _runtime_admin_users 动态集合, 在 register 端点
+# 自动把"第一个注册的用户"加进 admin (bootstrap). 用户后续可显式
+# ADMIN_USER_IDS 覆盖此默认.
 _ADMIN_USER_IDS_RAW = os.getenv("ADMIN_USER_IDS", "").strip()
 ADMIN_USER_IDS: frozenset[str] = frozenset(
     uid.strip() for uid in _ADMIN_USER_IDS_RAW.split(",") if uid.strip()
 )
+# 运行时动态添加 (如 register 端点 bootstrap). 跟 ADMIN_USER_IDS 合并用.
+_runtime_admin_users: set[str] = set()
+
+
+def get_effective_admin_user_ids() -> frozenset[str]:
+    """返 (静态 env 配置 + 运行时动态注册) 的合集, 用于 require_admin 校验."""
+    return frozenset(ADMIN_USER_IDS) | frozenset(_runtime_admin_users)
+
+
+def add_runtime_admin_user(user_id: str) -> None:
+    """Bootstrap: 把 user_id 加进 runtime admin 集合. register 端点调用.
+
+    行为:
+      - 仅当 ADMIN_USER_IDS (env) 为空且 _runtime_admin_users 也空时, 自动
+        bootstrap (第一个注册的用户).
+      - 一旦显式 ADMIN_USER_IDS 配置或已有 runtime admin, 不再自动加.
+    返回: True 表示新加了 admin, False 表示跳过.
+    """
+    if ADMIN_USER_IDS:
+        return False  # 显式配置, 不自动加
+    if _runtime_admin_users:
+        return False  # 已有 runtime admin, 不再 bootstrap
+    _runtime_admin_users.add(user_id)
+    logger.info(
+        f"[auth] BOOTSTRAP: user_id={user_id[:8]}*** auto-added to runtime admin "
+        f"(OPEN_MODE=true 时还需要 ADMIN_USER_IDS 含 'dev-user' 才生效). "
+        f"生产部署务必显式设 ADMIN_USER_IDS 覆盖."
+    )
+    return True
+
+
+def clear_runtime_admin_users() -> None:
+    """测试用: 清 runtime admin. 不在生产代码调用."""
+    _runtime_admin_users.clear()
 
 
 async def require_admin(
@@ -172,8 +212,9 @@ async def require_admin(
 
     1. OPEN_MODE=true → 拒绝 (返 403), 除非 ADMIN_USER_IDS 显式包含 "dev-user"
     2. OPEN_MODE=false → 校验 X-API-Key, user_id 必须在 ADMIN_USER_IDS 白名单
+       (静态 env + 运行时动态注册, 见 get_effective_admin_user_ids).
 
-    ADMIN_USER_IDS 没配 → 任何 POST admin/* 都返 403 (默认安全).
+    ADMIN_USER_IDS 没配 + 没 bootstrap → 任何 POST admin/* 都返 403 (默认安全).
 
     顺序: 先按 OPEN_MODE 决定认证策略, 再判 401/403:
       - OPEN_MODE=true + 无 dev-user 白名单 → 403 (不需要 key, 单纯拒绝)
@@ -181,9 +222,10 @@ async def require_admin(
       - OPEN_MODE=false + 无 key → 401 (需要 key 才能继续)
       - OPEN_MODE=false + key 错 / 不在白名单 → 401 / 403
     """
+    effective_admins = get_effective_admin_user_ids()  # R10.5.25.1 合并静态 + 运行时
     if OPEN_MODE:
         # 显式列表含 "dev-user" 才放行
-        if "dev-user" in ADMIN_USER_IDS:
+        if "dev-user" in effective_admins:
             logger.warning(
                 "[SECURITY] OPEN_MODE=true + ADMIN_USER_IDS=dev-user: "
                 "dev user 可改全局 LLM mode, 仅本地开发用"
@@ -209,12 +251,19 @@ async def require_admin(
     user = _lookup_user_by_key(x_api_key)
     if not user:
         raise HTTPException(status_code=401, detail="API Key 无效或已撤销")
-    if not ADMIN_USER_IDS:
+    if not effective_admins:
+        # R10.5.25.1 修正文案: 之前说"未配置白名单", 但实际有 runtime bootstrap
+        # 路径, 给用户更明确的引导.
         raise HTTPException(
             status_code=403,
-            detail="Admin 端点未配置白名单. 在 .env 设 ADMIN_USER_IDS=<user_id> 授权.",
+            detail=(
+                "Admin 端点无可用白名单. "
+                "(1) 在 .env 设 ADMIN_USER_IDS=<user_id1>,<user_id2> 授权; "
+                "(2) 或由第一个 /auth/register 自动 bootstrap (R10.5.25.1); "
+                "(3) 或 OPEN_MODE=true 时 ADMIN_USER_IDS 含 'dev-user'."
+            ),
         )
-    if user.user_id not in ADMIN_USER_IDS:
+    if user.user_id not in effective_admins:
         # 模糊化日志: 不暴露白名单内容给攻击者
         logger.warning(
             f"[SECURITY] non-admin user {user.user_id[:8]}*** tried admin endpoint"
@@ -313,4 +362,9 @@ def issue_key_for_email_with_status(
         conn.commit()
     finally:
         conn.close()
+    # R10.5.25.1 浏览器验证发现 UX 阻塞: OPEN_MODE=false + ADMIN_USER_IDS
+    # 空 → 第一个注册用户拿不到 admin, /admin/runtime-mode 全 403. 修复:
+    # 自动 bootstrap 第一个注册用户进 runtime admin. 显式 ADMIN_USER_IDS
+    # 或已有 runtime admin 时不再自动加.
+    add_runtime_admin_user(user_id)
     return (raw_key, False)  # 新用户, key_rotated=False
