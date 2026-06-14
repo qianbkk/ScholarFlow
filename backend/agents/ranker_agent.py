@@ -320,6 +320,14 @@ async def rank_node(state: SearchState) -> SearchState:
         # 信任 authority 不 cap; 否则 cap 防 alphafold 类冷门论文污染.
         if rel < 5.5 and paper.authority_score < 6.0:
             final = min(final, rel * 0.8)
+        # R10.5.26 (用户反馈 #1): 后备 fallback 论文强制降权. 旧行为: mock
+        # fallback 论文 (LLM 限流 / 网络断) 跟真论文同分排序, 用户看到
+        # "奇怪为什么有些论文分数低但跟真论文混在一起". 修复: is_fallback
+        # 论文 final_score 强 cap 到 3.0, 让它们沉底, 仍保留可见 (用户
+        # 知情) 但不会污染 Top 排名. cap 3.0 < 真实低分论文 (rel=4.0
+        # 兜底) 的 4.0, 排序稳定.
+        if getattr(paper, "is_fallback", False):
+            final = min(final, 3.0)
         paper.final_score = round(final, 2)
 
     # 把被过滤掉（c < 3）的论文追加在尾部，标 0 分
