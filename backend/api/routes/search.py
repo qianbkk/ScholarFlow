@@ -22,6 +22,12 @@ For now this router is the *implementation reference*; the live
 endpoints are defined in `backend/main.py` and bind to the helpers
 imported from this module. Once the static guards are migrated, the
 include_router call replaces the inline definitions.
+
+R10.5.24 (深度审计 P0 #3): 双轨入口风险 — 任何 PR 错误地加了一行
+`app.include_router(search_router)` 都会让 FastAPI 同时挂 2 份 /search,
+FastAPI 会用先注册的覆盖后者, 但限流器、_in_flight_searches 注册、
+依赖注入都可能行为漂移. 已有 test_routes_not_double_mounted.py 静态
+扫 main.py 源, 防止 include_router 误增.
 """
 from __future__ import annotations
 

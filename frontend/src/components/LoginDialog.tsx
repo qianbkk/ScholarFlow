@@ -276,6 +276,13 @@ export function LoginDialog({ requireAuth, onSuccess, onClose }: Props) {
               系统会生成 API Key 存到 localStorage,
               后续请求自动带 <code className="font-mono text-[10px] px-1 py-0.5" style={{ backgroundColor: 'var(--sf-bg-elev)' }}>X-API-Key</code> header.
             </p>
+            <p
+              className="text-[10px] mt-1"
+              style={{ color: 'var(--sf-muted)' }}
+              title="R10.5.24 深度审计: localStorage 任何 XSS 都能读走. R11+ 计划改 HttpOnly+SameSite=Strict cookie (后端 set-cookie) + CSRF token 头."
+            >
+              ⚠️ localStorage 任何 XSS 都能读走 API Key, 公共电脑请退出登录.
+            </p>
             <p>
               <span className="font-mono" style={{ color: 'var(--sf-accent)' }}>注 ·</span>{' '}
               邮箱作 user_id, 同邮箱重登生成新 key (旧 key 失效).

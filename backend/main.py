@@ -271,6 +271,24 @@ async def lifespan(app: FastAPI):
         "前端已全部走 fetch + X-API-Key header. 该参数计划 R11+ 移除, "
         "部署时务必在 Nginx/CDN 日志中过滤 api_key 防泄露."
     )
+    # R10.5.24 (深度审计 P0 #1): 启动期打印 XFF 信任白名单 + 警告.
+    # 运维忘记设 TRUSTED_PROXIES 在跨机房反代下 = 客户端可伪造 XFF 绕过限流.
+    from backend.utils.network import log_trusted_proxies_warn_once
+    log_trusted_proxies_warn_once()
+    # R10.5.24 (深度审计 P0 #5): 启动期打印 OPEN_MODE / LLM_MOCK / API_MOCK
+    # 三 env 当前生效状态, 让运维 / 开发者一眼看清当前是 mock 还是 real.
+    from backend.config import LLM_MOCK as _LLM_MOCK, API_MOCK as _API_MOCK
+    from backend.utils.runtime_mode import is_runtime_mock, get_runtime_mode
+    rt_mode = get_runtime_mode()
+    effective_mock = is_runtime_mock()
+    logger.info(
+        f"[lifespan] === Runtime mode status ===\n"
+        f"  OPEN_MODE  = {OPEN_MODE}  (auth: {'SKIPPED (dev-user)' if OPEN_MODE else 'REQUIRED'})\n"
+        f"  LLM_MOCK   = {_LLM_MOCK}  (config.py env)\n"
+        f"  API_MOCK   = {_API_MOCK}  (config.py env)\n"
+        f"  runtime    = {rt_mode!r}  (POST /api/v1/admin/runtime-mode override)\n"
+        f"  effective  = {'MOCK (返回内置数据)' if effective_mock else 'REAL (调用真实 API)'}"
+    )
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, get_proxy)
