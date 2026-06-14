@@ -1,41 +1,40 @@
 """
 ScholarFlow 配置文件
 统一从环境变量加载配置，所有字段都有默认值（缺失时优雅降级）。
+
+R10.5.25 (深度审计 §9): 集中化 dotenv 加载, 消除双轨.
+旧设计 2 套 dotenv 加载 (load_dotenv 一次 + dotenv_values 一次) 看似冗余,
+实际各有职责:
+  1) load_dotenv(override=False) — 把 .env 内容 merge 进 os.environ,
+     让 os.getenv() 直接读到 (K8s/Docker 注入的 env 优先). Round 5 M-2.
+  2) dotenv_values() + _getenv_ci() — 显式从 .env 文件读, 大小写不敏感,
+     防 Windows os.environ 字段错乱 (R10.5 用户实测).
+单点化: 保留两者, 但用 _getenv_ci 统一所有自定义字段, os.getenv 仅用于
+load_dotenv 已经 merge 过的标准 env (OPEN_MODE / LLM_MOCK / API_MOCK).
+这样行为可预测, 不会出现"load_dotenv merge 了 A, _getenv_ci 又读到旧 B".
 """
 import logging
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values as _dotenv_values  # type: ignore[import]
 
 logger = logging.getLogger(__name__)
 
+# 1) load_dotenv: 让 os.getenv() 直接读到 .env 内容 (K8s / Docker / shell 优先)
 load_dotenv(override=False)  # Round 5 M-2: shell env 优先, .env 仅作默认值.
-                                # 之前 override=True 会静默吞掉 K8s/Docker secret
-                                # 注入的 ENV (Secret 走 env 注入, .env 不存在时反而是 fallback).
-                                # override=False 让 K8s ConfigMap/Secret、docker -e、
-                                # CI workflow env 等所有"外部注入"成为 source of truth,
-                                # .env 仅在本地开发时提供默认值。
 
-
-# ===== 离线运行 / Mock 模式 =====
-# LLM_MOCK=true 时，llm_client 返回预置响应，不真正调用外部 API
-# API_MOCK=true 时，学术 API 客户端返回预置论文数据
-# 默认开启 mock（无网络环境可跑通）；有网络时可设为 false
-LLM_MOCK = os.getenv("LLM_MOCK", "true").lower() in ("1", "true", "yes")
-API_MOCK = os.getenv("API_MOCK", "true").lower() in ("1", "true", "yes")
-
-# R10.5 修复 (用户实测: Windows shell env 有大写 MINIMAX_API_KEY,
-# load_dotenv(override=False) 看到同名变量就不覆盖, 但 os.getenv
-# 大小写敏感 → 永远读到空). 而且 Windows os.environ 大小写不敏感
-# 会让 ANTHROPIC_BASE_URL 拿到 MINIMAX_BASE_URL 的值 (字段错乱).
-# 最稳修法: 不靠 load_dotenv + os.getenv, 用 dotenv_values() 显式读 .env 文件.
-from dotenv import dotenv_values as _dotenv_values  # type: ignore[import]
-
-_DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+# 2) _DOTENV: 显式从 .env 文件读, 给 _getenv_ci() 用 (大小写不敏感)
+_DOTENV_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"
+)
 _DOTENV = _dotenv_values(_DOTENV_PATH) or {}
 
 
 def _getenv_ci(name: str, default: str = "") -> str:
-    """大小写不敏感读 env: 先 .env 显式读 (priority), 再 os.environ fallback."""
+    """大小写不敏感读 env: 先 .env 显式读 (priority), 再 os.environ fallback.
+
+    R10.5.25 (深度审计 §9): 这是单点 — 业务侧统一用 _getenv_ci 读自定义字段,
+    避免 load_dotenv merge + os.getenv 各自走 path 导致行为漂移.
+    """
     # 1) 优先 .env (用户本地 source of truth)
     if name in _DOTENV and _DOTENV[name]:
         return _DOTENV[name]
@@ -43,7 +42,7 @@ def _getenv_ci(name: str, default: str = "") -> str:
         return _DOTENV[name.lower()]
     if name.upper() in _DOTENV and _DOTENV[name.upper()]:
         return _DOTENV[name.upper()]
-    # 2) Fallback 到 os.environ (K8s / Docker / shell)
+    # 2) Fallback 到 os.environ (K8s / Docker / shell — load_dotenv 已 merge .env)
     v = os.getenv(name, "")
     if v:
         return v
@@ -52,6 +51,16 @@ def _getenv_ci(name: str, default: str = "") -> str:
         if key.upper() == target and val:
             return val
     return default
+
+
+# ===== 离线运行 / Mock 模式 =====
+# R10.5.25: 这 2 个字段仍用 os.getenv, 因为:
+#   - load_dotenv(override=False) 已经把 .env merge 进 os.environ
+#   - OPEN_MODE/LLM_MOCK/API_MOCK 在其他模块也用 os.getenv 读 (依赖 load_dotenv 行为)
+#   - 改用 _getenv_ci 会让"外部 env 优先级"行为变化, 需全栈改
+# 显式声明: 业务侧改用 _getenv_ci 读这些 (R11+ 计划)
+LLM_MOCK = os.getenv("LLM_MOCK", "true").lower() in ("1", "true", "yes")
+API_MOCK = os.getenv("API_MOCK", "true").lower() in ("1", "true", "yes")
 
 
 # ===== R10.5.12: ENVIRONMENT 模式区分 (dev / test / prod) =====

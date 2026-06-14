@@ -22,6 +22,7 @@ from backend.auth.dependencies import (
     User,
     get_current_user,
     issue_key_for_email,
+    issue_key_for_email_with_status,  # R10.5.25: 返 (key, rotated) 让前端警觉 Session DoS
     # _register_user 已迁出, register/login 改用 issue_key_for_email. P1-2 移除死导入.
 )
 from backend.utils.network import get_real_ip
@@ -45,6 +46,10 @@ class AuthResponse(BaseModel):
     display_name: str
     api_key: str
     open_mode: bool = OPEN_MODE
+    # R10.5.25 (深度审计 §5 修复): 告诉前端这次 login 是 "新注册" 还是
+    # "已有用户 key rotation". 前端拿 true 时应该弹 "你的 API Key 已轮换,
+    # 之前的 Key 已失效" 警告, 让用户警觉 Session DoS 攻击.
+    key_rotated: bool = False
 
 
 class UserInfo(BaseModel):
@@ -173,9 +178,12 @@ async def register(req: RegisterRequest) -> AuthResponse:
             detail="OPEN_MODE=true 时不支持注册. 关闭 OPEN_MODE 后重启服务.",
         )
     # 跟 login 一致: email 已注册返新 key, 新 email 注册新用户
-    api_key = issue_key_for_email(req.email, display_name=req.display_name or req.email)
-    if not api_key:
+    result = issue_key_for_email_with_status(
+        req.email, display_name=req.display_name or req.email
+    )
+    if not result:
         raise HTTPException(status_code=400, detail="email 格式无效")
+    api_key, rotated = result
     # R10.5.17: user_id 派生改用单源 helper (跟 audit log 一致).
     from backend.utils.user_id import hash_user_id
     user_id = hash_user_id(req.email)
@@ -183,6 +191,7 @@ async def register(req: RegisterRequest) -> AuthResponse:
         user_id=user_id,
         display_name=req.display_name or req.email,
         api_key=api_key,
+        key_rotated=rotated,
     )
 
 
@@ -192,6 +201,9 @@ async def login(req: RegisterRequest) -> AuthResponse:
 
     学术工具信任模型: 高校邮箱是身份凭据. 不实现密码 (SMTP / OAuth
     留给 R11+).
+
+    R10.5.25 (深度审计 §5): 返 key_rotated 字段告诉前端"是否轮换了 key".
+    前端拿 true 弹警告, 让用户警觉 Session DoS 攻击.
     """
     # R10.5 Fix-P1-Audit-2.4: 进程内限流 (防字典攻击)
     client_key = f"email:{req.email.lower()}"
@@ -201,9 +213,18 @@ async def login(req: RegisterRequest) -> AuthResponse:
             status_code=400,
             detail="OPEN_MODE=true 时不需要 login. 关闭 OPEN_MODE 后重启服务.",
         )
-    api_key = issue_key_for_email(req.email, display_name=req.display_name or req.email)
-    if not api_key:
+    result = issue_key_for_email_with_status(
+        req.email, display_name=req.display_name or req.email
+    )
+    if not result:
         raise HTTPException(status_code=400, detail="email 格式无效")
+    api_key, rotated = result
+    # R10.5.25: audit log 记录 key rotation, 防 Session DoS 难追溯
+    if rotated:
+        logger.info(
+            f"[auth/login] KEY ROTATED for email={req.email.lower()} "
+            f"user_id={hash_user_id(req.email)}"
+        )
     # R10.5.17: 同 register, 用 hash_user_id 单源
     from backend.utils.user_id import hash_user_id
     user_id = hash_user_id(req.email)
@@ -211,6 +232,7 @@ async def login(req: RegisterRequest) -> AuthResponse:
         user_id=user_id,
         display_name=req.display_name or req.email,
         api_key=api_key,
+        key_rotated=rotated,
     )
 
 
@@ -221,4 +243,72 @@ async def me(user: User = Depends(get_current_user)) -> UserInfo:
         user_id=user.user_id,
         display_name=user.display_name,
         created_at=user.created_at,
+    )
+
+
+# ===== R10.5.25: stream token 替 ?api_key= query param =====
+# 深度审计 §4: /search/stream?api_key=xxx 会泄露到 nginx log / browser history /
+# proxy log. 短期方案: 发短期 stream token (5 分钟过期), 客户端用
+# /search/stream?stream_token=xxx 替 ?api_key=. 5 分钟后 token 失效, log
+# 留下也只暴露 5 分钟短命值, 不能拿来调其他端点.
+#
+# R11+ 计划: 改 EventSource Polyfill (fetch + ReadableStream + Authorization
+# header), 完全消除 query param 凭证.
+
+_STREAM_TOKEN_TTL_SEC = 300  # 5 min
+_stream_tokens: dict[str, tuple[str, float]] = {}  # token -> (user_id, expires_ts)
+
+
+def _new_stream_token(user_id: str) -> str:
+    """生成短期 stream token. 进程内 dict, 5 分钟自动失效."""
+    import secrets as _s
+    token = "st_" + _s.token_urlsafe(24)
+    _stream_tokens[token] = (user_id, time.time() + _STREAM_TOKEN_TTL_SEC)
+    return token
+
+
+def _resolve_stream_token(token: str) -> str | None:
+    """校验 stream token, 返 user_id 或 None (失效/不存在)."""
+    if not token:
+        return None
+    entry = _stream_tokens.get(token)
+    if not entry:
+        return None
+    user_id, expires = entry
+    if time.time() > expires:
+        _stream_tokens.pop(token, None)
+        return None
+    return user_id
+
+
+def _gc_stream_tokens() -> None:
+    """周期清理过期 stream tokens, 防止 dict 无限增长."""
+    now = time.time()
+    expired = [t for t, (_, exp) in _stream_tokens.items() if now > exp]
+    for t in expired:
+        _stream_tokens.pop(t, None)
+
+
+class StreamTokenResponse(BaseModel):
+    token: str
+    expires_in: int  # 秒
+
+
+@router.post("/stream-token", response_model=StreamTokenResponse)
+async def issue_stream_token(user: User = Depends(get_current_user)) -> StreamTokenResponse:
+    """R10.5.25 (深度审计 §4 修复): 发短期 stream token 替 ?api_key=.
+
+    客户端流程:
+      1. fetch POST /auth/stream-token (X-API-Key header) → 拿 token
+      2. EventSource('/search/stream?stream_token=' + token + '&q=...')
+      3. 5 分钟内有效, 过期重新拿.
+
+    防 log 泄露: api_key 长期有效, 一旦泄露到 nginx log 攻击者拿到后
+    可以调任何端点; stream_token 5 分钟过期 + 仅 /search/stream 用,
+    泄露后攻击窗口极小.
+    """
+    _gc_stream_tokens()
+    return StreamTokenResponse(
+        token=_new_stream_token(user.user_id),
+        expires_in=_STREAM_TOKEN_TTL_SEC,
     )

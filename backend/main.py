@@ -278,16 +278,29 @@ async def lifespan(app: FastAPI):
     # R10.5.24 (深度审计 P0 #5): 启动期打印 OPEN_MODE / LLM_MOCK / API_MOCK
     # 三 env 当前生效状态, 让运维 / 开发者一眼看清当前是 mock 还是 real.
     from backend.config import LLM_MOCK as _LLM_MOCK, API_MOCK as _API_MOCK
-    from backend.utils.runtime_mode import is_runtime_mock, get_runtime_mode
+    from backend.utils.runtime_mode import (
+        is_runtime_mock, get_runtime_mode, detect_runtime_profile, RuntimeProfile,
+    )
     rt_mode = get_runtime_mode()
     effective_mock = is_runtime_mock()
+    profile = detect_runtime_profile()
+    profile_warn = ""
+    if profile == RuntimeProfile.PRODUCTION and effective_mock:
+        # 检测到矛盾: profile 说 PRODUCTION 但 effective mock — 配置错配
+        profile_warn = (
+            "  ⚠️  WARNING: profile=PRODUCTION 但 effective=MOCK, "
+            "说明 LLM_MOCK 或 API_MOCK 被 runtime override 强切到 mock. "
+            "前端 /admin/runtime-mode 切了 mock 会覆盖 PRODUCTION profile."
+        )
     logger.info(
         f"[lifespan] === Runtime mode status ===\n"
+        f"  profile    = {profile.value}  (R10.5.25 集中化)\n"
         f"  OPEN_MODE  = {OPEN_MODE}  (auth: {'SKIPPED (dev-user)' if OPEN_MODE else 'REQUIRED'})\n"
         f"  LLM_MOCK   = {_LLM_MOCK}  (config.py env)\n"
         f"  API_MOCK   = {_API_MOCK}  (config.py env)\n"
         f"  runtime    = {rt_mode!r}  (POST /api/v1/admin/runtime-mode override)\n"
         f"  effective  = {'MOCK (返回内置数据)' if effective_mock else 'REAL (调用真实 API)'}"
+        f"{profile_warn}"
     )
     # 启动：预热代理检测（后台线程，避免阻塞事件循环）
     loop = asyncio.get_event_loop()
@@ -749,11 +762,47 @@ async def search_stream(
     # R10.5 Fix-P0-B: EventSource 浏览器 API 不支持自定义 headers, 接受
     # ?api_key= query param 兼容; 同 header 校验, 走 Depends 前优先消费
     api_key: Optional[str] = Query(default=None, max_length=128, alias="api_key"),
+    # R10.5.25 (深度审计 §4 修复): 优先 ?stream_token= 5min 短期 token, 防
+    # 长期 api_key 泄露到 nginx/browser/proxy log. 前端用 /auth/stream-token
+    # 拿 token 替 api_key. ?api_key= 仍兼容 (过渡期).
+    stream_token: Optional[str] = Query(default=None, max_length=128, alias="stream_token"),
     user: User = Depends(get_current_user),  # R10.5 Fix-P0-B
 ):
-    """SSE 流式搜索. R10.5 支持 ?api_key= query 参数 (EventSource 兼容)."""
+    """SSE 流式搜索. R10.5.25 优先 ?stream_token= (短期, 5min 过期), 兼容 ?api_key=.
+
+    凭证优先级: X-API-Key header > ?stream_token= > ?api_key= (deprecated).
+    """
+    # R10.5.25: stream_token 优先 (短期, 不在 log 长期留痕)
+    if stream_token and not request.headers.get("X-API-Key"):
+        from backend.api.routes.auth import _resolve_stream_token
+        from backend.auth.dependencies import OPEN_MODE as _OM
+        if not _OM:
+            resolved_uid = _resolve_stream_token(stream_token)
+            if resolved_uid:
+                # 拿 user_id 反查 user 对象
+                from backend.auth.dependencies import _lookup_user_by_key as _lk
+                # stream_token 不含明文 key, 只能拿到 user_id, 走 DB 反查.
+                # 但更简单: 让 _lookup_user_by_key 接 (user_id, raw_key) 都不行,
+                # 改用 issue: stream_token 直接是 user_id 的代理, 这里反查 users 表.
+                from backend.utils.cache import _connect_with_wal
+                _c = _connect_with_wal("auth")
+                try:
+                    _row = _c.execute(
+                        "SELECT user_id, display_name, created_at FROM users WHERE user_id=?",
+                        (resolved_uid,),
+                    ).fetchone()
+                finally:
+                    _c.close()
+                if _row:
+                    from backend.auth.dependencies import User as _User
+                    user = _User(
+                        user_id=_row[0],
+                        display_name=_row[1],
+                        created_at=_row[2],
+                        is_dev_user=False,
+                    )
     # 如果 query 传了 api_key, 但 header 没传, 用 query 的 (用户友好)
-    if api_key and not request.headers.get("X-API-Key"):
+    if api_key and not request.headers.get("X-API-Key") and not stream_token:
         # 直接 mock header 让 Depends 重新触发 — 但 Depends 已触发过了
         # 改用本地重新 lookup
         from backend.auth.dependencies import _lookup_user_by_key, OPEN_MODE

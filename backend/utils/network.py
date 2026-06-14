@@ -76,14 +76,28 @@ def is_trusted_proxy(ip_str: str) -> bool:
 def log_trusted_proxies_warn_once() -> None:
     """启动期打印 [SECURITY] warn, 提醒运维白名单覆盖范围.
 
+    R10.5.25 (深度审计 §1 强化): ENVIRONMENT=prod + TRUSTED_PROXIES 缺 →
+    启动失败 (RuntimeError), 不只是 warn. 理由: 运维经常看不到 warn,
+    启动期硬失败比静默放行更安全.
+
     只打一次 (用模块级 flag, 避免每个请求都刷屏).
     """
     if getattr(log_trusted_proxies_warn_once, "_done", False):
         return
     log_trusted_proxies_warn_once._done = True  # type: ignore[attr-defined]
     nets = ", ".join(str(n) for n in _TRUSTED_PROXIES)
+    env_label = os.getenv("ENVIRONMENT", "dev").lower()
     if os.getenv("TRUSTED_PROXIES"):
         logger.info(f"[network] TRUSTED_PROXIES (explicit) = [{nets}]")
+    elif env_label in ("prod", "production"):
+        # R10.5.25: 启动期硬失败, 防 prod 部署忘记设 TRUSTED_PROXIES 导致
+        # 攻击者从公网直连 + 自填 XFF 伪造 IP 绕过限流.
+        raise RuntimeError(
+            f"[SECURITY] ENVIRONMENT={env_label} requires explicit TRUSTED_PROXIES "
+            f"env var. Set TRUSTED_PROXIES=<反代 IP 段, 逗号分隔 CIDR> in .env. "
+            f"Example for single nginx: TRUSTUSTED_PROXIES=172.16.0.0/12 "
+            f"Refusing to start in {env_label} mode without it."
+        )
     else:
         logger.warning(
             f"[SECURITY] TRUSTED_PROXIES not set, defaulting to loopback + RFC1918: "

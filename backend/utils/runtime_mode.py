@@ -32,14 +32,72 @@ API:
         return mock_data()
     else:
         return await real_api_call()
+
+R10.5.25 (深度审计 §8): 加 RuntimeProfile enum + 集中状态表.
+旧设计 5 开关 (OPEN_MODE / LLM_MOCK / API_MOCK / ENVIRONMENT / runtime override)
+各自从 env 读, 容易语义错配. 新增 RuntimeProfile 把"开发/演示/生产"3 个
+典型场景预定义为单一开关, 运维只关心 1 个 env (RUNTIME_PROFILE), runtime
+override 仍可临时覆盖 mock/real.
+
+未做 (commit message 标注): RuntimeProfile 暂仅做"加 enum + 启动期打印
+当前 profile 名字", 不强制互斥检查. R11+ 真正落实"config 统一由
+RuntimeProfile 决定, 其他 env 失效" 的大重构.
 """
 from __future__ import annotations
 
 import logging
 import os
+from enum import Enum
 from typing import Literal
 
 logger = logging.getLogger(__name__)
+
+
+# ===== R10.5.25: RuntimeProfile enum =====
+class RuntimeProfile(str, Enum):
+    """集中化的运行时 profile, 涵盖 5 开关最常见组合.
+
+    实际 5 开关 (OPEN_MODE / LLM_MOCK / API_MOCK / ENVIRONMENT / runtime
+    override) 仍独立工作, 此 enum 只在 startup 打印 + R11+ 强制互斥时
+    才用作参考.
+
+    Profile 定义:
+      DEV_MOCK    — 本地开发, OPEN_MODE=true + LLM_MOCK=true + API_MOCK=true.
+                    一键跑通, 不需任何 key.
+      DEV_REAL    — 本地开发用真 LLM (有 MiniMax/Kimi/GLM key), OPEN_MODE=true.
+                    演示/开发用, 鉴权不挡.
+      OPEN_DEMO   — 多用户 demo, OPEN_MODE=false (强制 auth), LLM_MOCK=true.
+                    演示部署: 用户能注册, 但 LLM 走 mock 节省成本.
+      PRODUCTION  — 正式部署, OPEN_MODE=false + LLM_MOCK=false + API_MOCK=false.
+                    全部走真 API, 鉴权强制, 配置完整.
+    """
+    DEV_MOCK = "dev_mock"
+    DEV_REAL = "dev_real"
+    OPEN_DEMO = "open_demo"
+    PRODUCTION = "production"
+
+
+def detect_runtime_profile() -> RuntimeProfile:
+    """R10.5.25: 根据当前 5 开关推断 RuntimeProfile.
+
+    推断规则 (按优先级):
+      1. PRODUCTION: OPEN_MODE=false + LLM_MOCK=false + API_MOCK=false
+      2. OPEN_DEMO:  OPEN_MODE=false + LLM_MOCK=true (允许 API_MOCK 任意)
+      3. DEV_REAL:   OPEN_MODE=true  + LLM_MOCK=false
+      4. DEV_MOCK:   OPEN_MODE=true  + LLM_MOCK=true (兜底)
+    """
+    from backend.config import LLM_MOCK, API_MOCK
+    # 延迟 import 避免循环
+    from backend.auth.dependencies import OPEN_MODE
+
+    if not OPEN_MODE and not LLM_MOCK and not API_MOCK:
+        return RuntimeProfile.PRODUCTION
+    if not OPEN_MODE and LLM_MOCK:
+        return RuntimeProfile.OPEN_DEMO
+    if OPEN_MODE and not LLM_MOCK:
+        return RuntimeProfile.DEV_REAL
+    return RuntimeProfile.DEV_MOCK
+
 
 # 进程级 runtime 模式覆盖 (env 之外的前端切换). None = 走 env 兜底.
 _runtime_mode_override: dict[str, str] = {"mode": "auto"}

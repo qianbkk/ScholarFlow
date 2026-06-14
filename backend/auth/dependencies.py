@@ -233,6 +233,27 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
 
     注: 这是 'login' 端点, 实际是 '拿 key' 流程.  学术工具信任模型下
     email 即可证明身份 (高校邮箱 + 知网账号体系是常见模式).
+
+    R10.5.25 (深度审计 §5): login 返 key 是故意行为, 让用户丢 key 后
+    能重新拿. 副作用: 知道 email 的人能强制轮换 key, 让你掉线.
+    缓解: per-IP + per-email 双重限流 (R10.5 Fix-P1-Audit-2.4), 加响应
+    字段 key_rotated 告知前端是不是已有用户轮换.
+    根治 (R11+ 计划): 改 OTP 邮件验证 + 多 session 并存.
+    """
+    result = issue_key_for_email_with_status(email, display_name)
+    if result is None:
+        return None
+    return result[0]  # 仅 key, 向后兼容
+
+
+def issue_key_for_email_with_status(
+    email: str, display_name: str = ""
+) -> Optional[tuple[str, bool]]:
+    """R10.5.25: 同 issue_key_for_email, 额外返 (rotated: bool).
+
+    rotated=True 表示 "已有用户 key 轮换" (说明 user 已存在).
+    rotated=False 表示 "新用户首次注册".
+    前端拿到 True 弹 '你的 API Key 已轮换, 旧 Key 失效' 警告.
     """
     email = (email or "").strip().lower()
     if not email or "@" not in email:
@@ -267,7 +288,7 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
             conn.commit()
         finally:
             conn.close()
-        return new_key
+        return (new_key, True)
 
     # 新用户: 用 email hash 作 user_id (确定性, 同 email 重新 login 拿到同 user)
     # R10.5.17: 用 backend.utils.user_id.hash_user_id 单源 (跟 audit log 一致).
@@ -292,4 +313,4 @@ def issue_key_for_email(email: str, display_name: str = "") -> Optional[str]:
         conn.commit()
     finally:
         conn.close()
-    return raw_key
+    return (raw_key, False)  # 新用户, key_rotated=False
