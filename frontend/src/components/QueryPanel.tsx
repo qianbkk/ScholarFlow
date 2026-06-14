@@ -802,12 +802,59 @@ export function QueryPanel({
           )}
         </div>
         {lastQuery && papers.length === 0 && (
-          <p
-            className="text-xs font-body italic p-6 text-center"
-            style={{ color: 'var(--sf-muted)' }}
+          <div
+            className="p-4 text-center space-y-3"
+            data-testid="empty-search-state"
           >
-            未找到论文
-          </p>
+            <p
+              className="text-xs font-body italic"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              未找到论文
+            </p>
+            <p
+              className="text-[10px] font-mono uppercase tracking-[0.15em]"
+              style={{ color: 'var(--sf-muted)' }}
+            >
+              试试更短 / 更宽泛 / 关键词变体
+            </p>
+            {/* R10.5.27 UX: 一键重试示例, 让空结果状态可恢复.
+                点击直接用 setQuery + 自动触发 search, 不需要用户再敲. */}
+            <div className="flex flex-wrap gap-1.5 justify-center pt-1">
+              {[
+                'transformer 综述',
+                'attention mechanism',
+                'large language model',
+              ].map((example) => (
+                <button
+                  key={example}
+                  type="button"
+                  onClick={() => {
+                    setQuery(example);
+                    // R10.5.27 UX: 一键示例 query, 复用当前表单参数 (预算/迭代/provider),
+                    // 用户不用再敲 textarea 也不用调整 settings.
+                    onSearch(example, budget, maxIter, selectedProvider || undefined);
+                  }}
+                  className="font-mono text-[10px] uppercase tracking-[0.1em] px-2 py-1 border transition-colors"
+                  style={{
+                    borderColor: 'var(--sf-border)',
+                    color: 'var(--sf-muted)',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--sf-accent)';
+                    e.currentTarget.style.color = 'var(--sf-accent)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.borderColor = 'var(--sf-border)';
+                    e.currentTarget.style.color = 'var(--sf-muted)';
+                  }}
+                  data-testid="empty-search-chip"
+                >
+                  {example}
+                </button>
+              ))}
+            </div>
+          </div>
         )}
         {/* 论文列表 — Editorial: 序号用 Fraunces 衬线斜体 (像脚注编号),
             标题用 Newsreader 15px 衬线 (长阅读), 元数据 mono + 细线分隔. */}
