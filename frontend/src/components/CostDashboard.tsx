@@ -28,6 +28,20 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
     .map(([k, v]) => [k, { tokens: v?.tokens ?? 0, cost: v?.cost ?? 0 }] as const)
     .sort((a, b) => b[1].cost - a[1].cost);
 
+  // R10.5.26: 数据质量指示 — 统计真实 vs 后备论文数, 一眼看出结果可靠性.
+  const rankedPapers = result?.ranked_papers ?? [];
+  const realCount = rankedPapers.filter((p) => !p.is_fallback).length;
+  const fallbackCount = rankedPapers.filter((p) => p.is_fallback).length;
+  const dataQuality: 'good' | 'mixed' | 'mock' = fallbackCount === 0
+    ? 'good'
+    : realCount > fallbackCount ? 'mixed' : 'mock';
+  const dataQualityMeta: Record<typeof dataQuality, { label: string; color: string; dot: string }> = {
+    good:  { label: '全部真实', color: 'var(--sf-muted)', dot: 'var(--sf-border)' },
+    mixed: { label: `${realCount}真/${fallbackCount}后备`, color: 'var(--sf-accent)', dot: 'var(--sf-accent)' },
+    mock:  { label: `${realCount}真/${fallbackCount}后备`, color: 'var(--sf-accent)', dot: 'var(--sf-accent)' },
+  };
+  const qualityMeta = dataQualityMeta[dataQuality];
+
   const statusMeta: Record<string, { label: string; color: string; dot: string }> = {
     idle: { label: '待命中', color: 'var(--sf-muted)', dot: 'var(--sf-border)' },
     searching: { label: '检索中', color: 'var(--sf-accent)', dot: 'var(--sf-accent)' },
@@ -64,6 +78,27 @@ export function CostDashboard({ result, loading, elapsed, modelUsageSummary }: P
         )}
 
         <div className="flex-1" />
+
+        {/* R10.5.26: 数据质量指示 — 真实 vs 后备论文比例, 在数据量面板上常驻可见.
+            真实数据全 0 时 (API 限流 / 网络问题) 给强提醒, 让用户知情. */}
+        {papers > 0 && (
+          <div
+            className="flex items-center gap-1.5 text-[10px] font-mono uppercase tracking-[0.15em]"
+            style={{ color: qualityMeta.color }}
+            title={
+              dataQuality === 'good'
+                ? '所有论文来自 Semantic Scholar / OpenAlex 真实 API'
+                : `真实论文 ${realCount} 篇 + 后备 fallback 论文 ${fallbackCount} 篇. 后备论文因 LLM/学术 API 限流触发, 排序已沉底, 详见 QueryPanel 警告.`
+            }
+            data-testid="data-quality-indicator"
+          >
+            <span
+              className="inline-block w-1.5 h-3.5"
+              style={{ backgroundColor: qualityMeta.dot }}
+            />
+            <span>{qualityMeta.label}</span>
+          </div>
+        )}
 
         {/* 状态: 左侧细色条 + mono 文字 */}
         <div
