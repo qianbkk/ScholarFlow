@@ -11,9 +11,13 @@ export default defineConfig({
       // 路由, 旧 rewrite `path.replace(/^\/api/, '')` 会把 /api/v1/* 剥成 /v1/*,
       // 但后端没有 /v1/* 路由 (注册的是 /api/v1/* 和 /search/* alias), 全部 404.
       // 修复: 不做 rewrite, 路径原样转发, 后端 /api/v1/* 直接命中.
-      // R10.5.20: dev 端口 8000 经常被占, 实际本地后端用 8766, proxy 跟实际端口对齐.
+      //
+      // R10.5.23 端口对齐: dev 端口 8000 跟 scholarflow.py BACKEND_PORT 默认值
+      // 对齐. 之前 R10.5.20 临时改到 8766 (用户本地 8000 被其他进程占), 现在 8000
+      // 已释放, 回滚到 8000 让 bat 脚本和 vite proxy 同步. 端口被占时 scholarflow.py
+      // 不再静默 fail, 而是给明确的 taskkill / set BACKEND_PORT 指引.
       '/api': {
-        target: 'http://127.0.0.1:8766',
+        target: 'http://127.0.0.1:8000',
         changeOrigin: true,
         // rewrite 已移除 — 后端路由前缀包含 /api/v1, 不能再剥 /api.
       },

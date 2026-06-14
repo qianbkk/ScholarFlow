@@ -40,8 +40,11 @@ RUN_DIR = ROOT / ".run"
 LOG_DIR = ROOT / "logs"
 CACHE_DIR = ROOT / "backend" / ".cache"
 FRONTEND_DIR = ROOT / "frontend"
-BACKEND_PORT = 8000
-FRONTEND_PORT = 5173
+# R10.5.23: 端口从 env 读, 默认 8000/5173. 跟 vite.config.ts proxy target 默认值
+# 对齐 (8000), 用户想用其他端口 (避开冲突) 在 shell 里 set BACKEND_PORT=8766 即可,
+# 但需要同步改 frontend/vite.config.ts 的 proxy target (R10.5.20 留下的坑).
+BACKEND_PORT = int(os.environ.get("BACKEND_PORT", "8000"))
+FRONTEND_PORT = int(os.environ.get("FRONTEND_PORT", "5173"))
 
 BACKEND_PID_FILE = RUN_DIR / "backend.pid"
 FRONTEND_PID_FILE = RUN_DIR / "frontend.pid"
@@ -175,10 +178,28 @@ def write_pid_file(path: Path, pid: int):
 # ===== Actions =====
 def start_local():
     if port_in_use(BACKEND_PORT):
-        print(f"  {C.Y}[warn] port {BACKEND_PORT} already in use, stop first{C.X}")
+        # R10.5.23: 端口冲突给明确指引, 不静默 fail. 之前只 warn + return,
+        # 但 frontend 还会继续启动, 然后用户看到"前端连不上后端"困惑.
+        print(f"  {C.R}[error] port {BACKEND_PORT} is already in use!{C.X}")
+        print()
+        print(f"  Likely cause: 之前手动启动的 uvicorn / gunicorn / 其他 dev server 还在跑.")
+        print(f"  Frontend 端 vite.config.ts proxy target 默认指向 :{BACKEND_PORT},")
+        print(f"  如果你在其他端口跑后端, 必须同步改 frontend/vite.config.ts 的 proxy target.")
+        print()
+        print(f"  Solutions:")
+        print(f"    [A] 释放 :{BACKEND_PORT} 端口:")
+        print(f"          netstat -ano | findstr :{BACKEND_PORT}")
+        print(f"          taskkill /F /PID <上面最后一列的 PID>")
+        print(f"    [B] 用其他端口跑后端 + 改 vite proxy:")
+        print(f"          set BACKEND_PORT=8766 && python scholarflow.py start")
+        print(f"          # 然后改 frontend/vite.config.ts proxy target → 8766")
+        print(f"    [C] 跑 `python scholarflow.py stop` 杀本脚本启动过的进程 (如果有)")
         return
     if port_in_use(FRONTEND_PORT):
-        print(f"  {C.Y}[warn] port {FRONTEND_PORT} already in use, stop first{C.X}")
+        print(f"  {C.R}[error] port {FRONTEND_PORT} is already in use!{C.X}")
+        print(f"  Solutions:")
+        print(f"    [A] 释放 :{FRONTEND_PORT} 端口: netstat -ano | findstr :{FRONTEND_PORT}")
+        print(f"    [B] 用其他端口: set FRONTEND_PORT=5180 && python scholarflow.py start")
         return
 
     print(f"  [1/2] Starting backend (uvicorn :{BACKEND_PORT})...")
@@ -202,6 +223,7 @@ def start_local():
     print(f"         PID {bp.pid}")
 
     print(f"  [2/2] Starting frontend (vite :{FRONTEND_PORT})...")
+    print(f"         vite proxy → http://127.0.0.1:{BACKEND_PORT} (frontend/vite.config.ts)")
     frontend_log = open(FRONTEND_LOG, "w", encoding="utf-8", errors="replace")
     print(f"         log: {FRONTEND_LOG}")
     npx_cmd = shutil.which("npx") or "npx.cmd"
@@ -215,12 +237,15 @@ def start_local():
     write_pid_file(FRONTEND_PID_FILE, fp.pid)
     print(f"         PID {fp.pid}")
 
-    wait_for_port(BACKEND_PORT, timeout_s=30, label=f"backend :{BACKEND_PORT}")
-    wait_for_port(FRONTEND_PORT, timeout_s=30, label=f"frontend :{FRONTEND_PORT}")
+    backend_ready = wait_for_port(BACKEND_PORT, timeout_s=30, label=f"backend :{BACKEND_PORT}")
+    frontend_ready = wait_for_port(FRONTEND_PORT, timeout_s=30, label=f"frontend :{FRONTEND_PORT}")
 
     print(f"\n  {C.G}[done] services started{C.X}")
     print(f"  backend  PID {bp.pid}  log: {BACKEND_LOG}")
     print(f"  frontend PID {fp.pid}  log: {FRONTEND_LOG}")
+    if backend_ready == -1 or frontend_ready == -1:
+        print(f"\n  {C.Y}[warn] one or both services didn't bind port in 30s. Check logs above.{C.X}")
+    print(f"\n  {C.G}Open in browser: http://127.0.0.1:{FRONTEND_PORT}/{C.X}")
 
 
 def start_docker():
