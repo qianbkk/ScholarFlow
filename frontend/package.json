@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint:dompurify": "node scripts/check-dompurify.mjs"
   },
   "dependencies": {
     "d3": "^7.9.0",
