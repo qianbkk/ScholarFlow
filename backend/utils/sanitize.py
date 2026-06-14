@@ -51,7 +51,14 @@ _INJECTION_PATTERNS = re.compile(
     #   - 保留 \bjailbreak\b (单字攻击向量, 学术基本不用, FP 风险低)
     r"\bjailbreak\b|"
     r"(enable|activate|unlock|bypass|turn\s+on|switch\s+to)\s+"
-    r"(developer|dev|admin|root|dan|god|unrestricted)\s+mode\b",
+    r"(developer|dev|admin|root|dan|god|unrestricted)\s+mode\b|"
+    # R10.5.22 (U.txt + U2.txt + U3.txt 审计 #6): 扩 denylist 覆盖新攻击向量.
+    # 旧 denylist 漏了 "forget everything above" (没有 instruction/prompt 后缀),
+    # "act as a X" (不要求 "now" 前缀), "扮演一个...机器人" (不要求 "角色" 后缀).
+    r"\bforget\s+(everything|all)\s+(above|prior|earlier|preceding)\b|"
+    r"\bact\s+as\s+(an?|the|a)\s+|"
+    r"扮演.*?(机器人|助手|ai|chatbot)|"  # 中文 "扮演 X 机器人/助手"
+    r"as\s+a\s+(dan|developer|admin|root|unrestricted|jailbroken)\s+mode\b",  # 英文 "as a DAN mode"
     re.IGNORECASE,
 )
 

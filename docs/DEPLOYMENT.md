@@ -50,9 +50,14 @@ User=scholarflow
 WorkingDirectory=/opt/ScholarFlow
 Environment="PATH=/opt/ScholarFlow/.venv/bin"
 EnvironmentFile=/opt/ScholarFlow/.env
+# R10.5.22: worker 数量从 WEB_CONCURRENCY env 读 (K8s/Heroku 标准),
+# 缺省 2. 生产推荐 4-8 配 HPA (单次请求仍可 480s, 但并发能力 = N workers).
+# 审计 (U.txt #1) 提示: 同步模型下 1 worker 只能同时服务 1 个用户.
+# 提升 worker 数能线性提升并发, 但每个 worker 内存 + Python GIL 串行.
+# 同步架构极限 = worker 数 × 1 (请求级串行), 如需更高并发见下方"异步重构"章节.
 ExecStart=/opt/ScholarFlow/.venv/bin/gunicorn backend.main:app \
     -k uvicorn.workers.UvicornWorker \
-    -w 2 \
+    -w ${WEB_CONCURRENCY:-2} \
     -b 127.0.0.1:8000 \
     --timeout 480 \
     --graceful-timeout 30 \
