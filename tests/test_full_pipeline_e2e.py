@@ -53,15 +53,57 @@ def client(monkeypatch):
 def _post_search(client_tuple, query: str, budget: float = 0.5):
     """POST /api/v1/search, 返完整 SearchResponse dict.
 
+    D1 (P0-4): 旧实现 POST /search 同步端点, 60s timeout 跟 8 节点 mock 流水线
+    (10-50s 实际耗时) 临界, 偶发 504. 改用 /api/v1/search/stream (480s SSE)
+    拿 done 事件当结果 — 跟 e2e_test_404_fix 测的同步端点互补. mock 模式下
+    实际 <10s, 不会再撞 timeout.
+
     client_tuple = (TestClient, unique_suffix) — unique suffix 拼到 query
     末尾防跨 test 缓存命中 (SQLite + 语义 LRU).
     """
     c, unique = client_tuple
     unique_query = f"{query} [t{unique}]"
-    return c.post(
-        "/api/v1/search",
-        json={"query": unique_query, "budget": budget, "provider": "minimax"},
-    )
+    # 调 SSE 流式端点, 等 done 事件
+    with c.stream(
+        "GET",
+        f"/api/v1/search/stream?q={unique_query}&budget={budget}&provider=minimax",
+    ) as resp:
+        if resp.status_code != 200:
+            # 流式 HTTP 错误 (e.g. 422 invalid query) — 包成 Response 形态返回
+            return _FakeResponse(resp.status_code, b"")
+        for line in resp.iter_lines():
+            if not line.startswith("data: "):
+                continue
+            try:
+                payload = json.loads(line[6:])
+            except json.JSONDecodeError:
+                continue
+            if payload.get("event") == "done":
+                # 包装成跟 c.post 一样的 Response 形态, 上层 r.json() 还能用
+                return _FakeResponse(200, json.dumps(payload["result"]).encode())
+            if payload.get("event") == "error":
+                return _FakeResponse(500, json.dumps({"detail": payload.get("message")}).encode())
+            if payload.get("event") == "budget_exceeded":
+                return _FakeResponse(200, json.dumps(payload.get("result") or {}).encode())
+    # 流没 done 也没 error — 异常
+    return _FakeResponse(504, b'{"detail":"stream ended without done event"}')
+
+
+class _FakeResponse:
+    """D1 修: e2e 期望 r.status_code + r.json() + r.text 形态. 把 stream done
+    包装成跟 c.post() 返回同 API 的对象."""
+    def __init__(self, status_code: int, body: bytes):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self) -> dict:
+        if not self._body:
+            return {}
+        return json.loads(self._body.decode("utf-8"))
+
+    @property
+    def text(self) -> str:
+        return self._body.decode("utf-8", errors="replace")
 
 
 class TestFullPipelineE2E:

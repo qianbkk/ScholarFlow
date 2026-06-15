@@ -69,10 +69,15 @@ async def critic_review_node(state: SearchState) -> SearchState:
             
             response_text = await call_llm(
                 prompt=prompt,
-                model="gpt-4o-mini",  # 使用轻量模型进行批量评审
+                # D1 (P0-3): 旧版用 model="gpt-4o-mini" + temperature=0.3, 这 2 个
+                # 都是 call_llm() 不接受的 kwarg (call_llm 只接 model_override, 无 temperature),
+                # 导致 TypeError + 10 次重试. 改用 model_override= + task_type="fast"
+                # (tier=fast → cfg['fast_model'], 跟"轻量模型批量评审"意图一致).
+                model_override="gpt-4o-mini",
+                task_type="fast",
                 provider=provider,
-                temperature=0.3,
-                max_tokens=500
+                max_tokens=500,
+                json_mode=True,  # critic 评审需要 JSON 结构化输出
             )
             
             # 解析 JSON 响应
