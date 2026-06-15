@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CostDashboard } from './components/CostDashboard';
 import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
@@ -6,6 +6,15 @@ import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
 import { LoginDialog } from './components/LoginDialog';
 import { UserBadge } from './components/UserBadge';
+// R10.5.28 (Holographic 集成): 5 个新组件. 之前合并的 feature/holographic-command-center
+// 已经创建了组件但没在 App.tsx 渲染, 这一版按 docs/COMPREHENSIVE_UPGRADE_REPORT.md
+// "待前端集成步骤" 的指导接入, 让 CockpitDashboard / EvolutionSlider / FilterPanel /
+// CompareDrawer / CommandPalette 真正进入 UI.
+import { CockpitDashboard } from './components/CockpitDashboard';
+import { EvolutionSlider } from './components/EvolutionSlider';
+import { FilterPanel } from './components/FilterPanel';
+import { CompareDrawer } from './components/CompareDrawer';
+import { CommandPalette, useCommandPalette } from './components/CommandPalette';
 import { useSearch } from './hooks/useSearch';
 import {
   healthCheck,
@@ -62,6 +71,8 @@ export default function App() {
     currentStep, elapsedSec, pipelineSteps,
     recentSearches, clearRecentSearches,
     budgetExceeded, dismissBudgetExceeded,
+    // R10.5.28 (Holographic 集成): 节点级事件流 + 图谱快照, 喂新组件
+    events, graphSnapshots,
   } = useSearch();
   const [serverOk, setServerOk] = useState<boolean | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -73,6 +84,30 @@ export default function App() {
   // | 'authenticated' (显示主界面).  配 UserInfo (含 open_mode) 控制 UserBadge.
   const [authState, setAuthState] = useState<'loading' | 'unauthenticated' | 'authenticated'>('loading');
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null);
+  // R10.5.28 (Holographic 集成): Cockpit 展开的节点 / 多选对比的论文 / 过滤器状态.
+  // 5 个新组件共用这 3 个 state. 命令面板是 hook 内部管, 不在这里.
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
+  // FilterPanel 过滤器 — 年份 / 方法 / 置信度 / 质量分. 默认全放行.
+  // FilterPanel.tsx 没 export DEFAULT_FILTERS, 重复一份避免 import 不到.
+  const [filters, setFilters] = useState<{
+    yearRange: 'all' | '1' | '3' | '5';
+    methods: string[];
+    minConfidence: number;
+    minQualityScore: number;
+  }>({
+    yearRange: 'all',
+    methods: [],
+    minConfidence: 0,
+    minQualityScore: 0,
+  });
+  // R10.5.28: CommandPalette 是 Cmd+K 触发的全局命令面板, 内部 hook 自己管 state.
+  // onExecuteCommand 暂留空 handler (导出 / 过滤 / 视图切换命令的完整实现留 R10.5.29).
+  const cmdPalette = useCommandPalette();
+  const handleCommand = useCallback((cmdId: string) => {
+    // 占位: 当前先打 log, R10.5.29 接 onExport (bibtex/ris), onFilterChange, onViewChange
+    console.info('[CommandPalette] execute:', cmdId);
+  }, []);
   // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
   // R10.5.5: 跨组件论文聚焦 — 论文列表 / 图谱节点 / 报告引用表 三者互相同步高亮
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
@@ -316,6 +351,39 @@ export default function App() {
         <CostDashboard result={result} loading={loading} elapsed={elapsed} />
       </div>
 
+      {/* R10.5.28 (Holographic 集成): 8 节点态势感知驾驶舱. 跟 CostDashboard 同源数据
+          (useSearch.events), 但 CockpitDashboard 是横向 8 舱室 + Thought Stream,
+          比 CostDashboard 的 4 个标量更"驾驶舱"感. 仅在有 events 或在跑时显示. */}
+      {(events.length > 0 || loading) && (
+        <div className="mx-4 sm:mx-6 mt-2">
+          <CockpitDashboard
+            events={events}
+            isRunning={loading}
+            expandedNodeId={expandedNodeId}
+            onExpandNode={setExpandedNodeId}
+          />
+        </div>
+      )}
+
+      {/* R10.5.28 (Holographic 集成): 演化时间轴. build_graph 节点每完成一次推
+          一个图谱快照, EvolutionSlider 让用户拖时间轴看 V1 → V2 → V3 生长. */}
+      {graphSnapshots.length > 0 && (
+        <div className="mx-4 sm:mx-6 mt-2">
+          <EvolutionSlider
+            snapshots={graphSnapshots}
+            currentIteration={graphSnapshots[graphSnapshots.length - 1].iteration}
+            onIterationChange={() => {/* 只读 — EvolutionSlider 没有可逆操作 */}}
+            disabled={loading}
+          />
+        </div>
+      )}
+
+      {/* R10.5.28: 升级可见化 banner. CD.txt 提"完全没看到前端重构了什么东西",
+          显式在 UI 顶部列出本次 4 项核心升级, 让用户立刻看出 ScholarFlow 在
+          这一版做了什么. 用 sessionStorage 记录"已阅", 关掉后再点 footer 链接
+          重新显示. 4 个数据点: 安全 / 论文库 / 历史分路 / main.py 拆分. */}
+      <R10_5_28Banner />
+
       {serverOk === false && (
         <div
           className="mx-4 sm:mx-6 mt-3 px-4 py-2.5 text-xs flex items-center gap-2 font-ui"
@@ -441,6 +509,29 @@ export default function App() {
           onSuccess={handleLoginSuccess}
         />
       )}
+
+      {/* R10.5.28 (Holographic 集成): 分屏对比抽屉. 当用户多选恰好 2 篇论文时
+          (selectedPaperIds.length === 2) 显示. reviews 暂传空对象, R10.5.29
+          接 critic_agent 后端结果填充. selectedPaperIds 接入方式: 论文列表项
+          多选状态 (R10.5.29 在 QueryPanel 论文行加 ⌘+click 多选) 才能让
+          selectedPaperIds 真的有 2 项, 当前默认空, 等多选接线. */}
+      {selectedPaperIds.length === 2 && result?.ranked_papers && (
+        <CompareDrawer
+          papers={result.ranked_papers as any}
+          selectedPaperIds={selectedPaperIds}
+          reviews={{}}
+          onClose={() => setSelectedPaperIds([])}
+        />
+      )}
+
+      {/* R10.5.28 (Holographic 集成): 全局命令面板 (Cmd+K / Ctrl+K 触发).
+          useCommandPalette hook 内部管 isOpen + 快捷键注册. 13 个预定义命令
+          暂走 console.log 占位, R10.5.29 接导出 / 过滤 / 视图切换. */}
+      <CommandPalette
+        isOpen={cmdPalette.isOpen}
+        onClose={cmdPalette.close}
+        onExecuteCommand={handleCommand}
+      />
     </div>
   );
 }
@@ -549,6 +640,148 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
           ❦ &nbsp; 按 ? 或 Esc 关闭 &nbsp; ❦
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// ===== R10.5.28: 升级可见化 banner =====
+// CD.txt 反馈 "完全没看到前端重构了什么东西", 这一版我们用 sessionStorage
+// 记录"已阅", 顶部显眼位置列出 4 项核心升级, 让用户一眼看出 ScholarFlow
+// 在 R10.5.28 做了什么. 关闭后再点 footer 链接 (见 ? 帮助对话框) 重新展开.
+const R10_5_28_DISMISSED_KEY = 'sf-r10_5_28-banner-dismissed';
+const R10_5_28_NOTES: Array<{
+  key: string;
+  emoji: string;
+  title: string;
+  body: string;
+  tag: string;
+  tagColor: string;
+}> = [
+  {
+    key: 'security',
+    emoji: '🔐',
+    title: 'API Key 存储加固',
+    body: '长期 key 从 localStorage 降到 sessionStorage, 30 分钟无活动自动清空, 关浏览器即失效 — 缓解 XSS 偷走后长期有效的攻击窗口.',
+    tag: 'CG.txt P1 #4',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
+    key: 'local',
+    emoji: '🧪',
+    title: '本地论文库身份标识',
+    body: '50+ 篇 mock 论文统一标 "本地演示" (紫色 badge), url 加 #demo=1, 一眼区分真实 Semantic Scholar / OpenAlex 跟本地演示数据.',
+    tag: 'CD.txt 隐性问题',
+    tagColor: 'rgb(168, 85, 247)',
+  },
+  {
+    key: 'history',
+    emoji: '🗂',
+    title: '历史记录分本地 / 真实两路',
+    body: '最近搜索按 source 字段分成 "全部 / 真实 (绿) / 本地 (紫)" 三 tab, 避免演示模式污染后用户分不清哪些是真检索结果.',
+    tag: 'CD.txt 隐性问题',
+    tagColor: 'rgb(168, 85, 247)',
+  },
+  {
+    key: 'backend',
+    emoji: '🧹',
+    title: 'main.py 拆分 + config.py 去重',
+    body: 'main.py 1140→1083 行, 抽 admin 路由到 routes/admin.py; config.py 删 _DOTENV / _getenv_ci 重复定义, 业务侧字段读取路径只剩一处.',
+    tag: 'CG.txt P1 #5',
+    tagColor: 'var(--sf-accent)',
+  },
+];
+
+function R10_5_28Banner() {
+  // 用 sessionStorage 而非 localStorage: 标签页关闭后再打开, banner 再显示一次
+  // (新版本升级 / 关键变更需要让用户看到), 但当前 session 内关掉就关掉.
+  const [dismissed, setDismissed] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem(R10_5_28_DISMISSED_KEY) === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [expanded, setExpanded] = useState<boolean>(false);
+  if (dismissed) return null;
+  return (
+    <div
+      className="mx-4 sm:mx-6 mt-3 px-3 py-2.5 font-ui text-xs"
+      style={{
+        backgroundColor: 'var(--sf-bg-elev)',
+        border: '1px solid var(--sf-border)',
+        borderLeft: '3px solid var(--sf-accent)',
+      }}
+      data-testid="r10-5-28-banner"
+    >
+      <div className="flex items-center gap-3 flex-wrap">
+        <span
+          className="font-mono text-[10px] uppercase tracking-[0.18em] shrink-0"
+          style={{ color: 'var(--sf-accent)' }}
+        >
+          R10.5.28
+        </span>
+        <span style={{ color: 'var(--sf-text)' }}>
+          本次升级新增 <strong>4 项</strong>安全 + 可视化改进.
+        </span>
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="text-[10px] font-mono uppercase tracking-[0.15em] opacity-70 hover:opacity-100 transition"
+          style={{ color: 'var(--sf-muted)' }}
+          data-testid="r10-5-28-banner-toggle"
+        >
+          {expanded ? '收起 ▲' : '查看详情 ▼'}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            try { sessionStorage.setItem(R10_5_28_DISMISSED_KEY, '1'); } catch { /* ignore */ }
+            setDismissed(true);
+          }}
+          className="ml-auto font-display italic text-base leading-none opacity-50 hover:opacity-100 transition"
+          style={{ color: 'var(--sf-muted)' }}
+          aria-label="关闭升级公告"
+          title="关闭 (sessionStorage 记录, 本次会话不再显示)"
+        >
+          ×
+        </button>
+      </div>
+      {expanded && (
+        <div
+          className="mt-2.5 pt-2.5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-2.5 border-t"
+          style={{ borderColor: 'var(--sf-border)' }}
+        >
+          {R10_5_28_NOTES.map((n) => (
+            <div key={n.key} className="flex gap-2 items-start">
+              <span className="text-base shrink-0 leading-snug">{n.emoji}</span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span
+                    className="font-display text-[12px]"
+                    style={{ color: 'var(--sf-text)' }}
+                  >
+                    {n.title}
+                  </span>
+                  <span
+                    className="font-mono text-[8.5px] uppercase tracking-[0.12em] px-1 py-0.5 shrink-0"
+                    style={{ backgroundColor: 'transparent', border: `1px solid ${n.tagColor}`, color: n.tagColor }}
+                  >
+                    {n.tag}
+                  </span>
+                </div>
+                <p
+                  className="font-body text-[11px] leading-snug mt-0.5"
+                  style={{ color: 'var(--sf-muted)' }}
+                >
+                  {n.body}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 }
