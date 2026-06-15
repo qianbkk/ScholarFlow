@@ -120,19 +120,25 @@ export interface RecentEntry {
   ts: number;  // 毫秒, 排序 / 显示用
 }
 
-const isStringArray = (v: unknown): v is string[] =>
-  Array.isArray(v) && v.every((x) => typeof x === 'string');
+// R10.5.29 (simplify): 抽 isArrayOf 泛型, 2 个 validator 都用. 之前每个 inline
+// 自己写 Array.isArray + every, 重复 2 次.
+const isArrayOf = <T>(v: unknown, pred: (x: unknown) => x is T): v is T[] =>
+  Array.isArray(v) && v.every(pred);
 
-function isRecentEntryArray(v: unknown): v is RecentEntry[] {
-  if (!Array.isArray(v)) return false;
-  return v.every(
-    (x) =>
-      x != null &&
-      typeof x === 'object' &&
-      typeof (x as RecentEntry).query === 'string' &&
-      ['local', 'real', 'unknown'].includes((x as RecentEntry).source)
+const isStringArray = (v: unknown): v is string[] =>
+  isArrayOf(v, (x): x is string => typeof x === 'string');
+
+function isRecentEntry(v: unknown): v is RecentEntry {
+  if (v === null || typeof v !== 'object') return false;
+  const e = v as RecentEntry;
+  return (
+    typeof e.query === 'string' &&
+    ['local', 'real', 'unknown'].includes(e.source) &&
+    typeof e.ts === 'number'
   );
 }
+const isRecentEntryArray = (v: unknown): v is RecentEntry[] =>
+  isArrayOf(v, isRecentEntry);
 
 function loadRecent(): RecentEntry[] {
   // 优先新 schema
@@ -323,95 +329,97 @@ export function useSearch() {
       let buffer = '';
 
       const dispatchEvent = (payload: SSEEvent): boolean => {
-        // 返 true 表示流结束 (done/error/budget_exceeded)
-        if (payload.event === 'started') {
-          setCurrentStep(0);
-          // R10.5.28: 新搜索开始, 清空 events + graphSnapshots 重新累积
-          setEvents([]);
-          setGraphSnapshots([]);
-          return false;
-        }
-        if (payload.event === 'node_complete') {
-          const stepIdx = NODE_NAME_TO_STEP[payload.node];
-          if (typeof stepIdx === 'number') setCurrentStep(stepIdx);
-          if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
-          // R10.5.28: 累积节点级事件给 CockpitDashboard.
-          // 同样的 node_complete 事件再 append 一份 'completed' 状态,
-          // CockpitDashboard 内部 useMemo 会用最新的覆盖旧的, 舱室自然显示完成态.
-          setEvents((prev) => [
-            ...prev,
-            {
-              node: payload.node,
-              step: typeof stepIdx === 'number' ? stepIdx : 0,
-              status: 'completed' as const,
-              cost_usd: (payload as any).cost_usd,
-              tokens: (payload as any).tokens,
-              elapsed: payload.elapsed,
-              iteration: (payload as any).iteration,
-            },
-          ]);
-          return false;
-        }
-        // R10.5.28: graph_snapshot 事件 — build_graph 节点完成后推送,
-        // 喂给 EvolutionSlider 显示图谱生长时间轴.
-        if (payload.event === 'graph_snapshot') {
-          setGraphSnapshots((prev) => [
-            ...prev,
-            {
-              iteration: payload.iteration,
-              graph: payload.graph,
-              node_count: payload.node_count,
-              link_count: payload.link_count,
-            },
-          ]);
-          return false;
-        }
-        if (payload.event === 'done') {
-          setResult(payload.result);
-          setCurrentStep(PIPELINE_STEPS.length - 1);
-          if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
-          // R10.5.28 (CD.txt 隐性问题修复): 收到 done 时回填这条最近搜索的 source.
-          // 后端 result.runtime_mode 字段: "real" | "mock" | "unknown"
-          //   - 'real' → RecentSource 'real' (真 LLM + 真学术 API)
-          //   - 'mock' → 'local' (本地 mock / fallback)
-          //   - 'unknown' → 'unknown' (cache hit, 留原值)
-          const rm = (payload.result as any)?.runtime_mode as string | undefined;
-          if (rm === 'real' || rm === 'mock') {
-            const mappedSource: RecentSource = rm === 'mock' ? 'local' : 'real';
-            setRecentSearches((prev) => {
-              const next = prev.map((e) =>
-                e.query === query ? { ...e, source: mappedSource } : e
-              );
-              saveRecent(next);
-              return next;
-            });
+        // R10.5.29 (simplify): 改 switch 而非 5 个 if/else 链. 5 个 case,
+        // 默认 return false (流未结束). 返 true 表示流结束 (done/error/budget_exceeded).
+        switch (payload.event) {
+          case 'started':
+            setCurrentStep(0);
+            // R10.5.28: 新搜索开始, 清空 events + graphSnapshots 重新累积
+            setEvents([]);
+            setGraphSnapshots([]);
+            return false;
+          case 'node_complete': {
+            const stepIdx = NODE_NAME_TO_STEP[payload.node];
+            if (typeof stepIdx === 'number') setCurrentStep(stepIdx);
+            if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+            // R10.5.28: 累积节点级事件给 CockpitDashboard.
+            // 同样的 node_complete 事件再 append 一份 'completed' 状态,
+            // CockpitDashboard 内部 useMemo 会用最新的覆盖旧的, 舱室自然显示完成态.
+            setEvents((prev) => [
+              ...prev,
+              {
+                node: payload.node,
+                step: typeof stepIdx === 'number' ? stepIdx : 0,
+                status: 'completed' as const,
+                cost_usd: (payload as any).cost_usd,
+                tokens: (payload as any).tokens,
+                elapsed: payload.elapsed,
+                iteration: (payload as any).iteration,
+              },
+            ]);
+            return false;
           }
-          return true;
+          // R10.5.28: graph_snapshot 事件 — build_graph 节点完成后推送,
+          // 喂给 EvolutionSlider 显示图谱生长时间轴.
+          case 'graph_snapshot':
+            setGraphSnapshots((prev) => [
+              ...prev,
+              {
+                iteration: payload.iteration,
+                graph: payload.graph,
+                node_count: payload.node_count,
+                link_count: payload.link_count,
+              },
+            ]);
+            return false;
+          case 'done':
+            setResult(payload.result);
+            setCurrentStep(PIPELINE_STEPS.length - 1);
+            if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+            // R10.5.28 (CD.txt 隐性问题修复): 收到 done 时回填这条最近搜索的 source.
+            // 后端 result.runtime_mode 字段: "real" | "mock" | "unknown"
+            //   - 'real' → RecentSource 'real' (真 LLM + 真学术 API)
+            //   - 'mock' → 'local' (本地 mock / fallback)
+            //   - 'unknown' → 'unknown' (cache hit, 留原值)
+            {
+              const rm = (payload.result as any)?.runtime_mode as string | undefined;
+              if (rm === 'real' || rm === 'mock') {
+                const mappedSource: RecentSource = rm === 'mock' ? 'local' : 'real';
+                setRecentSearches((prev) => {
+                  const next = prev.map((e) =>
+                    e.query === query ? { ...e, source: mappedSource } : e
+                  );
+                  saveRecent(next);
+                  return next;
+                });
+              }
+            }
+            return true;
+          case 'error':
+            setError(payload.message || '搜索失败');
+            return true;
+          case 'budget_exceeded': {
+            // R10.5.5: 暴露结构化数据给 App.tsx 显示"调高预算"一键恢复
+            // 之前只 setError 字符串, 用户必须手动改表单. 现在 App 读 budgetExceeded
+            // 显示 inline 按钮, 1.5x 当前预算重跑.
+            const costUsd = typeof payload.cost_usd === 'number' ? payload.cost_usd : 0;
+            const budgetUsd = typeof payload.budget_usd === 'number' ? payload.budget_usd : 0;
+            setBudgetExceeded({
+              cost_usd: costUsd,
+              budget_usd: budgetUsd,
+              message: payload.message,
+              node: payload.node,
+            });
+            const costStr = costUsd.toFixed(4);
+            const budgetStr = budgetUsd.toFixed(2);
+            setError(
+              `成本已达 $${costStr} >= 预算 $${budgetStr}。点击右侧「调高预算」一键重试。`
+            );
+            return true;
+          }
+          default:
+            return false;
         }
-        if (payload.event === 'error') {
-          setError(payload.message || '搜索失败');
-          return true;
-        }
-        if (payload.event === 'budget_exceeded') {
-          // R10.5.5: 暴露结构化数据给 App.tsx 显示"调高预算"一键恢复
-          // 之前只 setError 字符串, 用户必须手动改表单. 现在 App 读 budgetExceeded
-          // 显示 inline 按钮, 1.5x 当前预算重跑.
-          const costUsd = typeof payload.cost_usd === 'number' ? payload.cost_usd : 0;
-          const budgetUsd = typeof payload.budget_usd === 'number' ? payload.budget_usd : 0;
-          setBudgetExceeded({
-            cost_usd: costUsd,
-            budget_usd: budgetUsd,
-            message: payload.message,
-            node: payload.node,
-          });
-          const costStr = costUsd.toFixed(4);
-          const budgetStr = budgetUsd.toFixed(2);
-          setError(
-            `成本已达 $${costStr} >= 预算 $${budgetStr}。点击右侧「调高预算」一键重试。`
-          );
-          return true;
-        }
-        return false;
       };
 
       const stopFallback = () => {

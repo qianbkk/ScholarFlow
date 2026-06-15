@@ -118,11 +118,14 @@ def _shingle_lru_put(
     response_json: str,
     cost: float,
     tokens: int,
+    runtime_mode: str = "unknown",  # R10.5.29: 拼 LRU key
 ) -> None:
-    qhash = _hash_query(query)
+    # R10.5.29 (simplify): 用 (query, runtime_mode) 二元组作为 key 而非 query 单独.
+    # 之前 mock 模式写入会被 real 模式 query 命中 (跨污染).
+    composite_key = f"{runtime_mode}\x00{_hash_query(query)}"
     shingle_set = _shingles(_normalize(query))
-    _SHINGLE_LRU[qhash] = (shingle_set, response_json, cost, tokens)
-    _SHINGLE_LRU.move_to_end(qhash)
+    _SHINGLE_LRU[composite_key] = (shingle_set, response_json, cost, tokens)
+    _SHINGLE_LRU.move_to_end(composite_key)
     while len(_SHINGLE_LRU) > _MAX_LRU:
         _SHINGLE_LRU.popitem(last=False)
 
@@ -210,20 +213,26 @@ async def set_semantic_cached(
     cost_usd: float,
     tokens: int,
     provider: str | None = None,
+    runtime_mode: str = "unknown",  # R10.5.29 (simplify): 拼 LRU key, 避免跨模式污染
 ) -> None:
     """语义缓存写入 (R10.5.7 真实实现).
 
     写入内存 LRU (后续 query 命中), 跨进程由 SQLite 精确缓存 get_cached_async
     独立承担 (H8 修复后 search_cache 只存 hash, 语义缓存存全文, 二者互补).
+    R10.5.29 (simplify): runtime_mode 拼 LRU key, 防止 mock↔real 跨模式命中.
+    旧版只按 query 拼 key, 一次 'real' 写入的 'transformer attention' 会被
+    后续 mock 模式 'transformer attention mechanism' 命中, 把真 API 的
+    response 喂给 mock 用户 (后端 is_runtime_mock 切到 mock 之后, history
+    标签 'real' 标错).
     """
     if not semantic_cache_enabled:
         return
     try:
         response_json = json.dumps(response, ensure_ascii=False)
-        _shingle_lru_put(query, response_json, cost_usd, tokens)
+        _shingle_lru_put(query, response_json, cost_usd, tokens, runtime_mode=runtime_mode)
         logger.debug(
             f"[semantic_cache] stored query={scrub_sensitive(query[:40])!r} "
-            f"({len(_SHINGLE_LRU)} entries in LRU)"
+            f"mode={runtime_mode} ({len(_SHINGLE_LRU)} entries in LRU)"
         )
     except (TypeError, ValueError) as e:
         logger.warning(f"[semantic_cache] store failed (non-fatal): {e}")

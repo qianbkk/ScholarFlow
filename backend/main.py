@@ -178,6 +178,10 @@ async def _write_search_caches(
             await set_semantic_cached(
                 safe_query, max_iter, budget, response_dict,
                 cost_usd, tokens, provider=provider,
+                # R10.5.29 (simplify): 拼 LRU key, 跟精确缓存 runtime_mode 隔离
+                # 行为保持一致. 旧版缺这个 kwarg, semantic LRU 只按 query 匹配,
+                # mock↔real 跨模式命中导致 history 标签错.
+                runtime_mode=runtime_mode,
             )
         except Exception as e:
             logger.warning(f"[{endpoint}] semantic cache write failed (non-fatal): {e}")

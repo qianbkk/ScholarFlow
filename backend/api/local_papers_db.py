@@ -51,7 +51,11 @@ def _tag_as_local_demo(paper) -> "Paper":
 
 def _append_demo_marker(url: str) -> str:
     """URL 末尾追加 ?demo=1 (或 &demo=1 if 已有 query). 用 urlparse 严谨处理
-    fragment / 已有 query, 避免 'https://x.com/foo#sec?demo=1' 这种 bug."""
+    fragment / 已有 query, 避免 'https://x.com/foo#sec?demo=1' 这种 bug.
+    R10.5.29 (simplify): 快路径, 99% mock 论文 URL 是纯 'https://arxiv.org/...'
+    无 ? / #, 直接 f-string 拼即可, 避免每次 urlparse 4 个 stdlib 调用 × 50 篇."""
+    if "?" not in url and "#" not in url:
+        return f"{url}?demo=1"
     parts = urlparse(url)
     q = dict(parse_qsl(parts.query, keep_blank_values=True))
     q["demo"] = "1"

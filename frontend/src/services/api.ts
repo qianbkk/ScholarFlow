@@ -27,19 +27,30 @@ const IDLE_TIMEOUT_MS = 30 * 60 * 1000;  // 30 分钟无活动自动清 key
 
 // R10.5.28: 闲置自动清 key. 模块级 ref, 每次 setApiKey 重置定时器.
 let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+// R10.5.29 (simplify): 模块级缓存 key, 避免每次 fetch 都读 sessionStorage.
+// 之前 authHeaders() 调 getApiKey() 每次都 sessionStorage.getItem, 高频用户
+// (50 fetches/min) 浪费 50 次 storage read. 现在 cache 在 module scope, 仅
+// setApiKey 调用时失效. _cachedKey 必须跟 _idleTimer 一致处理 timeout 失效.
+let _cachedKey: string | null | undefined = undefined;  // undefined = 未初始化
 function _resetIdleTimer(): void {
   if (_idleTimer) clearTimeout(_idleTimer);
   _idleTimer = setTimeout(() => {
     // 30 分钟无活动, 自动清 key. 用户重新打开标签页就要重新登录.
     try { sessionStorage.removeItem(STORED_KEY); } catch { /* ignore */ }
+    _cachedKey = null;  // 同步 cache, 下次 getApiKey() 才不会返回旧值
   }, IDLE_TIMEOUT_MS);
 }
 
 export function getApiKey(): string | null {
+  // R10.5.29 (simplify): 走 cache. 只在首次 / 失效时读 storage.
+  if (_cachedKey !== undefined) return _cachedKey;
   try {
     // 优先 sessionStorage, 兼容旧 localStorage (一次性迁移, R10.5.28)
     const fromSession = sessionStorage.getItem(STORED_KEY);
-    if (fromSession) return fromSession;
+    if (fromSession) {
+      _cachedKey = fromSession;
+      return fromSession;
+    }
     const fromLocal = localStorage.getItem(STORED_KEY);
     if (fromLocal) {
       // 一次性迁移: 旧 localStorage key 挪到 sessionStorage
@@ -48,15 +59,19 @@ export function getApiKey(): string | null {
         localStorage.removeItem(STORED_KEY);
       } catch { /* ignore */ }
       _resetIdleTimer();
+      _cachedKey = fromLocal;
       return fromLocal;
     }
+    _cachedKey = null;
     return null;
   } catch {
+    _cachedKey = null;
     return null;
   }
 }
 
 export function setApiKey(key: string | null): void {
+  _cachedKey = key;  // R10.5.29 (simplify): 同步 cache, 避免下次 getApiKey() 读 storage
   try {
     if (key) {
       sessionStorage.setItem(STORED_KEY, key);

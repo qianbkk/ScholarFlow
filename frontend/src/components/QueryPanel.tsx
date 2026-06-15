@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { Paper } from '../types';
-import { fetchProviders, type ProviderInfo } from '../services/api';
+import { fetchProviders, type ProviderInfo, type RuntimeMode } from '../services/api';
+// R10.5.29 (simplify): 删 inline RecentEntry 类型, 改从 useSearch 导入. 避免
+// 3 文件 (useSearch / QueryPanel / App) 各自定义 'local'|'real'|'unknown' 联合.
+import type { RecentEntry } from '../hooks/useSearch';
 
 interface PipelineStep {
   key: string;
@@ -25,13 +28,15 @@ interface Props {
   selectedPaperId?: string | null;
   onSelectPaper?: (paperId: string | null) => void;
   // R10.5.5: 最近搜索 (localStorage LRU 5 条)
-  // R10.5.28 (CD.txt 修复): 类型改为 {query, source, ts}[], 支持分本地/真实两路
-  recentSearches?: Array<{ query: string; source: 'local' | 'real' | 'unknown'; ts: number }>;
+  // R10.5.28 (CD.txt 修复): 类型改为 RecentEntry, 支持分本地/真实两路.
+  // R10.5.29 (simplify): RecentEntry / RuntimeMode 都从 useSearch / services/api
+  // 导入, 不再 inline 重复.
+  recentSearches?: RecentEntry[];
   onClearRecent?: () => void;
   // R10.5.20: runtime mode (mock / real) 切换. App.tsx 持有 state + 拉/设 API,
   // 这里只接收 + emit.
-  runtimeMode?: 'mock' | 'real';
-  onChangeRuntimeMode?: (mode: 'mock' | 'real') => void;
+  runtimeMode?: RuntimeMode;
+  onChangeRuntimeMode?: (mode: RuntimeMode) => void;
 }
 
 const SUGGESTIONS = [
