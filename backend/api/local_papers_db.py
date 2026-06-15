@@ -25,7 +25,9 @@ R10.5.28: 行为完全兼容 — mock_data.py 仍是底层数据源, 本模块�
 from __future__ import annotations
 
 import logging
+from dataclasses import replace as _dc_replace
 from typing import Optional
+from urllib.parse import urlencode, urlparse, urlunparse, parse_qsl
 
 logger = logging.getLogger(__name__)
 
@@ -38,13 +40,24 @@ def _tag_as_local_demo(paper) -> "Paper":
 
     Paper 是 @dataclass (不是 pydantic), 用 dataclasses.replace 改字段.
     保留所有引用关系 / 评分等内部状态, 仅修改身份字段.
+    R10.5.29 (code-review): 用 urlparse 严谨处理 URL, 避免 #fragment 把 ?demo=1
+    拼到 fragment 后面变成 'https://x.com/foo#sec?demo=1' (fragment 吃掉 query).
     """
-    from dataclasses import replace as _dc_replace
     updates: dict = {"source": LOCAL_DEMO_SOURCE}
     if paper.url:
-        sep = "&" if "?" in paper.url else "?"
-        updates["url"] = f"{paper.url}{sep}demo=1"
+        updates["url"] = _append_demo_marker(paper.url)
     return _dc_replace(paper, **updates)
+
+
+def _append_demo_marker(url: str) -> str:
+    """URL 末尾追加 ?demo=1 (或 &demo=1 if 已有 query). 用 urlparse 严谨处理
+    fragment / 已有 query, 避免 'https://x.com/foo#sec?demo=1' 这种 bug."""
+    parts = urlparse(url)
+    q = dict(parse_qsl(parts.query, keep_blank_values=True))
+    q["demo"] = "1"
+    new_query = urlencode(q)
+    # 保留 fragment, query 在 fragment 前面 (URL 规范)
+    return urlunparse(parts._replace(query=new_query))
 
 
 def get_all_local_demo() -> list:

@@ -12,7 +12,10 @@ import { UserBadge } from './components/UserBadge';
 // CompareDrawer / CommandPalette 真正进入 UI.
 import { CockpitDashboard } from './components/CockpitDashboard';
 import { EvolutionSlider } from './components/EvolutionSlider';
-import { FilterPanel } from './components/FilterPanel';
+// R10.5.29 (code-review): FilterPanel 暂未挂载 (R10.5.30 在 QueryPanel 论文列表接
+// 多选 + filter UI 时再挂). 先删死 import 避免误导后续读者. PaperFilters type
+// 仍需要, 改成本地定义 (跟 FilterPanel.tsx 保持结构一致即可, R10.5.30 一并抽到
+// lib/paperFilters.ts).
 import { CompareDrawer } from './components/CompareDrawer';
 import { CommandPalette, useCommandPalette } from './components/CommandPalette';
 import { useSearch } from './hooks/useSearch';
@@ -280,10 +283,18 @@ export default function App() {
 
       if (isInput) return;
 
-      // Cmd/Ctrl+K → 聚焦 query
+      // Cmd/Ctrl+K → 命令面板 (优先) 或聚焦 query (兜底).
+      // R10.5.29 (code-review): useCommandPalette hook 也注册了 Cmd+K, 两个监听器
+      // 触发顺序由 useEffect 顺序决定, 旧实现可能 hook 先注册但 App.tsx handler
+      // 先 return → 用户按 Cmd+K 只聚焦 query 不开面板. 修法: 命令面板 open 时
+      // 让 hook 接管, 关闭时 App.tsx handler 兜底聚焦 query. 冲突解决靠状态查询
+      // (cmdPalette.isOpen) 而非监听器顺序.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        if (!cmdPalette.isOpen) {
+          // 面板未开 → App.tsx 自己 toggle 打开, hook 这次不响应
+          cmdPalette.toggle();
+        }
         e.preventDefault();
-        document.querySelector<HTMLTextAreaElement>('[data-search-input]')?.focus();
         return;
       }
       // / → 聚焦 query (GitHub / Slack 风格)

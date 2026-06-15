@@ -423,6 +423,14 @@ export function useSearch() {
           clearTimeout(globalTimeoutTimerRef.current);
           globalTimeoutTimerRef.current = null;
         }
+        // R10.5.29 (code-review): 旧版 stopFallback 漏清 retry timer. 后果:
+        // 网络错 2s 后会触发 retry, 但用户在 retry 真正跑之前 cancel 了搜索
+        // (或开始新搜索), retry 仍在排队 → 2s 后用旧的 (trimmed, budget, ...)
+        // 参数跑一次意外搜索. 现在补上.
+        if (retryTimeoutRef.current) {
+          clearTimeout(retryTimeoutRef.current);
+          retryTimeoutRef.current = null;
+        }
       };
 
       try {

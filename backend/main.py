@@ -944,13 +944,35 @@ async def search_stream(
                             accumulated.update(state_update)
                             step_count += 1
                             mapped = NODE_NAME_TO_STEP.get(node_name)
+                            # R10.5.29 (code-review): node_complete 必须带 cost_usd + tokens
+                            # 给前端 CockpitDashboard 渲染 (旧版只 4 字段, 舱室永远 $0).
+                            # 跟 backend/api/routes/search.py:333-341 行为对齐, 这是 SSE
+                            # 路径长期分叉导致的回归.
+                            new_total_cost = float(accumulated.get("total_cost_usd", 0.0))
+                            new_total_tokens = int(accumulated.get("total_tokens_used", 0))
                             yield _sse_format({
                                 "event": "node_complete",
                                 "node": node_name,
                                 "step": mapped if mapped is not None else step_count,
                                 "elapsed": round(_time.time() - t0, 2),
                                 "iteration": accumulated.get("iteration", 0),
+                                "cost_usd": round(new_total_cost, 4),
+                                "tokens": new_total_tokens,
                             })
+                            # R10.5.29 (code-review): build_graph 节点完成后推 graph_snapshot,
+                            # 给前端 EvolutionSlider 显示图谱生长时间轴 (旧版 main.py 路径缺失,
+                            # 只 search.py 路径有, 跟实际 /api/v1/search/stream 走 main.py 矛盾).
+                            if node_name == "build_graph":
+                                iteration_id = accumulated.get("iteration", 0)
+                                citation_graph = accumulated.get("citation_graph", {})
+                                if citation_graph:
+                                    yield _sse_format({
+                                        "event": "graph_snapshot",
+                                        "iteration": iteration_id,
+                                        "graph": citation_graph,
+                                        "node_count": len(citation_graph.get("nodes", [])),
+                                        "link_count": len(citation_graph.get("links", [])),
+                                    })
                             # P0-1: 节点级预算硬停止
                             new_total = float(accumulated.get("total_cost_usd", 0.0))
                             budget_limit = float(

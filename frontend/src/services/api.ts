@@ -78,6 +78,11 @@ export function setApiKey(key: string | null): void {
 
 function authHeaders(): Record<string, string> {
   const key = getApiKey();
+  // R10.5.29 (code-review): 每次 API 调用都 touch timer, 避免"用户活跃使用却被登出".
+  // 旧版 _resetIdleTimer 只在 setApiKey 调用, 长会话后 30 分钟到 → key 被清 →
+  // 401, 用户被突然登出. 改进: 任何 authHeaders() 调用 (即任何 /api/v1/* fetch)
+  // 都视作"用户活动", 重置 30 分钟窗口.
+  if (key) _resetIdleTimer();
   return key ? { 'X-API-Key': key } : {};
 }
 

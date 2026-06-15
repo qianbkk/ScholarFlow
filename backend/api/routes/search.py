@@ -49,6 +49,7 @@ import backend.config as _config
 from backend.utils.budget_guard import check_budget
 from backend.utils.cache import get_cached_async, set_cached_async
 from backend.utils.observability import get_request_id
+from backend.utils.runtime_mode import get_runtime_mode
 from backend.utils.sanitize import sanitize_query
 from backend.workflow.graph import search_graph
 from backend.api.services.budget import _check_and_reserve_budget, _return_budget
@@ -185,6 +186,10 @@ async def search(req: SearchRequest, request: Request):
                 float(final.get("total_cost_usd", 0.0)),
                 int(final.get("total_tokens_used", 0)),
                 provider=provider,
+                # R10.5.29 (code-review): 加 runtime_mode 拼 cache key, 跟 main.py 对齐.
+                # 旧版缺这个参数, /api/v1/search 会把 mock 模式结果缓存到默认 'real' 命名空间,
+                # 真 API 后续请求会读到 mock 缓存 (跨污染).
+                runtime_mode=get_runtime_mode(),
             )
         except Exception as cache_err:
             logger.warning(f"[/search] cache write failed (non-fatal): {cache_err}")

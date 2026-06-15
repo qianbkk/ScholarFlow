@@ -24,14 +24,7 @@ from pydantic import BaseModel, Field
 from backend.config import BUDGET_LIMIT_USD, MAX_SEARCH_ITERATIONS
 from backend.utils.export import papers_to_bibtex, papers_to_ris  # R10.5 P0
 from backend.utils.observability import get_request_id
-
-
-# R10.5.28 (CD.txt 隐性问题修复): 辅助判断当前结果是不是 mock.
-# 跟 runtime_mode 三态联动: 优先 LLM_MOCK env, 再看 runtime admin override.
-def _is_mock_response() -> bool:
-    """返 True 表示当前 result 来自 mock / 本地演示 (CD.txt 修)."""
-    from backend.utils.runtime_mode import is_runtime_mock
-    return is_runtime_mock()
+from backend.utils.runtime_mode import is_runtime_mock  # R10.5.29: 提到模块顶部, 删 _is_mock_response 包装
 
 
 def make_initial_state(
@@ -231,6 +224,6 @@ def _build_search_response(
         # SearchResponse(**cached_payload) 走 from_cache 分支, 已带).
         runtime_mode=(
             state_dict.get("runtime_mode")
-            or ("mock" if _is_mock_response() else "real")
+            or ("mock" if is_runtime_mock() else "real")
         ),
     )
