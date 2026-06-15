@@ -753,120 +753,36 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           </div>
         )}
 
-        {/* R10.5.26 (用户反馈 #2): 全屏模式下显示 Esc 提示 + 图例说明连线逻辑.
-            之前只有 Esc 键盘 hook 没有视觉提示, 用户找不到退出方式. */}
-        {graph && graph.nodes.length > 0 && (
+        {/* R10.5.28 (用户反馈 #2): 全屏 Esc 提示 — 只留左下角, 跟原
+            左上角"边类型"图例不冲突. 之前 R10.5.26 重复加了底部图例条,
+            用户看 2 份图例困惑, 已删. 节点大小/颜色提示在原可折叠图例里. */}
+        {graph && graph.nodes.length > 0 && isFullscreen && (
           <div
-            className="absolute bottom-3 left-3 right-3 flex items-end justify-between gap-3 pointer-events-none"
-            data-testid="graph-legend-bar"
+            className="absolute bottom-3 left-3 pointer-events-none"
+            data-testid="graph-fullscreen-esc-hint"
           >
-            {/* 左下: 全屏 Esc 提示 (仅全屏时显示) */}
-            {isFullscreen && (
-              <div
-                className="font-mono text-[10px] uppercase tracking-[0.15em] px-2.5 py-1.5 flex items-center gap-2 pointer-events-auto"
-                style={{
-                  backgroundColor: 'rgba(28, 25, 23, 0.85)',
-                  color: 'var(--sf-bg)',
-                  border: '1px solid var(--sf-border)',
-                  boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
-                }}
-                title="按下 Esc 退出全屏, 回到原位浏览"
-              >
-                <kbd
-                  className="px-1.5 py-0.5 font-mono font-semibold"
-                  style={{
-                    backgroundColor: 'var(--sf-bg)',
-                    color: 'var(--sf-text)',
-                    border: '1px solid var(--sf-accent)',
-                    borderRadius: '2px',
-                  }}
-                >
-                  Esc
-                </kbd>
-                <span>退出全屏</span>
-              </div>
-            )}
-
-            {/* 右下: 节点 / 连线 图例 (始终显示, 让用户理解 4 种连线逻辑) */}
             <div
-              className="font-mono text-[9px] uppercase tracking-[0.12em] pointer-events-auto"
+              className="font-mono text-[10px] uppercase tracking-[0.15em] px-2.5 py-1.5 flex items-center gap-2 pointer-events-auto"
               style={{
-                backgroundColor: isFullscreen ? 'rgba(28, 25, 23, 0.85)' : 'var(--sf-bg-elev)',
-                color: isFullscreen ? 'var(--sf-bg)' : 'var(--sf-muted)',
+                backgroundColor: 'rgba(28, 25, 23, 0.85)',
+                color: 'var(--sf-bg)',
                 border: '1px solid var(--sf-border)',
-                padding: '6px 10px',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '3px',
-                marginLeft: isFullscreen ? 0 : 'auto',
+                boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
               }}
-              title="节点大小 = 引用数对数; 颜色 = 相关性; 4 种连线含义见说明"
+              title="按下 Esc 退出全屏, 回到原位浏览"
             >
-              <div className="font-bold mb-0.5" style={{ color: 'var(--sf-accent)' }}>
-                节点 & 连线图例
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: 'var(--sf-accent)',
-                    display: 'inline-block',
-                  }}
-                />
-                <span>节点 = 论文 (大小∝引用数, 颜色∝相关性)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 14,
-                    height: 1.5,
-                    backgroundColor: isFullscreen ? 'var(--sf-bg)' : 'var(--sf-edge-cites, #94a3b8)',
-                    display: 'inline-block',
-                  }}
-                />
-                <span>cites = A 引用 B (有向实线)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 14,
-                    height: 1.5,
-                    backgroundImage: 'linear-gradient(to right, currentColor 50%, transparent 50%)',
-                    backgroundSize: '5px 1.5px',
-                    backgroundRepeat: 'repeat-x',
-                    display: 'inline-block',
-                    color: isFullscreen ? 'var(--sf-bg)' : 'var(--sf-edge-co-cited, #94a3b8)',
-                  }}
-                />
-                <span>co_cited = 同被引 (虚线)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 14,
-                    height: 1.5,
-                    backgroundImage: 'linear-gradient(to right, currentColor 50%, transparent 50%)',
-                    backgroundSize: '3px 1.5px',
-                    backgroundRepeat: 'repeat-x',
-                    display: 'inline-block',
-                    color: isFullscreen ? 'var(--sf-bg)' : 'var(--sf-edge-same-venue, #94a3b8)',
-                  }}
-                />
-                <span>same_venue = 同发表 venue (点线)</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span
-                  style={{
-                    width: 14,
-                    height: 1.5,
-                    backgroundColor: isFullscreen ? 'var(--sf-bg)' : 'var(--sf-edge-author-overlap, #94a3b8)',
-                    display: 'inline-block',
-                  }}
-                />
-                <span>author_overlap = 作者重叠 (双向实线)</span>
-              </div>
+              <kbd
+                className="px-1.5 py-0.5 font-mono font-semibold"
+                style={{
+                  backgroundColor: 'var(--sf-bg)',
+                  color: 'var(--sf-text)',
+                  border: '1px solid var(--sf-accent)',
+                  borderRadius: '2px',
+                }}
+              >
+                Esc
+              </kbd>
+              <span>退出全屏</span>
             </div>
           </div>
         )}

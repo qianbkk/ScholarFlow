@@ -163,7 +163,7 @@ async def _write_search_caches(
         try:
             await set_cached_async(
                 safe_query, max_iter, budget, response_dict,
-                cost_usd, tokens, provider=provider,
+                cost_usd, tokens, provider=provider, runtime_mode=runtime_mode,
             )
         except Exception as e:
             logger.warning(f"[{endpoint}] cache write failed (non-fatal): {e}")
@@ -264,6 +264,34 @@ async def lifespan(app: FastAPI):
             "[SECURITY] OPEN_MODE=true — 跳过所有 API Key 认证, 所有请求共享 "
             "'dev-user' 虚拟账户. 仅限本地开发! 生产部署必须设 OPEN_MODE=false."
         )
+    # R10.5.28 (CG.txt 审计 P0 #1+#2): 启动期扫描认证弱点.
+    #  1) 有 password_hash=NULL 的老 user → 警告需升级密码
+    #  2) OPEN_MODE=false + ADMIN_USER_IDS 空 + admin.sqlite 空 → admin 端点全 403
+    try:
+        from backend.utils.cache import _connect_with_wal
+        from backend.auth.dependencies import get_effective_admin_user_ids
+        conn = _connect_with_wal("auth")
+        try:
+            null_pw = conn.execute(
+                "SELECT COUNT(*) FROM users WHERE password_hash IS NULL"
+            ).fetchone()[0]
+        finally:
+            conn.close()
+        if null_pw > 0:
+            logger.warning(
+                f"[SECURITY] {null_pw} 个老用户 password_hash=NULL, 仍可 passwordless 登录. "
+                f"建议这些用户重新注册设密码 (CG.txt 审计 P0 #1). "
+                f"或在 .env 设 REQUIRE_PASSWORDLESS_LOGIN=false 强制要求密码 (R11+)."
+            )
+        if not OPEN_MODE and not get_effective_admin_user_ids():
+            logger.warning(
+                "[SECURITY] admin 白名单为空 (ADMIN_USER_IDS env + admin.sqlite 都空). "
+                "/api/v1/admin/runtime-mode POST 全部 403. "
+                "显式初始化: (1) .env 设 ADMIN_USER_IDS=u_xxx; "
+                "(2) 或 `python -m backend.auth.admin add u_xxx` 持久化."
+            )
+    except Exception as e:
+        logger.warning(f"[lifespan] admin/password audit failed (non-fatal): {e}")
     # R10.5.19 (P.txt #5 / Q.txt #1): /search/stream 仍接受 ?api_key= query param
     # (EventSource 兼容). 计划 R11+ 完全移除, 现在 startup 打印 deprecation 提醒.
     logger.warning(
@@ -528,8 +556,10 @@ async def search(
     try:
         # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
         # R10.5.7 P0-1 真实实现: 精确缓存 miss 后, 查语义缓存 (shingle Jaccard >= 0.85)
+        # R10.5.28: runtime_mode 拼到 cache key, mock↔real 各自独立 cache.
         cached = await get_cached_async(
-            safe_query, req.max_iterations, req.budget, provider=provider
+            safe_query, req.max_iterations, req.budget,
+            provider=provider, runtime_mode=get_runtime_mode(),
         )
         if cached is not None:
             cached_response, cached_cost, cached_tokens = cached
@@ -843,7 +873,8 @@ async def search_stream(
             # Fix-E R10.5: 删除 get_semantic_cached 死调用 (永远返 None).
             # R10.5.7 P0-1: 精确缓存 miss 后查语义缓存
             cached = await get_cached_async(
-                safe_query, max_iter, budget, provider=resolved_provider
+                safe_query, max_iter, budget,
+                provider=resolved_provider, runtime_mode=get_runtime_mode(),
             )
             if cached is not None:
                 cached_response, cached_cost, cached_tokens = cached

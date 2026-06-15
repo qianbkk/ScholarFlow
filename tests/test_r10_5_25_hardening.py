@@ -48,16 +48,21 @@ def test_stream_token_issue_and_resolve(monkeypatch):
 
 
 def test_stream_token_expires_after_ttl(monkeypatch):
-    """_resolve_stream_token 过期 token 返 None (失效)."""
+    """_resolve_stream_token 过期 token 返 None (失效). R10.5.28: 改用 SQLite."""
     auth_path = ROOT / "backend" / "api" / "routes" / "auth.py"
-    # 直接 import (conftest 已设 ADMIN_USER_IDS=dev-user, OPEN_MODE=true)
     auth_mod = _load_mod("backend.api.routes.auth", auth_path)
     user_id = "u_test_expire"
     token = auth_mod._new_stream_token(user_id)
     # 立刻 resolve → 成功
     assert auth_mod._resolve_stream_token(token) == user_id
-    # 手动让 token 过期 (改 expires_ts 到过去)
-    auth_mod._stream_tokens[token] = (user_id, 0.0)
+    # 手动让 token 过期: 直接 UPDATE SQLite 表的 expires_at 到过去
+    from backend.utils.cache import _connect_with_wal
+    _c = _connect_with_wal("auth")
+    try:
+        _c.execute("UPDATE stream_tokens SET expires_at=0.0 WHERE token=?", (token,))
+        _c.commit()
+    finally:
+        _c.close()
     # 再次 resolve → None (过期)
     assert auth_mod._resolve_stream_token(token) is None
 
@@ -71,14 +76,32 @@ def test_stream_token_unknown_returns_none(monkeypatch):
 
 
 def test_stream_token_gc_removes_expired(monkeypatch):
-    """_gc_stream_tokens 清理过期 token, 防止 dict 无限增长."""
+    """_gc_stream_tokens 清理过期 token (SQLite 表 DELETE)."""
     auth_path = ROOT / "backend" / "api" / "routes" / "auth.py"
     auth_mod = _load_mod("backend.api.routes.auth", auth_path)
+    from backend.utils.cache import _connect_with_wal
     # 加 5 个过期 token
-    for i in range(5):
-        auth_mod._stream_tokens[f"st_expired_{i}"] = ("u_x", 0.0)
+    _c = _connect_with_wal("auth")
+    try:
+        import time as _t
+        for i in range(5):
+            _c.execute(
+                "INSERT INTO stream_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+                (f"st_expired_{i}_{int(_t.time()*1000)}", "u_x", 0.0, _t.time()),
+            )
+        _c.commit()
+    finally:
+        _c.close()
     auth_mod._gc_stream_tokens()
-    assert all(not k.startswith("st_expired_") for k in auth_mod._stream_tokens)
+    # 验证: 全部 5 个过期 token 都被删
+    _c = _connect_with_wal("auth")
+    try:
+        rows = _c.execute(
+            "SELECT token FROM stream_tokens WHERE token LIKE 'st_expired_%'"
+        ).fetchall()
+        assert rows == [], f"expired tokens not gc'd: {rows}"
+    finally:
+        _c.close()
 
 
 # ===============================================================

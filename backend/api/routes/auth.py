@@ -23,6 +23,10 @@ from backend.auth.dependencies import (
     get_current_user,
     issue_key_for_email,
     issue_key_for_email_with_status,  # R10.5.25: 返 (key, rotated) 让前端警觉 Session DoS
+    _hash_password,  # R10.5.28: 新注册 / 改密码 走 PBKDF2
+    verify_password,  # R10.5.28: 登录校验密码
+    _read_user_password,  # R10.5.28: 查 user 密码 hash
+    _write_user_password,  # R10.5.28: 写 user 密码 hash
     # _register_user 已迁出, register/login 改用 issue_key_for_email. P1-2 移除死导入.
 )
 from backend.utils.network import get_real_ip
@@ -39,6 +43,9 @@ class RegisterRequest(BaseModel):
     # email 用 str 而非 pydantic EmailStr, 避免 email-validator 依赖.
     email: str = Field(..., min_length=3, max_length=254, description="学术邮箱 (作为 user_id 来源)")
     display_name: str = Field(default="", max_length=64, description="显示名")
+    # R10.5.28 (CG.txt 审计 P0 #1): 新注册必须设 password. 老用户 (password_hash=NULL)
+    # 仍可 passwordless 登录, 但 lifespan 启动时强 WARN. 新流程要求 min 8 字符.
+    password: str = Field(default="", min_length=0, max_length=128, description="密码 (>=8 字符; 老用户可空, 强烈建议填)")
 
 
 class AuthResponse(BaseModel):
@@ -187,6 +194,19 @@ async def register(req: RegisterRequest) -> AuthResponse:
     # R10.5.17: user_id 派生改用单源 helper (跟 audit log 一致).
     from backend.utils.user_id import hash_user_id
     user_id = hash_user_id(req.email)
+    # R10.5.28 (CG.txt 审计 P0 #1): 新注册 / 重新注册 时若提供了 password
+    # (>=8 字符) 走 PBKDF2 摘要落盘, 后续 /auth/login 强制校验.
+    # 没传 password 时旧 user 保留 passwordless 行为, 但 lifespan 启动
+    # 时 [SECURITY] WARN 提示管理员升级. 攻击者无法仅凭邮箱领 key 了.
+    if req.password and len(req.password) >= 8:
+        ph, salt = _hash_password(req.password)
+        _write_user_password(user_id, ph, salt)
+        logger.info(f"[auth/register] password set for {user_id[:8]}***")
+    elif req.password and 0 < len(req.password) < 8:
+        raise HTTPException(
+            status_code=400,
+            detail="密码至少 8 字符, 请重新注册时设强密码.",
+        )
     return AuthResponse(
         user_id=user_id,
         display_name=req.display_name or req.email,
@@ -219,15 +239,41 @@ async def login(req: RegisterRequest) -> AuthResponse:
     if not result:
         raise HTTPException(status_code=400, detail="email 格式无效")
     api_key, rotated = result
+    # R10.5.17: 同 register, 用 hash_user_id 单源
+    from backend.utils.user_id import hash_user_id
+    user_id = hash_user_id(req.email)
+    # R10.5.28 (CG.txt 审计 P0 #1): login 必须校验 password (如果有).
+    # 旧 user (password_hash=NULL) 仍可 passwordless 登录 (向后兼容),
+    # 但 lifespan 启动时强 WARN. 新注册流程会强制 password, 攻击者仅
+    # 凭邮箱拿不到 key.
+    if not rotated:
+        # 新用户走 register 路径, 不该走到 login. 直接拒.
+        raise HTTPException(
+            status_code=400,
+            detail="邮箱未注册, 请先调用 /auth/register",
+        )
+    stored = _read_user_password(user_id)
+    if stored is not None:
+        # 用户有 password — 必须校验
+        if not req.password:
+            raise HTTPException(
+                status_code=401,
+                detail="此账户已设密码, 请提供 password 字段 (login 时).",
+            )
+        ph, salt = stored
+        if not verify_password(req.password, ph, salt):
+            logger.warning(
+                f"[auth/login] WRONG PASSWORD for email={req.email.lower()} "
+                f"user_id={user_id[:8]}***"
+            )
+            raise HTTPException(status_code=401, detail="密码错误")
+        logger.info(f"[auth/login] password verified for {user_id[:8]}***")
     # R10.5.25: audit log 记录 key rotation, 防 Session DoS 难追溯
     if rotated:
         logger.info(
             f"[auth/login] KEY ROTATED for email={req.email.lower()} "
-            f"user_id={hash_user_id(req.email)}"
+            f"user_id={user_id[:8]}***"
         )
-    # R10.5.17: 同 register, 用 hash_user_id 单源
-    from backend.utils.user_id import hash_user_id
-    user_id = hash_user_id(req.email)
     return AuthResponse(
         user_id=user_id,
         display_name=req.display_name or req.email,
@@ -256,14 +302,48 @@ async def me(user: User = Depends(get_current_user)) -> UserInfo:
 # header), 完全消除 query param 凭证.
 
 _STREAM_TOKEN_TTL_SEC = 300  # 5 min
-_stream_tokens: dict[str, tuple[str, float]] = {}  # token -> (user_id, expires_ts)
+_STREAM_TOKEN_DB = "stream_tokens"  # R10.5.28: SQLite 表名 (跨 worker 共享)
+
+
+def _ensure_stream_token_table() -> None:
+    """R10.5.28: stream_token 存 SQLite (跨 worker 共享). 旧实现是进程内 dict,
+    4 worker gunicorn 下 A 发 token 会被 B 处理 / 取消失灵. 改 SQLite 后
+    所有 worker 看到同一个 token 状态."""
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("auth")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS stream_tokens (
+                token TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                expires_at REAL NOT NULL,
+                created_at REAL NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires ON stream_tokens(expires_at)")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _new_stream_token(user_id: str) -> str:
-    """生成短期 stream token. 进程内 dict, 5 分钟自动失效."""
+    """生成短期 stream token, 存 SQLite 跨 worker 共享."""
     import secrets as _s
+    _ensure_stream_token_table()
     token = "st_" + _s.token_urlsafe(24)
-    _stream_tokens[token] = (user_id, time.time() + _STREAM_TOKEN_TTL_SEC)
+    expires = time.time() + _STREAM_TOKEN_TTL_SEC
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("auth")
+    try:
+        conn.execute(
+            "INSERT INTO stream_tokens (token, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)",
+            (token, user_id, expires, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
     return token
 
 
@@ -271,22 +351,35 @@ def _resolve_stream_token(token: str) -> str | None:
     """校验 stream token, 返 user_id 或 None (失效/不存在)."""
     if not token:
         return None
-    entry = _stream_tokens.get(token)
-    if not entry:
+    _ensure_stream_token_table()
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("auth")
+    try:
+        row = conn.execute(
+            "SELECT user_id, expires_at FROM stream_tokens WHERE token=?",
+            (token,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
         return None
-    user_id, expires = entry
+    user_id, expires = row
     if time.time() > expires:
-        _stream_tokens.pop(token, None)
         return None
     return user_id
 
 
 def _gc_stream_tokens() -> None:
-    """周期清理过期 stream tokens, 防止 dict 无限增长."""
-    now = time.time()
-    expired = [t for t, (_, exp) in _stream_tokens.items() if now > exp]
-    for t in expired:
-        _stream_tokens.pop(t, None)
+    """周期清理过期 stream tokens."""
+    _ensure_stream_token_table()
+    from backend.utils.cache import _connect_with_wal
+    conn = _connect_with_wal("auth")
+    try:
+        now = time.time()
+        conn.execute("DELETE FROM stream_tokens WHERE expires_at < ?", (now,))
+        conn.commit()
+    finally:
+        conn.close()
 
 
 class StreamTokenResponse(BaseModel):

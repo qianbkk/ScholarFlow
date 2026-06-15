@@ -339,6 +339,7 @@ def cache_key(
     max_iterations: int,
     budget: float,
     provider: str | None = None,
+    runtime_mode: str = "real",
 ) -> str:
     """P1 修复：cache_key 增加 provider 维度，跨 LLM provider 同 query 不再串。
 
@@ -361,7 +362,7 @@ def cache_key(
     # 精确到分 (cents), 避免浮点 hash 不一致
     budget_cents = round(budget * 100)
     return hashlib.sha256(
-        f"{query.strip().lower()}|{max_iterations}|{budget_cents}|{provider or 'default'}".encode()
+        f"{query.strip().lower()}|{max_iterations}|{budget_cents}|{provider or 'default'}|{runtime_mode}".encode()
     ).hexdigest()[:32]
 
 
@@ -445,6 +446,7 @@ async def get_cached_async(
     budget: float,
     ttl_seconds: int | None = None,
     provider: str | None = None,
+    runtime_mode: str = "real",
 ):
     """async 公共 API：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
@@ -456,7 +458,7 @@ async def get_cached_async(
     if ttl_seconds is None:
         ttl_seconds = int(os.getenv("CACHE_TTL_SECONDS", "86400"))
 
-    key = cache_key(query, max_iterations, budget, provider)
+    key = cache_key(query, max_iterations, budget, provider, runtime_mode=runtime_mode)
     # 退避重试逻辑抽到 _retry_sqlite_op_async (Round N SIMPLIFY)
     return await _retry_sqlite_op_async(_get_cached_sync, key, ttl_seconds)
 
@@ -469,16 +471,18 @@ async def set_cached_async(
     cost_usd: float,
     tokens: int,
     provider: str | None = None,
+    runtime_mode: str = "real",
 ) -> None:
     """async 公共 API：把 SQLite I/O 放到线程池，retry 退避用 asyncio.sleep。
 
     R9 清理后唯一保留的 cache 写 API（同步版 set_cached 已删）。
 
     H8 修复：query 文本不再传递给 _set_cached_sync（只 cache_key 用来算 hash）。
+    R10.5.28: runtime_mode 拼到 cache key, mock vs real 各自独立 cache.
     """
     if os.getenv("ENABLE_SEARCH_CACHE", "true").lower() != "true":
         return
-    key = cache_key(query, max_iterations, budget, provider)
+    key = cache_key(query, max_iterations, budget, provider, runtime_mode=runtime_mode)
     # 退避重试逻辑抽到 _retry_sqlite_op_async (Round N SIMPLIFY)
     await _retry_sqlite_op_async(
         _set_cached_sync, key, response, cost_usd, tokens,
