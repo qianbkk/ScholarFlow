@@ -26,6 +26,14 @@ from backend.utils.export import papers_to_bibtex, papers_to_ris  # R10.5 P0
 from backend.utils.observability import get_request_id
 
 
+# R10.5.28 (CD.txt 隐性问题修复): 辅助判断当前结果是不是 mock.
+# 跟 runtime_mode 三态联动: 优先 LLM_MOCK env, 再看 runtime admin override.
+def _is_mock_response() -> bool:
+    """返 True 表示当前 result 来自 mock / 本地演示 (CD.txt 修)."""
+    from backend.utils.runtime_mode import is_runtime_mock
+    return is_runtime_mock()
+
+
 def make_initial_state(
     safe_query: str,
     max_iterations: int,
@@ -138,6 +146,10 @@ class SearchResponse(BaseModel):
     # 调用, 也避免前端重复格式化逻辑.
     bibtex: str = ""
     ris: str = ""
+    # R10.5.28 (CD.txt 隐性问题修复): 告诉前端这次结果走的是 real API 还是本地 mock.
+    # 配合 /admin/runtime-mode 切换使用. 前端据此在历史记录里给搜索打 '本地 / 真实' 标签.
+    # 取值: "real" | "mock" | "unknown" (cache hit / fallback 等).
+    runtime_mode: str = "unknown"
     # R10.5.14 (P0-A): query_decomposer 抽出的结构化约束. 透传给前端, 用户
     # 能看到"我这次查询被识别成 NeurIPS 2022 后 论文", 调试用. 字段全部
     # Optional, 兜底时整字段 None.
@@ -212,4 +224,13 @@ def _build_search_response(
         ris=papers_to_ris(ranked[:25]) if ranked else "",
         # R10.5.14 (P0-A): constraints 透传
         constraints=state_dict.get("constraints"),
+        # R10.5.28 (CD.txt 隐性问题修复): 告诉前端这次结果走 mock 还是 real.
+        # 跟 _resolve_provider + runtime_mode 三态联动: 优先 state_dict 里的
+        # runtime_mode (search_graph 节点会注入), 兜底读 runtime_mode 进程级
+        # 状态. cache hit 时 cached_payload 自己的 runtime_mode 字段 (上面
+        # SearchResponse(**cached_payload) 走 from_cache 分支, 已带).
+        runtime_mode=(
+            state_dict.get("runtime_mode")
+            or ("mock" if _is_mock_response() else "real")
+        ),
     )

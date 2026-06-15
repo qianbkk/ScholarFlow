@@ -102,6 +102,10 @@ import types
 import backend.api.services.budget as _budget_svc
 from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router  # R10.5 Fix-P0-B
+from backend.api.routes.admin import router as admin_router  # R10.5.28: admin 路由抽离
+# R10.5.28: get_runtime_mode / is_runtime_mock / set_runtime_mode 仍被 search()/search_stream()
+# inline 用到 (cache key 需要), 不能仅靠 admin.py 导入. 显式 import 一次, 跟其它 helper 一起.
+from backend.utils.runtime_mode import get_runtime_mode, is_runtime_mock, set_runtime_mode  # R10.5.20
 from backend.auth.dependencies import User, get_current_user, require_admin  # R10.5.21 鉴权
 from backend.api.services.budget import (
     _init_budget_table,
@@ -153,6 +157,7 @@ async def _write_search_caches(
     tokens: int,
     provider: str | None,
     *,
+    runtime_mode: str = "unknown",  # R10.5.28: cache key 拼 runtime_mode, mock↔real 独立
     endpoint: str,  # "/search" 或 "/search/stream" — 日志用
 ) -> None:
     """并发写精确缓存 (SQLite) + 语义缓存 (in-memory LRU).
@@ -508,9 +513,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 API_V1_PREFIX = "/api/v1"
 app.include_router(health_router, prefix=API_V1_PREFIX)
 app.include_router(auth_router, prefix=API_V1_PREFIX)
+app.include_router(admin_router, prefix=API_V1_PREFIX)  # R10.5.28: admin 路由抽到 routes/admin.py
 # Deprecated alias: 旧客户端继续用无前缀路径
 app.include_router(health_router)
 app.include_router(auth_router)  # R10.5 Fix-P0-B: 多用户 + API Key (/auth/register + /login + /me)
+app.include_router(admin_router)  # R10.5.28: 裸 /admin/* alias
 
 
 # ===== /search (kept inline — see module docstring) =====
@@ -692,6 +699,7 @@ async def search(
             float(final.get("total_cost_usd", 0.0)),
             int(final.get("total_tokens_used", 0)),
             provider=provider,
+            runtime_mode=get_runtime_mode(),  # R10.5.28
             endpoint="/search",
         )
 
@@ -1024,6 +1032,7 @@ async def search_stream(
                 float(accumulated.get("total_cost_usd", 0.0)),
                 int(accumulated.get("total_tokens_used", 0)),
                 provider=resolved_provider,
+                runtime_mode=get_runtime_mode(),  # R10.5.28
                 endpoint="/search/stream",
             )
 
@@ -1070,69 +1079,9 @@ app.add_api_route(
 
 
 # ===== R10.5.20: Runtime Mode 切换 (前端 UI 控制 mock/real) =====
-
-from pydantic import BaseModel as _BaseModel
-from backend.utils.runtime_mode import (
-    get_runtime_mode,
-    set_runtime_mode,
-    is_runtime_mock,
-)
-
-
-class RuntimeModeResponse(_BaseModel):
-    mode: str  # "mock" | "real"
-    source: str  # "runtime" (前端切了) | "env" (env LLM_MOCK/API_MOCK 兜底)
-
-
-class RuntimeModeRequest(_BaseModel):
-    mode: str  # "mock" | "real" | "auto"
-
-
-async def get_runtime_mode_endpoint() -> RuntimeModeResponse:
-    """返回当前 runtime mode + 来源 (env / runtime).
-
-    GET 公开 — 不影响安全, 前端启动时拉取方便, 不暴露任何用户态.
-    """
-    rt_mode = get_runtime_mode()
-    if rt_mode in ("mock", "real"):
-        return RuntimeModeResponse(mode=rt_mode, source="runtime")
-    # auto: 走 env 兜底, 告诉前端当前是 mock 还是 real
-    return RuntimeModeResponse(
-        mode="mock" if is_runtime_mock() else "real",
-        source="env",
-    )
-
-
-async def set_runtime_mode_endpoint(
-    req: RuntimeModeRequest,
-    _admin: User = Depends(require_admin),  # R10.5.21 鉴权
-) -> RuntimeModeResponse:
-    """切换 runtime mode. 'auto' = 恢复 env 行为.
-
-    R10.5.20: 进程级 (per-worker) 状态, 4-worker Gunicorn 部署下每个 worker
-    独立 (跟 circuit_breaker.py 同模型), 用户切到 mock 后只有 1/N 请求
-    走 mock. 短期接受, R11+ 切到 Redis. 文档化在 runtime_mode.py 模块头.
-
-    R10.5.21 (J.txt + K.txt 审计 #1): 必须 admin 身份. 没配置 ADMIN_USER_IDS
-    时所有 POST 默认 403 拒绝 (fail-closed). 配置示例 (.env):
-        ADMIN_USER_IDS=u_abc123,u_def456
-    """
-    if req.mode not in ("mock", "real", "auto"):
-        raise HTTPException(status_code=400, detail=f"mode 必须是 mock/real/auto, 收到 {req.mode!r}")
-    set_runtime_mode(req.mode)  # type: ignore[arg-type]
-    logger.info(f"[admin] runtime_mode → {req.mode} (by {_admin.user_id[:8]}***)")
-    return RuntimeModeResponse(
-        mode=req.mode,  # type: ignore[arg-type]
-        source="runtime",
-    )
-
-
-app.add_api_route(
-    "/api/v1/admin/runtime-mode", get_runtime_mode_endpoint, methods=["GET"],
-)
-app.add_api_route(
-    "/api/v1/admin/runtime-mode", set_runtime_mode_endpoint, methods=["POST"],
-)
+# R10.5.28 (CG.txt 审计 P1 #5): 路由体抽到 backend.api.routes.admin.
+# admin_router import 在文件顶部 (~line 105), 这里 include_router 两次
+# (v1 prefix + 裸 alias) 跟 health/auth 模式一致. 路由体不在 main.py 了.
 
 
 if __name__ == "__main__":

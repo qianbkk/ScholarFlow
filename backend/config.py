@@ -54,6 +54,8 @@ def _getenv_ci(name: str, default: str = "") -> str:
 
 
 # ===== 离线运行 / Mock 模式 =====
+# R10.5.28 (CG.txt 审计 P1 #5): 删除了文件后段的重复定义 _DOTENV + _getenv_ci
+# (旧 line 133-156). 现在 _getenv_ci 是真正的单点, 字段读取路径只剩一处.
 # R10.5.25: 这 2 个字段仍用 os.getenv, 因为:
 #   - load_dotenv(override=False) 已经把 .env merge 进 os.environ
 #   - OPEN_MODE/LLM_MOCK/API_MOCK 在其他模块也用 os.getenv 读 (依赖 load_dotenv 行为)
@@ -130,30 +132,8 @@ else:
 # 大小写敏感 → 永远读到空). 而且 Windows os.environ 大小写不敏感
 # 会让 ANTHROPIC_BASE_URL 拿到 MINIMAX_BASE_URL 的值 (字段错乱).
 # 最稳修法: 不靠 load_dotenv + os.getenv, 用 dotenv_values() 显式读 .env 文件.
-from dotenv import dotenv_values as _dotenv_values  # type: ignore[import]
-
-_DOTENV_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-_DOTENV = _dotenv_values(_DOTENV_PATH) or {}
-
-
-def _getenv_ci(name: str, default: str = "") -> str:
-    """大小写不敏感读 env: 先 .env 显式读 (priority), 再 os.environ fallback."""
-    # 1) 优先 .env (用户本地 source of truth)
-    if name in _DOTENV and _DOTENV[name]:
-        return _DOTENV[name]
-    if name.lower() in _DOTENV and _DOTENV[name.lower()]:
-        return _DOTENV[name.lower()]
-    if name.upper() in _DOTENV and _DOTENV[name.upper()]:
-        return _DOTENV[name.upper()]
-    # 2) Fallback 到 os.environ (K8s / Docker / shell)
-    v = os.getenv(name, "")
-    if v:
-        return v
-    target = name.upper()
-    for key, val in os.environ.items():
-        if key.upper() == target and val:
-            return val
-    return default
+# R10.5.28: 这里的 _DOTENV / _getenv_ci 重复定义已删除, 统一在文件顶部
+# (line ~25-53). 业务侧统一调 _getenv_ci, 行为可预测.
 
 
 # 如果没有任何 LLM key，自动开启 mock
