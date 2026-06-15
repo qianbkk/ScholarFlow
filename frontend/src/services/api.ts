@@ -5,32 +5,74 @@ import type { SearchResult } from '../types';
 // 和裸 /* alias, 没有 /api/* 路径), useSearch.ts 已经用 /api/v1, 这里同步过来.
 const API_BASE = '/api/v1';
 
-// R10.5 Fix-P0-B: API Key 认证. 从 localStorage 读, OPEN_MODE 时后端跳过.
+// R10.5.28 (CG.txt §1 P1 #4): API Key 存储降级 localStorage → sessionStorage.
+// R10.5.28: setApiKey / getApiKey 改成 module exports (useSearch.ts 直接调).
+// R10.5.28: 重置闲置计时器 _resetIdleTimer 也 export 出来给 useSearch 用 (let _idleTimer 在模块内).
+// localStorage 存 API key 是 XSS 放大器: 任何第三方 script 注入 (CDN 投毒 /
+// 依赖链妥协 / 浏览器扩展) 都能 exfiltrate, 而且 key 永久有效, 关浏览器也
+// 不会自动失效. 改 sessionStorage 后: 标签页关闭即失, XSS 偷走后攻击窗口
+// 缩短到当前标签页生命周期 (典型 10-30 分钟), 用户的物理接触 (关浏览器)
+// 直接让 key 失效.
 //
-// R10.5.21 风险 (J.txt + K.txt 审计 #3): localStorage 存 API key 有 XSS
-// 风险 — 任何第三方 script 注入 (CDN 投毒 / 依赖链妥协) 都能 exfiltrate.
-// 已知约束: HttpOnly cookie 需要后端 CSRF + same-site 配置, 短期不改.
-// 缓解: (1) React 18 严格 CSP 已加 (内联 script 全禁); (2) DOMPurify 在
-// ReportPanel/Markdown 渲染前过滤 (D3 + marked XSS); (3) 退出登录
-// 必清 key; (4) 文档化此威胁, 让用户知情.
-// R11+ 计划: 改用 HttpOnly+SameSite=Strict cookie (后端 set-cookie),
-// 配合 CSRF token 头 (X-CSRF-Token).
+// 已知不能完全防御的情况:
+//   - 浏览器扩展 (可读 sessionStorage 跨域)
+//   - 同标签页内运行中的恶意 JS (CSP 已加, 内联 script 全禁, 攻击面窄)
+//   - DevTools 物理访问
+// 进一步缓解: (1) CSP 已加 (R10.5.21); (2) DOMPurify 在 ReportPanel 过滤;
+// (3) /auth/revoke 端点用户可一键轮换 key (R10.5.28); (4) 自动闲置超时
+// 30 分钟 (setTimeout-based, 关浏览器后失效).
+// R11+ 计划: 改用 HttpOnly+SameSite=Strict cookie + CSRF token.
 const STORED_KEY = 'sf-api-key';
+const IDLE_TIMEOUT_MS = 30 * 60 * 1000;  // 30 分钟无活动自动清 key
 
-function getApiKey(): string | null {
+// R10.5.28: 闲置自动清 key. 模块级 ref, 每次 setApiKey 重置定时器.
+let _idleTimer: ReturnType<typeof setTimeout> | null = null;
+function _resetIdleTimer(): void {
+  if (_idleTimer) clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => {
+    // 30 分钟无活动, 自动清 key. 用户重新打开标签页就要重新登录.
+    try { sessionStorage.removeItem(STORED_KEY); } catch { /* ignore */ }
+  }, IDLE_TIMEOUT_MS);
+}
+
+export function getApiKey(): string | null {
   try {
-    return localStorage.getItem(STORED_KEY);
+    // 优先 sessionStorage, 兼容旧 localStorage (一次性迁移, R10.5.28)
+    const fromSession = sessionStorage.getItem(STORED_KEY);
+    if (fromSession) return fromSession;
+    const fromLocal = localStorage.getItem(STORED_KEY);
+    if (fromLocal) {
+      // 一次性迁移: 旧 localStorage key 挪到 sessionStorage
+      try {
+        sessionStorage.setItem(STORED_KEY, fromLocal);
+        localStorage.removeItem(STORED_KEY);
+      } catch { /* ignore */ }
+      _resetIdleTimer();
+      return fromLocal;
+    }
+    return null;
   } catch {
     return null;
   }
 }
 
-function setApiKey(key: string | null): void {
+export function setApiKey(key: string | null): void {
   try {
-    if (key) localStorage.setItem(STORED_KEY, key);
-    else localStorage.removeItem(STORED_KEY);
+    if (key) {
+      sessionStorage.setItem(STORED_KEY, key);
+      // 顺手清 localStorage 旧值, 防多 tab 复用
+      try { localStorage.removeItem(STORED_KEY); } catch { /* ignore */ }
+      _resetIdleTimer();
+    } else {
+      sessionStorage.removeItem(STORED_KEY);
+      try { localStorage.removeItem(STORED_KEY); } catch { /* ignore */ }
+      if (_idleTimer) {
+        clearTimeout(_idleTimer);
+        _idleTimer = null;
+      }
+    }
   } catch {
-    // localStorage 不可用 (隐私模式) 静默
+    // sessionStorage 不可用 (隐私模式) 静默
   }
 }
 

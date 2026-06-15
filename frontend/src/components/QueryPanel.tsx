@@ -25,7 +25,8 @@ interface Props {
   selectedPaperId?: string | null;
   onSelectPaper?: (paperId: string | null) => void;
   // R10.5.5: 最近搜索 (localStorage LRU 5 条)
-  recentSearches?: string[];
+  // R10.5.28 (CD.txt 修复): 类型改为 {query, source, ts}[], 支持分本地/真实两路
+  recentSearches?: Array<{ query: string; source: 'local' | 'real' | 'unknown'; ts: number }>;
   onClearRecent?: () => void;
   // R10.5.20: runtime mode (mock / real) 切换. App.tsx 持有 state + 拉/设 API,
   // 这里只接收 + emit.
@@ -163,6 +164,9 @@ export function QueryPanel({
   const hasResults = papers.length > 0;
   const shouldCollapseForm = formCollapsed;
   const [showRecent, setShowRecent] = useState<boolean>(false);  // 最近搜索 popover
+  // R10.5.28 (CD.txt 隐性问题修复): 历史记录分本地 / 真实两路 tab 切换.
+  // 'all' 显示全部, 'local' 只看本地 (mock / 演示), 'real' 只看真实 (真 API).
+  const [recentTab, setRecentTab] = useState<'all' | 'local' | 'real'>('all');
 
   // R10.5.10 Fix: popover Esc 关闭 + 点外部关闭 (旧实现只有关闭 × 按钮, 用户
   // 点了某项后 popover 收起 (useRecent 设 false), 但若不点项只外面看, 没法关).
@@ -651,12 +655,48 @@ export function QueryPanel({
                 </button>
               </div>
             </div>
+            {/* R10.5.28 (CD.txt 隐性问题修复): 本地 / 真实 / 全部 tab.
+                用户能区分哪些搜索走的是真实 API, 哪些是 mock 演示. */}
+            <div className="flex items-center gap-1 mb-1.5" data-testid="recent-tab-row">
+              {(['all', 'real', 'local'] as const).map((t) => {
+                const count =
+                  t === 'all'
+                    ? recentSearches.length
+                    : recentSearches.filter((e) => e.source === t).length;
+                const isActive = recentTab === t;
+                const color =
+                  t === 'local'
+                    ? 'rgb(168, 85, 247)'   // 紫 = 本地演示
+                    : t === 'real'
+                    ? 'rgb(34, 197, 94)'    // 绿 = 真实
+                    : 'var(--sf-muted)';
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setRecentTab(t)}
+                    className="text-[9px] font-mono uppercase tracking-[0.12em] px-1.5 py-0.5 border transition-colors"
+                    style={{
+                      borderColor: isActive ? color : 'var(--sf-border)',
+                      color: isActive ? color : 'var(--sf-muted)',
+                      backgroundColor: isActive ? 'transparent' : 'transparent',
+                      fontWeight: isActive ? 600 : 400,
+                    }}
+                    data-testid={`recent-tab-${t}`}
+                  >
+                    {t === 'all' ? '全部' : t === 'real' ? '真实' : '本地'} ({count})
+                  </button>
+                );
+              })}
+            </div>
             <div className="space-y-0.5">
-              {recentSearches.map((s, i) => (
+              {recentSearches
+                .filter((e) => recentTab === 'all' || e.source === recentTab)
+                .map((entry, i) => (
                 <button
-                  key={`${s}-${i}`}
+                  key={`${entry.query}-${i}`}
                   type="button"
-                  onClick={() => useRecent(s)}
+                  onClick={() => useRecent(entry.query)}
                   className="group flex items-center gap-2 w-full text-left px-1.5 py-1 transition-colors"
                   onMouseEnter={(e) => {
                     e.currentTarget.style.backgroundColor = 'var(--sf-bg)';
@@ -664,7 +704,7 @@ export function QueryPanel({
                   onMouseLeave={(e) => {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }}
-                  title={s}
+                  title={entry.query}
                 >
                   <span
                     className="font-mono text-[9px] tabular-nums shrink-0 w-4"
@@ -676,8 +716,23 @@ export function QueryPanel({
                     className="font-body text-[12px] flex-1 min-w-0 truncate"
                     style={{ color: 'var(--sf-text)' }}
                   >
-                    {s}
+                    {entry.query}
                   </span>
+                  {/* R10.5.28 (CD.txt 修复): 每条历史右侧 source 小标签 */}
+                  {entry.source === 'real' && (
+                    <span
+                      className="font-mono text-[8px] uppercase tracking-wider px-1 py-0.5 shrink-0"
+                      style={{ backgroundColor: 'rgba(34, 197, 94, 0.12)', color: 'rgb(34, 197, 94)' }}
+                      data-testid="recent-source-real"
+                    >真实</span>
+                  )}
+                  {entry.source === 'local' && (
+                    <span
+                      className="font-mono text-[8px] uppercase tracking-wider px-1 py-0.5 shrink-0"
+                      style={{ backgroundColor: 'rgba(168, 85, 247, 0.12)', color: 'rgb(168, 85, 247)' }}
+                      data-testid="recent-source-local"
+                    >本地</span>
+                  )}
                   <span
                     className="font-mono text-[9px] opacity-0 group-hover:opacity-100 transition shrink-0"
                     style={{ color: 'var(--sf-accent)' }}
@@ -920,6 +975,23 @@ export function QueryPanel({
                           data-testid="paper-fallback-badge"
                         >
                           fallback
+                        </span>
+                      )}
+                      {/* R10.5.28 (CD.txt 修复): 本地演示数据来源标识.
+                          mock_data → local_papers_db 包装后 source="local_demo".
+                          前端一眼看出"这是本地演示, 非真实检索结果". */}
+                      {p.source === 'local_demo' && (
+                        <span
+                          className="shrink-0 font-mono text-[9px] uppercase tracking-wider px-1.5 py-0.5"
+                          style={{
+                            backgroundColor: 'rgba(168, 85, 247, 0.15)',  // 紫色: 演示
+                            color: 'rgb(168, 85, 247)',
+                            border: '1px solid rgba(168, 85, 247, 0.4)',
+                          }}
+                          title="此论文来自本地演示数据库 (R10.5.28: mock_data 包装层), 非真实 Semantic Scholar / OpenAlex 检索结果"
+                          data-testid="paper-local-demo-badge"
+                        >
+                          本地演示
                         </span>
                       )}
                     </div>

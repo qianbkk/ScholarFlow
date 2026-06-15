@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import type { SearchResult } from '../types';
-import { searchPapers, fetchMe } from '../services/api';
+import { searchPapers, fetchMe, getApiKey } from '../services/api';
 import {
   readLocalStorage,
   writeLocalStorage,
@@ -67,23 +67,90 @@ interface SSEBudgetExceededEvent {
   message?: string;
 }
 
-type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent;
+// R10.5.28: graph_snapshot 事件类型, 后端 build_graph 节点完成后推送
+// (R10.5 SSE /search/stream 已经实现, 在 backend/main.py search_stream 路径里).
+interface SSEGraphSnapshotEvent {
+  event: 'graph_snapshot';
+  iteration: number;
+  graph: any;  // CitationGraph
+  node_count: number;
+  link_count: number;
+}
+
+type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent | SSEGraphSnapshotEvent;
+
+// R10.5.28: Holographic 集成类型 — 喂给 CockpitDashboard / EvolutionSlider.
+// 跟 CockpitDashboard.tsx 里 NodeEvent / GraphSnapshot 接口保持一致
+// (它是 props 类型, 不 export, 这里我们本地定义相同的形状).
+export interface NodeEvent {
+  node: string;
+  step: number;
+  status: 'running' | 'completed';
+  model?: string;
+  cost_usd?: number;
+  tokens?: number;
+  elapsed: number;
+  // iteration 也带上, EvolutionSlider 用
+  iteration?: number;
+}
+
+export interface GraphSnapshot {
+  iteration: number;
+  graph: any;
+  node_count: number;
+  link_count: number;
+}
+
+// type SSEEvent 已在文件顶部 (line ~80) R10.5.28 扩展为含 GraphSnapshotEvent
 
 // R10.5.5 交互升级: 最近搜索 localStorage 持久化
 // 5 条上限, LRU 替换, 用 'sf-recent-searches' 命名空间
 // R10.5.9 code-review 落地: 复用 lib/useLocalStorage 的 readLocalStorage/writeLocalStorage,
 // 删 4 处重复的 try/parse/filter 样板.
+// R10.5.28 (CD.txt 隐性问题): 历史记录分本地 / 真实两路.
+//   - 旧 schema: string[] (只有 query)
+//   - 新 schema: {query, source: 'local'|'real', ts}[] (CD.txt 修复: 区分 mock 演示 vs 真 API)
+//   - 一次性迁移: 旧 string[] 自动转 {query: s, source: 'unknown', ts: 0}
 const RECENT_KEY = 'sf-recent-searches';
 const RECENT_MAX = 5;
+export type RecentSource = 'local' | 'real' | 'unknown';
+export interface RecentEntry {
+  query: string;
+  source: RecentSource;
+  ts: number;  // 毫秒, 排序 / 显示用
+}
+
 const isStringArray = (v: unknown): v is string[] =>
   Array.isArray(v) && v.every((x) => typeof x === 'string');
 
-function loadRecent(): string[] {
-  return readLocalStorage<string[]>(RECENT_KEY, [], { validate: isStringArray });
+function isRecentEntryArray(v: unknown): v is RecentEntry[] {
+  if (!Array.isArray(v)) return false;
+  return v.every(
+    (x) =>
+      x != null &&
+      typeof x === 'object' &&
+      typeof (x as RecentEntry).query === 'string' &&
+      ['local', 'real', 'unknown'].includes((x as RecentEntry).source)
+  );
 }
 
-function saveRecent(queries: string[]): void {
-  writeLocalStorage(RECENT_KEY, queries.slice(0, RECENT_MAX));
+function loadRecent(): RecentEntry[] {
+  // 优先新 schema
+  const v = readLocalStorage<RecentEntry[]>(RECENT_KEY, [], { validate: isRecentEntryArray });
+  if (v.length) return v;
+  // 一次性迁移: 旧 string[] → 新 schema, source 标 'unknown' (无法判断)
+  const legacy = readLocalStorage<string[]>(RECENT_KEY, [], { validate: isStringArray });
+  if (legacy.length) {
+    const migrated: RecentEntry[] = legacy.map((q) => ({ query: q, source: 'unknown', ts: 0 }));
+    writeLocalStorage(RECENT_KEY, migrated.slice(0, RECENT_MAX));
+    try { localStorage.removeItem(RECENT_KEY); } catch { /* ignore */ }
+    return migrated;
+  }
+  return [];
+}
+
+function saveRecent(entries: RecentEntry[]): void {
+  writeLocalStorage(RECENT_KEY, entries.slice(0, RECENT_MAX));
 }
 
 // R10.5.5 交互升级: 成本超限结构化数据
@@ -105,7 +172,15 @@ export function useSearch() {
   const [elapsedSec, setElapsedSec] = useState(0);
   // R10.5.5: 成本超限结构化数据 + 最近搜索历史
   const [budgetExceeded, setBudgetExceeded] = useState<BudgetExceeded | null>(null);
-  const [recentSearches, setRecentSearches] = useState<string[]>(loadRecent);
+  const [recentSearches, setRecentSearches] = useState<RecentEntry[]>(loadRecent);
+  // R10.5.28 (Holographic 集成): 暴露节点级事件流 + 图谱快照给 CockpitDashboard /
+  // EvolutionSlider. 原 CostDashboard 只有 currentStep 标量, 看不到每个节点的成本 /
+  // 模型 / tokens. events 是 8 节点流水线的 timeline, 喂给 CockpitDashboard
+  // 渲染 8 舱室 + Thought Stream.
+  const [events, setEvents] = useState<NodeEvent[]>([]);
+  // R10.5.28: 每次 build_graph 节点完成时后端推一个图谱快照, 喂 EvolutionSlider
+  // 让用户拖时间轴看图谱生长 (V1 → V2 → V3).
+  const [graphSnapshots, setGraphSnapshots] = useState<GraphSnapshot[]>([]);
 
   // R10.5.9 落地: 移除 esRef/reconnectTimerRef 历史注释 — R10.5.8 code-review
   // 已删两个 ref, 注释没必要每次提醒"已移除". 代码即真相.
@@ -193,9 +268,11 @@ export function useSearch() {
       };
       // R10.5 Fix-P0-2.2: X-API-Key 通过 header 传, 不再进 URL.
       // 后端 get_current_user 已支持从 Header 读取 (R10.5 Fix-P0-B).
+      // R10.5.28 (CG.txt P1 #4): 走 getApiKey() helper 读 sessionStorage
+      // (标签页关闭即失, XSS 偷走后攻击窗口缩短). 不再直接 localStorage.
       const apiKey =
-        typeof localStorage !== 'undefined'
-          ? localStorage.getItem('sf-api-key')
+        typeof window !== 'undefined'
+          ? getApiKey()
           : null;
       if (apiKey) headers['X-API-Key'] = apiKey;
 
@@ -249,18 +326,66 @@ export function useSearch() {
         // 返 true 表示流结束 (done/error/budget_exceeded)
         if (payload.event === 'started') {
           setCurrentStep(0);
+          // R10.5.28: 新搜索开始, 清空 events + graphSnapshots 重新累积
+          setEvents([]);
+          setGraphSnapshots([]);
           return false;
         }
         if (payload.event === 'node_complete') {
           const stepIdx = NODE_NAME_TO_STEP[payload.node];
           if (typeof stepIdx === 'number') setCurrentStep(stepIdx);
           if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+          // R10.5.28: 累积节点级事件给 CockpitDashboard.
+          // 同样的 node_complete 事件再 append 一份 'completed' 状态,
+          // CockpitDashboard 内部 useMemo 会用最新的覆盖旧的, 舱室自然显示完成态.
+          setEvents((prev) => [
+            ...prev,
+            {
+              node: payload.node,
+              step: typeof stepIdx === 'number' ? stepIdx : 0,
+              status: 'completed' as const,
+              cost_usd: (payload as any).cost_usd,
+              tokens: (payload as any).tokens,
+              elapsed: payload.elapsed,
+              iteration: (payload as any).iteration,
+            },
+          ]);
+          return false;
+        }
+        // R10.5.28: graph_snapshot 事件 — build_graph 节点完成后推送,
+        // 喂给 EvolutionSlider 显示图谱生长时间轴.
+        if (payload.event === 'graph_snapshot') {
+          setGraphSnapshots((prev) => [
+            ...prev,
+            {
+              iteration: payload.iteration,
+              graph: payload.graph,
+              node_count: payload.node_count,
+              link_count: payload.link_count,
+            },
+          ]);
           return false;
         }
         if (payload.event === 'done') {
           setResult(payload.result);
           setCurrentStep(PIPELINE_STEPS.length - 1);
           if (typeof payload.elapsed === 'number') setElapsedSec(payload.elapsed);
+          // R10.5.28 (CD.txt 隐性问题修复): 收到 done 时回填这条最近搜索的 source.
+          // 后端 result.runtime_mode 字段: "real" | "mock" | "unknown"
+          //   - 'real' → RecentSource 'real' (真 LLM + 真学术 API)
+          //   - 'mock' → 'local' (本地 mock / fallback)
+          //   - 'unknown' → 'unknown' (cache hit, 留原值)
+          const rm = (payload.result as any)?.runtime_mode as string | undefined;
+          if (rm === 'real' || rm === 'mock') {
+            const mappedSource: RecentSource = rm === 'mock' ? 'local' : 'real';
+            setRecentSearches((prev) => {
+              const next = prev.map((e) =>
+                e.query === query ? { ...e, source: mappedSource } : e
+              );
+              saveRecent(next);
+              return next;
+            });
+          }
           return true;
         }
         if (payload.event === 'error') {
@@ -362,8 +487,15 @@ export function useSearch() {
       // R10.5.5: 清掉旧的 budgetExceeded 状态, 新搜索给用户干净开始
       setBudgetExceeded(null);
       // R10.5.5: 把这次 query 加到最近搜索 (LRU 去重, 置顶)
+      // R10.5.28 (CD.txt 隐性问题修复): source 字段记录这次搜索走 mock / 真实 API.
+      //   - 'real'  = 命中后端 result.runtime_mode === 'real' (真 LLM + 真学术 API)
+      //   - 'local' = 命中 'mock' (本地演示数据)
+      //   - 'unknown' = 网络错 / cache hit 等无法判定的场景
+      // 后续 dispatchEvent 'done' 收到 result 时回填 'real' / 'local'.
+      // 先记 'unknown' 占位, 不然用户点 ⏱ 时看到空 source 列表.
       setRecentSearches((prev) => {
-        const next = [trimmed, ...prev.filter((q) => q !== trimmed)].slice(0, RECENT_MAX);
+        const placeholder: RecentEntry = { query: trimmed, source: 'unknown', ts: Date.now() };
+        const next = [placeholder, ...prev.filter((e) => e.query !== trimmed)].slice(0, RECENT_MAX);
         saveRecent(next);
         return next;
       });
@@ -483,6 +615,9 @@ export function useSearch() {
     setCurrentStep(0);
     setElapsedSec(0);
     setLoading(false);
+    // R10.5.28: reset 时也清空 events / graphSnapshots, 下次搜索干净起步
+    setEvents([]);
+    setGraphSnapshots([]);
   }, []);
 
   return {
@@ -500,5 +635,8 @@ export function useSearch() {
     clearRecentSearches,
     budgetExceeded,
     dismissBudgetExceeded,
+    // R10.5.28 (Holographic 集成): 节点级事件流 + 图谱快照, 喂 CockpitDashboard / EvolutionSlider
+    events,
+    graphSnapshots,
   };
 }
