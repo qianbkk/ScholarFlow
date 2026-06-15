@@ -250,15 +250,30 @@ def test_config_getenv_ci_used_in_business_fields():
 # 6. main.py /search/stream 优先 stream_token 凭证 (静态)
 # ===============================================================
 def test_search_stream_prefers_stream_token():
-    """/search/stream 凭证优先级: X-API-Key header > ?stream_token= > ?api_key=."""
+    """/search/stream 凭证优先级: X-API-Key header > ?stream_token= > ?api_key=.
+
+    R10.5.30 (D2): /search/stream 路由体已抽到 routes/search.py, 静态检查改读那里."""
     main_src = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
-    assert "stream_token: Optional[str] = Query" in main_src
-    assert "_resolve_stream_token" in main_src
-    # stream_token 必须在 api_key 之前 resolve
-    stream_token_pos = main_src.find("stream_token")
-    api_key_pos = main_src.find("?api_key=")
-    # 这里不强求顺序, 但 stream_token 必须存在
-    assert stream_token_pos > 0
+    search_src = (ROOT / "backend" / "api" / "routes" / "search.py").read_text(encoding="utf-8")
+    # R10.5.30 D2: search.py 拿 X-API-Key 通过 Depends(get_current_user), 不再单独读 stream_token.
+    # 旧的 R10.5.25 stream_token 流程迁到 api/routes/auth.py (StreamTokenResponse).
+    # R10.5.30 (D2): search_router 鉴权统一走 Depends(get_current_user) (X-API-Key),
+    # stream_token query param 在 main.py 旧 inline 路径使用, 翻转后 search.py
+    # 不再处理 stream_token (CG.txt P0 #1 替代方案, R11+ 计划 HttpOnly cookie).
+    # 测试改成验证 search_router 正确鉴权, 不再查 stream_token 字段.
+    assert "include_router(search_router" in main_src, (
+        "R10.5.30 D2: main.py 必须 include_router(search_router)"
+    )
+    # search.py 必须有 Depends(get_current_user) 鉴权 (D2 翻转后替代 stream_token)
+    assert "Depends(get_current_user)" in search_src, (
+        "search.py 必须用 Depends(get_current_user) 鉴权 (D2 翻转)"
+    )
+    # main.py 应 include_router(search_router)
+    assert "include_router(search_router" in main_src, (
+        "R10.5.30 D2: main.py 必须 include_router(search_router)"
+    )
+# R10.5.30 D2: stream_token_pos / api_key_pos 检查已废
+# (search_router 翻转后鉴权走 Depends(get_current_user), 不再读 stream_token query)
 
 
 # ===============================================================

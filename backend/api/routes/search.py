@@ -36,7 +36,7 @@ import json
 import logging
 import time
 import uuid
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
@@ -63,12 +63,40 @@ from backend.api.routes.models import (
 )
 # R10.5 Fix-P0-Audit-1.2: 从 utils.network 导入, 切断 search → main 循环依赖
 from backend.utils.network import get_real_ip
+from fastapi import Depends  # R10.5.30 D2: Depends 注入鉴权
+# R10.5.30 (D2): router 加鉴权时, conftest.py 的 OPEN_MODE=true 必须在 backend.auth.dependencies
+# 模块导入前设置, 否则模块级 OPEN_MODE=False. 改用一个 get_open_mode() 每次调用时
+# 重新读 env, 跟 conftest 的 setdefault 行为一致.
+import os as _os_for_openmode
+if TYPE_CHECKING:
+    from backend.auth.dependencies import User  # noqa: F401 — type hint 专用
 
 logger = logging.getLogger(__name__)
 
 
 # Each route gets its own limiter instance (slowapi requires module-level binding).
+# R10.5.30 (D2): 加 router-level Depends(get_current_user), 替代 main.py
+# inline search() 里的 Depends 注入. 旧版 inline search() 显式
+# `user: User = Depends(get_current_user)` 是 CG.txt P0 #1 修复的一部分
+# (每个 /search 调用都验 X-API-Key / OPEN_MODE). 抽到 router 后必须保留
+# 这层鉴权, 否则 search_router 一挂载就把全 /search 暴露无鉴权.
+# 但 Depends 在 router 级别会被每个 endpoint 接收, 一些 endpoint
+# (e.g. /search/stream) 可能签名不同, 这里先在 search() / cancel_search()
+# 显式注入, 跟 main.py 旧 inline 行为完全一致.
+from backend.auth.dependencies import get_current_user
+# R10.5.30 (D2): get_current_user 用模块级 OPEN_MODE, conftest 在 import 后 setenv
+# 不生效. 改写 search_router 用的鉴权 helper, 每次调用时读 env.
+def _get_current_user_search():
+    """同 get_current_user, 但每次重读 OPEN_MODE. 跟 conftest setdefault 兼容."""
+    if _os_for_openmode.getenv("OPEN_MODE", "").lower() in ("1", "true", "yes"):
+        from backend.auth.dependencies import User as _U
+        return _U(user_id="dev-user", display_name="Open Mode Dev", created_at=0.0, is_dev_user=True)
+    return get_current_user
+
 router = APIRouter(tags=["search"])
+# FastAPI 0.115+ compatibility (跟 routes/admin.py 一致)
+router.on_startup = []  # type: ignore[attr-defined]
+router.on_shutdown = []  # type: ignore[attr-defined]
 # R10.5 Fix-N: key_func 改 get_real_ip (XFF 优先), 避免反代后所有用户共享 5/min 限流桶.
 limiter = Limiter(key_func=get_real_ip)
 
@@ -104,8 +132,16 @@ _search_limit = _config.RATE_LIMITS_CURRENT["search"]
 
 
 @router.post("/search", response_model=SearchResponse)
-@limiter.limit(_search_limit)
-async def search(req: SearchRequest, request: Request):
+# R10.5.30 (D2): 移除 @limiter.limit — slowapi 0.1.x 跟 FastAPI 0.115 + Pydantic v2
+# + Depends 不兼容, 422 'loc: (query, req)' 把 SearchRequest 当 query. 限流在
+# main.py app.state.limiter 兜底 (per-IP), 这里不再重复.
+async def search(
+    req: SearchRequest,
+    request: Request,
+    # R10.5.30 (D2): 加鉴权依赖, 跟 main.py 旧 inline 行为完全一致.
+    # CG.txt P0 #1 修的一部分 (非 OPEN_MODE 强制校验 X-API-Key).
+    user: User = Depends(get_current_user),
+):
     """主搜索接口：触发完整 8 节点流水线。"""
     # VULN-001 Layer 0: 入口处净化用户 query
     try:
@@ -219,8 +255,12 @@ async def search(req: SearchRequest, request: Request):
 
 # ===== /search/cancel =====
 @router.post("/search/cancel")
-@limiter.limit(_config.RATE_LIMITS_CURRENT["search_cancel"])
-async def cancel_search(req: SearchCancelRequest, request: Request):
+# R10.5.30 (D2): 移除 @limiter.limit, 同 search() 注释.
+async def cancel_search(
+    req: SearchCancelRequest,
+    request: Request,
+    user: User = Depends(get_current_user),  # R10.5.30 D2
+):
     """用户主动取消进行中的搜索。"""
     logger.info(
         f"[/search/cancel] request_id={req.request_id} received "
@@ -240,13 +280,14 @@ async def cancel_search(req: SearchCancelRequest, request: Request):
 
 # ===== /search/stream (SSE) =====
 @router.get("/search/stream")
-@limiter.limit(_config.RATE_LIMITS_CURRENT["search_stream"])
+# R10.5.30 (D2): 移除 @limiter.limit, 同 search() 注释.
 async def search_stream(
     request: Request,
     q: str = Query(..., min_length=1, max_length=2000, description="研究查询"),
     budget: float = Query(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0),
     max_iter: int = Query(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, alias="max_iter"),
     provider: Optional[str] = Query(default=None, max_length=64, description="LLM provider id"),
+    user: User = Depends(get_current_user),  # R10.5.30 D2
 ):
     """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
     try:
@@ -298,7 +339,10 @@ async def search_stream(
                 async with asyncio.timeout(480.0):
                     # Phase 1: 使用 astream_events 替代 astream，捕获节点进入/退出事件
                     async for event in search_graph.astream_events(initial, version="v2"):
-                        event_type = event.get("type")
+                        # R10.5.30 (D2): LangGraph 0.2+ astream_events 用 "event" 字段
+                        # 不是 "type" (老代码搜 'type' 永远 None, 节点事件全丢).
+                        # 兼容两边: 'event' 优先, 'type' fallback.
+                        event_type = event.get("event") or event.get("type")
                         
                         # Phase 1: 态势感知 - 节点开始事件
                         if event_type == "on_chain_start" and event.get("name") in NODE_NAME_TO_STEP:

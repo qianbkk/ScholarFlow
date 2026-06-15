@@ -47,26 +47,26 @@ def test_search_py_set_cached_async_passes_runtime_mode():
 
 # ===== #2: main.py SSE node_complete 必须带 cost_usd + tokens =====
 def test_main_py_node_complete_emits_cost_and_tokens():
-    """main.py 的 SSE node_complete 事件必须发 cost_usd + tokens,
-    否则 CockpitDashboard 永远 $0 (R10.5.29 code-review #2)."""
-    src = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
-    # 找 node_complete 块, 检查紧跟的 yield _sse_format 字典
+    """SSE node_complete 事件必须发 cost_usd + tokens, 否则 CockpitDashboard 永远 $0.
+
+    R10.5.30 (D2): SSE 路由体已抽到 backend/api/routes/search.py, 检查改读那里."""
+    src = (ROOT / "backend" / "api" / "routes" / "search.py").read_text(encoding="utf-8")
     idx = src.find('"event": "node_complete"')
     assert idx > 0
     window = src[idx:idx + 1200]
-    assert '"cost_usd"' in window, "main.py node_complete 缺 cost_usd (R10.5.29 #2)"
-    assert '"tokens"' in window, "main.py node_complete 缺 tokens (R10.5.29 #2)"
+    assert '"cost_usd"' in window, "search.py node_complete 缺 cost_usd (R10.5.29 #2)"
+    assert '"tokens"' in window, "search.py node_complete 缺 tokens (R10.5.29 #2)"
 
 
-# ===== #3: main.py SSE 必须发 graph_snapshot (build_graph 节点后) =====
+# ===== #3: SSE 必须发 graph_snapshot (build_graph 节点后) =====
 def test_main_py_emits_graph_snapshot_on_build_graph():
-    """main.py 在 build_graph 节点完成后必须推 graph_snapshot,
-    否则 EvolutionSlider 永不显示 (R10.5.29 code-review #3)."""
-    src = (ROOT / "backend" / "main.py").read_text(encoding="utf-8")
+    """SSE 在 build_graph 节点完成后必须推 graph_snapshot, 否则 EvolutionSlider 永不显示.
+
+    R10.5.30 (D2): SSE 路由体已抽到 backend/api/routes/search.py, 检查改读那里."""
+    src = (ROOT / "backend" / "api" / "routes" / "search.py").read_text(encoding="utf-8")
     assert '"event": "graph_snapshot"' in src, (
-        "main.py 缺 graph_snapshot SSE 事件 (R10.5.29 #3)"
+        "search.py 缺 graph_snapshot SSE 事件 (R10.5.29 #3)"
     )
-    # 必须在 build_graph 节点块内
     bg_idx = src.find('node_name == "build_graph"')
     assert bg_idx > 0
     window = src[bg_idx:bg_idx + 1500]
