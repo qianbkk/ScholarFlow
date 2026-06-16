@@ -6,31 +6,20 @@ import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
 import { LoginDialog } from './components/LoginDialog';
 import { UserBadge } from './components/UserBadge';
-// R10.5.28 (Holographic 集成): 5 个新组件. 之前合并的 feature/holographic-command-center
-// 已经创建了组件但没在 App.tsx 渲染, 这一版按 docs/COMPREHENSIVE_UPGRADE_REPORT.md
-// "待前端集成步骤" 的指导接入, 让 CockpitDashboard / EvolutionSlider / FilterPanel /
-// CompareDrawer / CommandPalette 真正进入 UI.
 import { CockpitDashboard } from './components/CockpitDashboard';
 import { EvolutionSlider } from './components/EvolutionSlider';
-// R10.5.29 (code-review): FilterPanel 暂未挂载 (R10.5.30 在 QueryPanel 论文列表接
-// 多选 + filter UI 时再挂). 先删死 import 避免误导后续读者. PaperFilters type
-// 仍需要, 改成本地定义 (跟 FilterPanel.tsx 保持结构一致即可, R10.5.30 一并抽到
-// lib/paperFilters.ts).
 import { CompareDrawer } from './components/CompareDrawer';
-import { CommandPalette, useCommandPalette } from './components/CommandPalette';
-// R10.5.30 (D6 P1-3): 永久升级日志 modal. 取代 R10.5.29 一次性 R10_5_28Banner.
+import { CommandPalette } from './components/CommandPalette';
 import { ChangelogModal } from './components/ChangelogModal';
-// R10.5.30 (D7 P2-3): PaperFilters 类型 + DEFAULT 从 lib 导入
-import { DEFAULT_FILTERS, type PaperFilters } from './lib/paperFilters';
+// R10.5.31 (F4): 4 个 Context 按域拆分, 删 13 个 useState.
+import { AppProvider, useApp } from './contexts/AppContext';
+import { SelectionProvider, useSelection } from './contexts/SelectionContext';
+import { UIProvider, useUI } from './contexts/UIContext';
 import { useSearch } from './hooks/useSearch';
 import {
   healthCheck,
-  fetchMe,
   logout as authLogout,
   type UserInfo,
-  fetchRuntimeMode,
-  setRuntimeMode,
-  type RuntimeMode,
 } from './services/api';
 
 // Round 6 SIMPLIFY (REDUNDANT-004): 修复 onRetry 闭包丢失用户表单状态 bug
@@ -49,146 +38,91 @@ interface LastSearchOpts {
 const THEME_STORAGE_KEY = 'sf-theme';
 const VALID_THEMES: ThemeId[] = ['parchment', 'kraft', 'midnight', 'sage'];
 
-function loadStoredTheme(): ThemeId {
-  try {
-    const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored && (VALID_THEMES as string[]).includes(stored)) {
-      return stored as ThemeId;
-    }
-    // R10.5.4 升级: 旧版本号用户 localStorage 存的是 light/warm/dark/eye,
-    // 一次性迁移到新 ID. 缺失任意 ID 都回退到 parchment.
-    const legacyMap: Record<string, ThemeId> = {
-      light: 'parchment',
-      warm: 'kraft',
-      dark: 'midnight',
-      eye: 'sage',
-    };
-    if (stored && legacyMap[stored]) {
-      return legacyMap[stored];
-    }
-  } catch {
-    // localStorage 可能在隐私模式不可用 — 静默回退默认
-  }
-  return 'parchment';
+// R10.5.31 (F4): theme 加载逻辑搬到 AppContext, App.tsx 不再需要.
+// THEME_STORAGE_KEY + VALID_THEMES 留作历史参考, 真值在 AppContext.
+export default function App() {
+  // R10.5.31 (F4): 外层只做 Provider 包装, 业务逻辑挪到 AppInner.
+  // 这样 4 个 Context 的副作用 (fetchMe / healthCheck / fetchRuntimeMode) 在
+  // Provider mount 时跑一次, 不会跟业务组件混在一起.
+  return (
+    <AppProvider>
+      <SelectionProvider>
+        <UIProvider>
+          <AppInner />
+        </UIProvider>
+      </SelectionProvider>
+    </AppProvider>
+  );
 }
 
-export default function App() {
+function AppInner() {
   const {
     loading, error, result, lastQuery, search, reset,
     currentStep, elapsedSec, pipelineSteps,
     recentSearches, clearRecentSearches,
     budgetExceeded, dismissBudgetExceeded,
-    // R10.5.28 (Holographic 集成): 节点级事件流 + 图谱快照, 喂新组件
     events, graphSnapshots,
   } = useSearch();
-  const [serverOk, setServerOk] = useState<boolean | null>(null);
+
+  // R10.5.31 (F4): 13 个 useState → 4 个 Context. 只剩 2 个真正属于
+  // search 业务域的 state 留本地: elapsed (跟 result 同步) + lastSearchOpts
+  // (Round 6 SIMPLIFY REDUNDANT-004 修的闭包 bug, 必须留).
   const [elapsed, setElapsed] = useState(0);
-  // Round 6 SIMPLIFY (REDUNDANT-004): 跟踪上一次成功提交的搜索参数, 给 onRetry 用
   const [lastSearchOpts, setLastSearchOpts] = useState<LastSearchOpts | null>(null);
-  // R10 (M-17): 背景色主题状态 — localStorage 记忆, 4 套全部 WCAG AA (>4.5:1)
-  const [theme, setTheme] = useState<ThemeId>(loadStoredTheme);
-  // R10.5.3: 认证状态机 — 'loading' (启动检测中) | 'unauthenticated' (弹登录框)
-  // | 'authenticated' (显示主界面).  配 UserInfo (含 open_mode) 控制 UserBadge.
-  const [authState, setAuthState] = useState<'loading' | 'unauthenticated' | 'authenticated'>('loading');
-  const [currentUser, setCurrentUser] = useState<UserInfo | null>(null);
-  // R10.5.28 (Holographic 集成): Cockpit 展开的节点 / 多选对比的论文 / 过滤器状态.
-  // 5 个新组件共用这 3 个 state. 命令面板是 hook 内部管, 不在这里.
-  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
-  const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
-  // R10.5.30 (D7 P2-3): PaperFilters 类型 + DEFAULT 从 lib/paperFilters 导入.
-  // 之前 inline 重复, FilterPanel.tsx 接口跟这里漂移风险. 现在 1 source of truth.
-  const [filters, setFilters] = useState<PaperFilters>(DEFAULT_FILTERS);
-  // R10.5.28: CommandPalette 是 Cmd+K 触发的全局命令面板, 内部 hook 自己管 state.
-  // onExecuteCommand 暂留空 handler (导出 / 过滤 / 视图切换命令的完整实现留 R10.5.29).
-  const cmdPalette = useCommandPalette();
-  // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
-  // R10.5.5: 跨组件论文聚焦 — 论文列表 / 图谱节点 / 报告引用表 三者互相同步高亮
-  const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
-  // R10.5.30 (D6 P1-3): 升级日志 modal 状态 — footer 链接触发, 永久可见
-  const [changelogOpen, setChangelogOpen] = useState<boolean>(false);
-  // R10.5.5: 快捷键面板显示状态
-  const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
-  // R10.5.20: Runtime mode (mock / real) 状态. 启动时从后端拉, 切换时调
-  // /admin/runtime-mode POST. 切换即时生效, 不需要重启.
-  const [runtimeMode, setRuntimeModeState] = useState<RuntimeMode | null>(null);
 
-  useEffect(() => {
-    fetchRuntimeMode()
-      .then((info) => setRuntimeModeState(info.mode))
-      .catch(() => setRuntimeModeState('real'));  // 失败兜底
-  }, []);
+  // ===== Contexts (替代散 useState) =====
+  const {
+    theme, setTheme,
+    authState, currentUser, onLoginSuccess: handleLoginSuccess, onLogout: handleLogout,
+    serverOk, runtimeMode, setRuntimeMode: handleChangeRuntimeMode,
+  } = useApp();
+  const {
+    state: selState,
+    focusPaper: setSelectedPaperId,
+    togglePaperSelection,
+    clearPaperSelection,
+    expandNode: setExpandedNodeId,
+    setFilters, patchFilters, resetFilters,
+  } = useSelection();
+  const {
+    changelogOpen, openChangelog, closeChangelog,
+    shortcutsOpen, toggleShortcuts,
+    cmdPaletteOpen, openCmdPalette, closeCmdPalette,
+  } = useUI();
 
-  const handleChangeRuntimeMode = useCallback((mode: RuntimeMode) => {
-    setRuntimeModeState(mode);  // 乐观更新
-    setRuntimeMode(mode)
-      .then((info) => setRuntimeModeState(info.mode))
-      .catch(() => {
-        // 失败回滚
-        setRuntimeModeState((prev) => prev);
-        console.warn('setRuntimeMode failed, rolled back');
-      });
-  }, []);
+  // 把 4 个 useState 抽到 Context 后, 别名保持兼容让下面 JSX 不大改.
+  const selectedPaperId = selState.focusedPaperId;
+  const selectedPaperIds = selState.selectedPaperIds;
+  const expandedNodeId = selState.expandedNodeId;
+  const filters = selState.filters;
+  const changelogOpen2 = changelogOpen;  // 别名避免 shadow
+  const showShortcuts = shortcutsOpen;
 
-  useEffect(() => {
-    healthCheck()
-      .then((d) => setServerOk(d.status === 'ok'))
-      .catch(() => setServerOk(false));
-  }, []);
-
-  // R10.5.3: 启动时调 /auth/me 检测登录态.
-  // - 200 → 拿到 UserInfo (含 open_mode), 进 authenticated
-  // - 401 或无 key → 进 unauthenticated (弹 LoginDialog)
-  // - 网络错 → 也按 unauthenticated 处理 (LoginDialog 内有错误提示, 不再白屏)
-  useEffect(() => {
-    let cancelled = false;
-    fetchMe()
-      .then((u) => {
-        if (cancelled) return;
-        if (u) {
-          setCurrentUser(u);
-          setAuthState('authenticated');
-        } else {
-          setCurrentUser(null);
-          setAuthState('unauthenticated');
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setCurrentUser(null);
-        setAuthState('unauthenticated');
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const handleLoginSuccess = useCallback(async () => {
-    // 重新拉一次 /auth/me 拿完整 UserInfo (含 created_at, open_mode 等)
-    const u = await fetchMe();
-    setCurrentUser(u);
-    setAuthState(u ? 'authenticated' : 'unauthenticated');
-  }, []);
-
-  const handleLogout = useCallback(() => {
-    authLogout();  // 清 localStorage
-    setCurrentUser(null);
-    setAuthState('unauthenticated');
-  }, []);
+  // handleThemeChange 别名: App.tsx 内用 setTheme 即可
+  const handleThemeChange = setTheme;
 
   // 当 result 更新时，把后端返回的 elapsed 同步进来
   useEffect(() => {
     if (result?.elapsed_seconds) setElapsed(result.elapsed_seconds);
   }, [result]);
 
-  // R10 (M-17): 主题切换 → 写 localStorage + 同步到 <html> element (让 body 继承)
-  const handleThemeChange = useCallback((next: ThemeId) => {
-    setTheme(next);
-    try {
-      localStorage.setItem(THEME_STORAGE_KEY, next);
-    } catch {
-      // 静默失败 — 不影响 UI 切换
-    }
-  }, []);
+  // Cmd+K 全局快捷键 — 提到顶层 (避免 useCommandPalette hook 重复注册)
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
+      const mod = isMac ? e.metaKey : e.ctrlKey;
+      if (mod && e.key === 'k') {
+        e.preventDefault();
+        if (cmdPaletteOpen) closeCmdPalette();
+        else openCmdPalette();
+      }
+      if (e.key === '?' && !cmdPaletteOpen) {
+        toggleShortcuts();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [cmdPaletteOpen, openCmdPalette, closeCmdPalette, toggleShortcuts]);
 
   // R10.5.31 (F5): CommandPalette 13 个命令接真 handler. 11 个接真,
   // 2 个 (/summarize + /critique) 保留 console.info 因为后端没对应 endpoint
@@ -231,16 +165,16 @@ export default function App() {
       }
       // ===== filter =====
       case 'filter-rct':
-        setFilters((f) => ({ ...f, methods: Array.from(new Set([...f.methods, 'RCT'])) }));
+        patchFilters({ methods: Array.from(new Set([...filters.methods, 'RCT'])) });
         break;
       case 'filter-recent':
-        setFilters((f) => ({ ...f, yearRange: '3' }));
+        patchFilters({ yearRange: '3' });
         break;
       case 'filter-high-quality':
-        setFilters((f) => ({ ...f, minQualityScore: 8 }));
+        patchFilters({ minQualityScore: 8 });
         break;
       case 'reset-filters':
-        setFilters(DEFAULT_FILTERS);
+        resetFilters();
         break;
       // ===== general =====
       case 'toggle-dark-mode': {
@@ -338,7 +272,7 @@ export default function App() {
 
       if (showShortcuts && e.key === 'Escape') {
         e.preventDefault();
-        setShowShortcuts(false);
+        toggleShortcuts();
         return;
       }
 
@@ -357,9 +291,10 @@ export default function App() {
       // 让 hook 接管, 关闭时 App.tsx handler 兜底聚焦 query. 冲突解决靠状态查询
       // (cmdPalette.isOpen) 而非监听器顺序.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-        if (!cmdPalette.isOpen) {
-          // 面板未开 → App.tsx 自己 toggle 打开, hook 这次不响应
-          cmdPalette.toggle();
+        if (!cmdPaletteOpen) {
+          openCmdPalette();
+        } else {
+          closeCmdPalette();
         }
         e.preventDefault();
         return;
@@ -373,7 +308,7 @@ export default function App() {
       // ? → 快捷键面板
       if (e.key === '?') {
         e.preventDefault();
-        setShowShortcuts((s) => !s);
+        toggleShortcuts();
         return;
       }
     };
@@ -540,13 +475,7 @@ export default function App() {
             onSelectPaper={handleSelectPaper}
             // R10.5.30 (D5 P1-2): 多选论文 — Shift+click 凑 2 篇触发 CompareDrawer
             selectedPaperIds={selectedPaperIds}
-            onTogglePaperSelection={(paperId: string) => {
-              setSelectedPaperIds((prev) =>
-                prev.includes(paperId)
-                  ? prev.filter((id) => id !== paperId)
-                  : [...prev, paperId].slice(-2)  // 最多 2 篇
-              );
-            }}
+            onTogglePaperSelection={togglePaperSelection}
             // R10.5.5: 最近搜索
             recentSearches={recentSearches}
             onClearRecent={clearRecentSearches}
@@ -586,37 +515,37 @@ export default function App() {
       </div>
 
       {/* R10.5.5: 快捷键面板 (按 ? 触发) */}
-      {showShortcuts && <ShortcutsOverlay onClose={() => setShowShortcuts(false)} />}
+      {showShortcuts && <ShortcutsOverlay onClose={toggleShortcuts} />}
 
       {/* R10.5.3: 认证对话框 — 未登录时强制弹出 (OPEN_MODE=false).
           z-50 模态, 阻断所有下层交互, 防止用户绕过认证直接触发 search. */}
       {authState === 'unauthenticated' && (
         <LoginDialog
           requireAuth
-          onSuccess={handleLoginSuccess}
+          onSuccess={() => handleLoginSuccess(currentUser ?? ({} as UserInfo))}
         />
       )}
 
       {/* R10.5.28 (Holographic 集成): 分屏对比抽屉. 当用户多选恰好 2 篇论文时
           (selectedPaperIds.length === 2) 显示. reviews 暂传空对象, R10.5.29
-          接 critic_agent 后端结果填充. selectedPaperIds 接入方式: 论文列表项
-          多选状态 (R10.5.29 在 QueryPanel 论文行加 ⌘+click 多选) 才能让
-          selectedPaperIds 真的有 2 项, 当前默认空, 等多选接线. */}
+          接 critic_agent 后端结果填充. R10.5.31 (F4): selectedPaperIds 走
+          SelectionContext, 关闭时调 clearPaperSelection. */}
       {selectedPaperIds.length === 2 && result?.ranked_papers && (
         <CompareDrawer
           papers={result.ranked_papers as any}
           selectedPaperIds={selectedPaperIds}
           reviews={{}}
-          onClose={() => setSelectedPaperIds([])}
+          onClose={clearPaperSelection}
         />
       )}
 
       {/* R10.5.28 (Holographic 集成): 全局命令面板 (Cmd+K / Ctrl+K 触发).
-          useCommandPalette hook 内部管 isOpen + 快捷键注册. 13 个预定义命令
-          暂走 console.log 占位, R10.5.29 接导出 / 过滤 / 视图切换. */}
+          R10.5.31 (F4): isOpen/onClose 走 UIContext, 不再用 useCommandPalette
+          hook (避免双 Cmd+K 监听器 + 双 isOpen state). 13 个命令 handler
+          见 handleCommand (11 真 + 2 stub). */}
       <CommandPalette
-        isOpen={cmdPalette.isOpen}
-        onClose={cmdPalette.close}
+        isOpen={cmdPaletteOpen}
+        onClose={closeCmdPalette}
         onExecuteCommand={handleCommand}
       />
 
@@ -629,22 +558,22 @@ export default function App() {
       >
         <button
           type="button"
-          onClick={() => setChangelogOpen(true)}
+          onClick={openChangelog}
           className="text-[10px] font-mono uppercase tracking-[0.18em] px-2 py-1 opacity-60 hover:opacity-100 transition"
           style={{
             color: 'var(--sf-muted)',
             backgroundColor: 'var(--sf-bg-elev)',
             border: '1px solid var(--sf-border)',
           }}
-          title="R10.5.30 累积升级日志 (CG.txt / CD.txt / 22 项 deferred)"
+          title="R10.5.31 累积升级日志 (CG.txt / CD.txt / F1-F6 deferred)"
           data-testid="changelog-footer-link"
         >
-          ❦ R10.5.30 ❦
+          ❦ R10.5.31 ❦
         </button>
       </footer>
       <ChangelogModal
         isOpen={changelogOpen}
-        onClose={() => setChangelogOpen(false)}
+        onClose={closeChangelog}
       />
     </div>
   );

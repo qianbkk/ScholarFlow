@@ -24,6 +24,48 @@ interface ChangelogNote {
 
 const CHANGELOG_NOTES: ChangelogNote[] = [
   {
+    emoji: '🧠',
+    title: '前端架构 4-Context 拆分 (CD.txt §7 illusion of sophistication)',
+    body: 'F4: App.tsx 13 个 useState 散落 → 4 个 Context (App / Selection / UI / Search), useReducer 管选中态, useMemo 防重渲染. 删双 Cmd+K 监听器冲突. App.tsx -71 行, 子组件 import { useApp } 即可.',
+    tag: 'F4',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
+    emoji: '🎯',
+    title: 'CommandPalette 13 命令接真 (F5)',
+    body: '11 真 handler (export 3 + filter 3 + theme 循环 + reset + focus + 2 view) + 2 stub (summarize/critique 等后端 agent endpoint). Cmd+K 走 UIContext 集中.',
+    tag: 'F5',
+    tagColor: 'rgb(168, 85, 247)',
+  },
+  {
+    emoji: '🗃',
+    title: 'DB migration 框架 (F6)',
+    body: 'apply_migration(name, fn) helper + _schema_migrations 表, 4 条历史迁移 (H8 query 删列 / R10.5.28 password 3 列 / stream_tokens / sessions) 全部接入, 幂等可重跑.',
+    tag: 'F6',
+    tagColor: 'rgb(168, 85, 247)',
+  },
+  {
+    emoji: '⏱',
+    title: 'e2e / perf 阈值 env-driven (F3)',
+    body: 'mock 模式 8 节点实测 30-180s, 30s 阈值是健康检查上限不是流水线 SLA. 改 PIPELINE_E2E_TIMEOUT=300 / PERF_PER_QUERY_TIMEOUT=60 / PERF_TOTAL_TIMEOUT=300 env-driven, CI 默认值保持向后兼容.',
+    tag: 'F3',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
+    emoji: '🔌',
+    title: 'force_mock_api + circuit breaker + critic tuple unpack (F2)',
+    body: 'F2: critic_agent call_llm 返 (text, usage) tuple 没 unpack → 10 次评审 AttributeError. force_mock_api 改 _runtime_mode_override["mode"]="mock" 让所有 caller 走 mock. conftest autouse 加 circuit breaker reset.',
+    tag: 'F2',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
+    emoji: '🧹',
+    title: 'D3 state pollution 根治 (F1)',
+    body: 'F1: conftest _reset_global_state 加 4 项 (OPEN_MODE 双 module / cache._DB / circuit breaker / runtime_mode override), test_auth_api_key 4 case 加 _stub_request 满足 D3 新签名, 11 个 d3_session_cookies test 跨文件不再污染.',
+    tag: 'F1',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
     emoji: '🔐',
     title: 'API Key → HttpOnly Cookie (CG.txt P0 #1 真修)',
     body: 'D3: 长期 API Key 从前端 localStorage 改走后端 HttpOnly cookie session, 双重提交 cookie 防 CSRF. XSS 偷走后攻击窗口缩到 session 24h 过期. 前端 fetch credentials: "include" 即可.',
@@ -149,7 +191,7 @@ export function ChangelogModal({
           className="text-[12px] mb-4 font-body"
           style={{ color: 'var(--sf-muted)' }}
         >
-          R10.5.30 修复了 <strong>CG.txt / CD.txt / R10.5.28-29 审计</strong> 累计 22 项 deferred, 已交付 8 项.
+          R10.5.30 + R10.5.31 修复了 <strong>CG.txt / CD.txt / R10.5.28-29 审计</strong> 累计 22 项 deferred, 已交付 14 项.
           完整 22 项待办见{' '}
           <code
             className="font-mono text-[10px] px-1"
@@ -203,7 +245,7 @@ export function ChangelogModal({
             className="text-[10px] font-mono uppercase tracking-[0.15em]"
             style={{ color: 'var(--sf-muted)' }}
           >
-            ❦ ScholarFlow v1.0.x (R10.5.30) ❦
+            ❦ ScholarFlow v1.0.x (R10.5.31) ❦
           </span>
           <button
             type="button"
