@@ -83,77 +83,99 @@ export function ReportPanel({
     }
   }, [selectedPaperId, report]);
 
-  const html = useMemo(() => {
-    if (!report) return '';
-    try {
-      // R10.5 Fix-P0-XSS: 四层 XSS 防护链 —
-      // ① marked 解析 Markdown → ② DOMPurify 白名单过滤 → ③ DOMParser 属性强化 → ④ React 渲染
-      // 关键: DOMPurify 必须在 dangerouslySetInnerHTML 之前调用,
-      // 防止 LLM 输出 <script> / onerror= / javascript: 等可执行 payload.
-      const rawHtml = marked.parse(report) as string;
+  const [html, setHtml] = useState('');
 
-      // ② DOMPurify: 白名单过滤 + 强化 FORBID 规则
-      const sanitized = DOMPurify.sanitize(rawHtml, {
-        ALLOWED_TAGS: [
-          'h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li',
-          'strong', 'em', 'a', 'code', 'pre', 'blockquote',
-          'br', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr',
-          'sup', 'sub', // R10.5: 新增上下标支持 (学术论文常用)
-        ],
-        // R10.5.8 code-review 修复: 允许 'rel' 和 'name' 透传 — LLM 经常生成
-        // 内部锚点 <a name="ref-1"> 和 nofollow 等 rel 修饰, 旧版一刀切
-        // 全部剥光导致报告内"论文 N" 引用跳转变 plain text.
-        // 'class' / 'id' 仍禁 (防 CSS 注入); 'target' 由下方 DOMParser 统一强制.
-        ALLOWED_ATTR: ['href', 'title', 'rel', 'name'],
-        FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed', 'textarea', 'select', 'button'],
-        FORBID_ATTR: [
-          'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
-          'onfocus', 'onblur', 'onchange', 'onsubmit', 'onkeydown', 'onkeyup',
-          'style', 'class', 'id', // R10.5 Fix-P0: 禁止内联样式和 id (防 CSS 注入)
-        ],
-        // R10.5 Fix-P0: 强制 URL 协议白名单, 防 javascript: / data: 伪协议
-        ALLOWED_URI_REGEXP: /^(?:(?:(?:https?|mailto|tel):)|\/|#)/i,
-      });
-
-      // ③ DOMParser: 区分"锚点"vs"外链"决定是否开新窗
-      // R10.5.8 code-review 修复: 旧实现无条件 target=_blank, 报告内
-      // "论文 N"内部锚点 + 同源链接也被开新窗 (15+ 标签页). 新实现:
-      //   - href 形如 #xxx  (页内锚点) → 同窗跳转
-      //   - href 含 name 属性 (LLM 锚点) → 同窗 (目标 id 在本报告)
-      //   - href 同源 (/api/...) → 同窗
-      //   - 其余 (http(s):// 外链) → 新窗 + noopener noreferrer 防 tabnabbing
-      // R10.5.9 落地: 删 typeof DOMParser === 'undefined' 降级分支 —
-      // Vite 5 + 现代浏览器 (Chrome 90+/Firefox 88+/Safari 14+) 100% 可用,
-      // 该分支是死代码, 删 11 行. 错误兜底走 catch(e) → 完全转义已存在.
-      const doc = new DOMParser().parseFromString(sanitized, 'text/html');
-      doc.querySelectorAll('a').forEach((a) => {
-        const href = a.getAttribute('href') || '';
-        // R10.5 Fix-P0: 二次校验 href 协议, 防 DOMPurify 绕过
-        if (/^(javascript|data|vbscript|file):/i.test(href)) {
-          a.removeAttribute('href');
-          a.setAttribute('data-removed', 'unsafe-protocol');
-          return;
-        }
-        // 内部锚点 / 同源链接: 同窗 (不强制 _blank)
-        const isInternalAnchor = href.startsWith('#');
-        const isRelativeOrApi = href.startsWith('/') || href.startsWith('#');
-        if (isInternalAnchor || isRelativeOrApi) {
-          // 保留原 href, 不强制 target=_blank
-          return;
-        }
-        // 外链: 新窗 + 防御 tabnabbing (新窗口无法通过 window.opener 操控父页)
-        a.setAttribute('target', '_blank');
-        a.setAttribute('rel', 'noopener noreferrer');
-        // R10.5: 添加隐式安全提示
-        a.setAttribute('title', `${a.textContent || '外部链接'} · 将在新窗口打开`);
-      });
-
-      return doc.body.innerHTML;
-    } catch (e) {
-      // 兜底: 完全转义
-      console.error('[ReportPanel] XSS 处理失败, 降级到纯文本:', e);
-      return DOMPurify.sanitize(report.replace(/</g, '&lt;').replace(/>/g, '&gt;'));
+  // R10.5.32 (P1-4): marked.parse 异步化. 旧实现 (R10.5.X) 在 useMemo 同步
+  // 解析, 50KB+ 报告 (R10.5.30 D4 接本地论文库后典型输出) 阻塞主线程
+  // 100-400ms, React StrictMode 双跑 = 200-800ms. 改 useState + useEffect
+  // 让 marked v14+ async 模式在 idle 时跑. 同时 generation counter 防
+  // 旧报告覆盖新报告 (search 切换 race).
+  const htmlGenRef = useRef(0);
+  useEffect(() => {
+    if (!report) {
+      setHtml('');
+      return;
     }
+    const myGen = ++htmlGenRef.current;
+    let cancelled = false;
+    // R10.5.32 (P1-4): 调 marked.parse async API (Promise<string>).
+    // marked v14+ 默认 sync, async 模式需要 {async: true} 或直接 await.
+    // 文档: https://marked.js.org/using_pro#async
+    Promise.resolve(marked.parse(report, { async: true }) as Promise<string> | string)
+      .then((rawHtml) => {
+        if (cancelled || myGen !== htmlGenRef.current) return;
+        // R10.5 Fix-P0-XSS: 四层 XSS 防护链 —
+        // ① marked 解析 Markdown → ② DOMPurify 白名单过滤 → ③ DOMParser 属性强化 → ④ React 渲染
+        // 关键: DOMPurify 必须在 dangerouslySetInnerHTML 之前调用,
+        // 防 LLM 输出 <script> / onerror= / javascript: 等可执行 payload.
+        const sanitized = DOMPurify.sanitize(rawHtml, {
+          ALLOWED_TAGS: [
+            'h1', 'h2', 'h3', 'h4', 'p', 'ul', 'ol', 'li',
+            'strong', 'em', 'a', 'code', 'pre', 'blockquote',
+            'br', 'table', 'thead', 'tbody', 'tr', 'td', 'th', 'hr',
+            'sup', 'sub', // R10.5: 新增上下标支持 (学术论文常用)
+          ],
+          // R10.5.8 code-review 修复: 允许 'rel' 和 'name' 透传 — LLM 经常生成
+          // 内部锚点 <a name="ref-1"> 和 nofollow 等 rel 修饰, 旧版一刀切
+          // 全部剥光导致报告内"论文 N" 引用跳转变 plain text.
+          // 'class' / 'id' 仍禁 (防 CSS 注入); 'target' 由下方 DOMParser 统一强制.
+          ALLOWED_ATTR: ['href', 'title', 'rel', 'name'],
+          FORBID_TAGS: ['script', 'style', 'iframe', 'form', 'input', 'object', 'embed', 'textarea', 'select', 'button'],
+          FORBID_ATTR: [
+            'onerror', 'onload', 'onclick', 'onmouseover', 'onmouseenter', 'onmouseleave',
+            'onfocus', 'onblur', 'onchange', 'onsubmit', 'onkeydown', 'onkeyup',
+            'style', 'class', 'id', // R10.5 Fix-P0: 禁止内联样式和 id (防 CSS 注入)
+          ],
+          // R10.5 Fix-P0: 强制 URL 协议白名单, 防 javascript: / data: 伪协议
+          ALLOWED_URI_REGEXP: /^(?:(?:(?:https?|mailto|tel):)|\/|#)/i,
+        });
+
+        // ③ DOMParser: 区分"锚点"vs"外链"决定是否开新窗
+        // R10.5.8 code-review 修复: 旧实现无条件 target=_blank, 报告内
+        // "论文 N"内部锚点 + 同源链接也被开新窗 (15+ 标签页). 新实现:
+        //   - href 形如 #xxx  (页内锚点) → 同窗跳转
+        //   - href 含 name 属性 (LLM 锚点) → 同窗 (目标 id 在本报告)
+        //   - href 同源 (/api/...) → 同窗
+        //   - 其余 (http(s):// 外链) → 新窗 + noopener noreferrer 防 tabnabbing
+        // R10.5.9 落地: 删 typeof DOMParser === 'undefined' 降级分支 —
+        // Vite 5 + 现代浏览器 (Chrome 90+/Firefox 88+/Safari 14+) 100% 可用,
+        // 该分支是死代码, 删 11 行. 错误兜底走 catch(e) → 完全转义已存在.
+        const doc = new DOMParser().parseFromString(sanitized, 'text/html');
+        doc.querySelectorAll('a').forEach((a) => {
+          const href = a.getAttribute('href') || '';
+          // R10.5 Fix-P0: 二次校验 href 协议, 防 DOMPurify 绕过
+          if (/^(javascript|data|vbscript|file):/i.test(href)) {
+            a.removeAttribute('href');
+            a.setAttribute('data-removed', 'unsafe-protocol');
+            return;
+          }
+          // 内部锚点 / 同源链接: 同窗 (不强制 _blank)
+          const isInternalAnchor = href.startsWith('#');
+          const isRelativeOrApi = href.startsWith('/') || href.startsWith('#');
+          if (isInternalAnchor || isRelativeOrApi) {
+            // 保留原 href, 不强制 target=_blank
+            return;
+          }
+          // 外链: 新窗 + 防御 tabnabbing (新窗口无法通过 window.opener 操控父页)
+          a.setAttribute('target', '_blank');
+          a.setAttribute('rel', 'noopener noreferrer');
+          // R10.5: 添加隐式安全提示
+          a.setAttribute('title', `${a.textContent || '外部链接'} · 将在新窗口打开`);
+        });
+
+        if (!cancelled && myGen === htmlGenRef.current) {
+          setHtml(doc.body.innerHTML);
+        }
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        // 兜底: 完全转义
+        console.error('[ReportPanel] XSS 处理失败, 降级到纯文本:', e);
+        setHtml(DOMPurify.sanitize(report.replace(/</g, '&lt;').replace(/>/g, '&gt;')));
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [report]);
 
   const handleCopy = async () => {
