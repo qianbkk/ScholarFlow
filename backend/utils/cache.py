@@ -552,6 +552,55 @@ def wal_checkpoint_all() -> dict[str, int]:
     return results
 
 
+# R10.5.32 (wave 6): search_cache GC. 30 天前的 cache entry 实际是死数据
+# (query_hash 没过期机制, 但 8 节点流水线 token/cost 都变, 命中旧 cache
+# 反而是 stale data). 加 gc_cache 周期性清. 默认保留 30 天, 1k 条上限.
+def gc_cache(max_age_days: int = 30, max_rows: int = 1000) -> dict[str, int]:
+    """清理 search_cache 表: 删 max_age_days 前的条目 + 超 max_rows 限制的最旧条目.
+
+    Returns: 每个 role 的删除行数. 0 = 没删 (table 不存在 / 没数据).
+    """
+    import time as _time
+    cutoff = _time.time() - max_age_days * 86400
+    results: dict[str, int] = {}
+    try:
+        conn = _connect_with_wal("cache")
+        try:
+            # 先按时间删
+            cur = conn.execute(
+                "DELETE FROM search_cache WHERE created_at < ?", (cutoff,)
+            )
+            deleted_by_age = cur.rowcount
+            # 再按条数限制删 (保留最新 max_rows 条)
+            cur = conn.execute(
+                "SELECT COUNT(*) FROM search_cache"
+            )
+            total = cur.fetchone()[0]
+            deleted_by_count = 0
+            if total > max_rows:
+                # 留 max_rows 条, 删最旧的
+                cur = conn.execute(
+                    "DELETE FROM search_cache WHERE query_hash IN "
+                    "(SELECT query_hash FROM search_cache "
+                    " ORDER BY created_at ASC LIMIT ?)",
+                    (total - max_rows,),
+                )
+                deleted_by_count = cur.rowcount
+            conn.commit()
+            results["cache"] = deleted_by_age + deleted_by_count
+            if deleted_by_age or deleted_by_count:
+                _cache_logger.info(
+                    f"[cache] gc: deleted {deleted_by_age} by age + "
+                    f"{deleted_by_count} by count (cutoff={max_age_days}d, cap={max_rows})"
+                )
+        finally:
+            conn.close()
+    except Exception as e:
+        _cache_logger.warning(f"[cache] gc_cache failed: {e}")
+        results["cache"] = -1
+    return results
+
+
 def cache_key(
     query: str,
     max_iterations: int,
