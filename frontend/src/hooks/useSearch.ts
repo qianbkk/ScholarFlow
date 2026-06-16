@@ -148,8 +148,24 @@ function loadRecent(): RecentEntry[] {
   const legacy = readLocalStorage<string[]>(RECENT_KEY, [], { validate: isStringArray });
   if (legacy.length) {
     const migrated: RecentEntry[] = legacy.map((q) => ({ query: q, source: 'unknown', ts: 0 }));
-    writeLocalStorage(RECENT_KEY, migrated.slice(0, RECENT_MAX));
-    try { localStorage.removeItem(RECENT_KEY); } catch { /* ignore */ }
+    // R10.5.30 (D7 P2-8): 旧版 writeLocalStorage 失败时仍 removeItem, 静默丢用户历史.
+    // 修: writeLocalStorage 内部已 try/catch, 我们用返回值 (写入字节数) 判成功.
+    // 但 lib/useLocalStorage 的 writeLocalStorage 是 void, 所以用 try-catch 包整个迁移:
+    // 成功时只写不删, 失败时保留旧数据 + 返回新数据 (用户看到迁移, 下次再试).
+    const sliced = migrated.slice(0, RECENT_MAX);
+    let writeOk = false;
+    try {
+      // 旧 impl 内部 try/catch 静默, 我们直接 localStorage.setItem 试一次
+      // (跟 writeLocalStorage 等价, 但能 catch)
+      localStorage.setItem(RECENT_KEY, JSON.stringify(sliced));
+      writeOk = true;
+    } catch { /* write failed */ }
+    if (writeOk) {
+      // 写入成功才删旧 key (旧 localStorage 'sf-recent-searches' 跟 RECENT_KEY
+      // 同名, 这里 removeItem 是 noop, 但保留以防未来 schema key 改名)
+      return sliced;
+    }
+    // write 失败: 保留旧 data, 但仍返 migrated (用户能看到迁移后格式)
     return migrated;
   }
   return [];

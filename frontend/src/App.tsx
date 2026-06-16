@@ -18,6 +18,10 @@ import { EvolutionSlider } from './components/EvolutionSlider';
 // lib/paperFilters.ts).
 import { CompareDrawer } from './components/CompareDrawer';
 import { CommandPalette, useCommandPalette } from './components/CommandPalette';
+// R10.5.30 (D6 P1-3): 永久升级日志 modal. 取代 R10.5.29 一次性 R10_5_28Banner.
+import { ChangelogModal } from './components/ChangelogModal';
+// R10.5.30 (D7 P2-3): PaperFilters 类型 + DEFAULT 从 lib 导入
+import { DEFAULT_FILTERS, type PaperFilters } from './lib/paperFilters';
 import { useSearch } from './hooks/useSearch';
 import {
   healthCheck,
@@ -91,19 +95,9 @@ export default function App() {
   // 5 个新组件共用这 3 个 state. 命令面板是 hook 内部管, 不在这里.
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const [selectedPaperIds, setSelectedPaperIds] = useState<string[]>([]);
-  // FilterPanel 过滤器 — 年份 / 方法 / 置信度 / 质量分. 默认全放行.
-  // FilterPanel.tsx 没 export DEFAULT_FILTERS, 重复一份避免 import 不到.
-  const [filters, setFilters] = useState<{
-    yearRange: 'all' | '1' | '3' | '5';
-    methods: string[];
-    minConfidence: number;
-    minQualityScore: number;
-  }>({
-    yearRange: 'all',
-    methods: [],
-    minConfidence: 0,
-    minQualityScore: 0,
-  });
+  // R10.5.30 (D7 P2-3): PaperFilters 类型 + DEFAULT 从 lib/paperFilters 导入.
+  // 之前 inline 重复, FilterPanel.tsx 接口跟这里漂移风险. 现在 1 source of truth.
+  const [filters, setFilters] = useState<PaperFilters>(DEFAULT_FILTERS);
   // R10.5.28: CommandPalette 是 Cmd+K 触发的全局命令面板, 内部 hook 自己管 state.
   // onExecuteCommand 暂留空 handler (导出 / 过滤 / 视图切换命令的完整实现留 R10.5.29).
   const cmdPalette = useCommandPalette();
@@ -114,6 +108,8 @@ export default function App() {
   // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
   // R10.5.5: 跨组件论文聚焦 — 论文列表 / 图谱节点 / 报告引用表 三者互相同步高亮
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
+  // R10.5.30 (D6 P1-3): 升级日志 modal 状态 — footer 链接触发, 永久可见
+  const [changelogOpen, setChangelogOpen] = useState<boolean>(false);
   // R10.5.5: 快捷键面板显示状态
   const [showShortcuts, setShowShortcuts] = useState<boolean>(false);
   // R10.5.20: Runtime mode (mock / real) 状态. 启动时从后端拉, 切换时调
@@ -471,6 +467,15 @@ export default function App() {
             // R10.5.5: 跨组件论文聚焦
             selectedPaperId={selectedPaperId}
             onSelectPaper={handleSelectPaper}
+            // R10.5.30 (D5 P1-2): 多选论文 — Shift+click 凑 2 篇触发 CompareDrawer
+            selectedPaperIds={selectedPaperIds}
+            onTogglePaperSelection={(paperId: string) => {
+              setSelectedPaperIds((prev) =>
+                prev.includes(paperId)
+                  ? prev.filter((id) => id !== paperId)
+                  : [...prev, paperId].slice(-2)  // 最多 2 篇
+              );
+            }}
             // R10.5.5: 最近搜索
             recentSearches={recentSearches}
             onClearRecent={clearRecentSearches}
@@ -542,6 +547,33 @@ export default function App() {
         isOpen={cmdPalette.isOpen}
         onClose={cmdPalette.close}
         onExecuteCommand={handleCommand}
+      />
+
+      {/* R10.5.30 (D6 P1-3): 升级日志 modal — 永久 footer 链接触发.
+          取代 R10.5.29 的一次性 R10_5_28Banner (sessionStorage 已阅, 关闭就看不到).
+          这里 footer 链接永远在, 任何时候点开都能看到 8 项累积升级. */}
+      <footer
+        className="fixed bottom-2 right-3 z-40 font-ui"
+        data-testid="changelog-footer"
+      >
+        <button
+          type="button"
+          onClick={() => setChangelogOpen(true)}
+          className="text-[10px] font-mono uppercase tracking-[0.18em] px-2 py-1 opacity-60 hover:opacity-100 transition"
+          style={{
+            color: 'var(--sf-muted)',
+            backgroundColor: 'var(--sf-bg-elev)',
+            border: '1px solid var(--sf-border)',
+          }}
+          title="R10.5.30 累积升级日志 (CG.txt / CD.txt / 22 项 deferred)"
+          data-testid="changelog-footer-link"
+        >
+          ❦ R10.5.30 ❦
+        </button>
+      </footer>
+      <ChangelogModal
+        isOpen={changelogOpen}
+        onClose={() => setChangelogOpen(false)}
       />
     </div>
   );

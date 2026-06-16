@@ -71,9 +71,13 @@ def _mock_fallback(query: str, limit: int) -> list[Paper]:
 
     C5 修复：将所有返回的论文标记 is_fallback=True，便于前端区分真实数据
     与 mock 兜底数据，避免用户在 200 响应中误以为拿到真实结果。
+
+    R10.5.30 (D4 P1-1): 走 local_papers_db 而非 mock_data, 论文 source='local_demo'
+    真实标签, 前端 QueryPanel '本地演示' badge 亮起 (CD.txt 隐性问题).
     """
-    all_papers = get_mock_papers(query, limit=limit * 2)
-    papers = [p for p in all_papers if p.source == "openalex"][:limit]
+    from backend.api.local_papers_db import search_local_demo
+    all_papers = search_local_demo(query, limit=limit * 2)
+    papers = [p for p in all_papers if p.source == "local_demo"][:limit]
     for p in papers:
         p.is_fallback = True
     return papers
@@ -133,9 +137,10 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
     """通过 OpenAlex 搜索论文。"""
     if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env API_MOCK
         await asyncio.sleep(0.05)
-        # 优先返回 OpenAlex 源（mock_data 里 source=openalex 的）
-        all_papers = get_mock_papers(query, limit=limit * 2)
-        return [p for p in all_papers if p.source == "openalex"][:limit]
+        # R10.5.30 (D4 P1-1): 走 local_papers_db, 论文 source='local_demo' 真实标签
+        from backend.api.local_papers_db import search_local_demo
+        all_papers = search_local_demo(query, limit=limit * 2)
+        return all_papers[:limit]
 
     try:
         client = _get_client()

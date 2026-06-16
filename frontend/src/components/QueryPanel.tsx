@@ -27,6 +27,9 @@ interface Props {
   // R10.5.5: 跨组件论文聚焦
   selectedPaperId?: string | null;
   onSelectPaper?: (paperId: string | null) => void;
+  // R10.5.30 (D5 P1-2): 多选论文 — ⌘+click / Ctrl+click 加, 凑齐 2 篇触发 CompareDrawer
+  selectedPaperIds?: string[];
+  onTogglePaperSelection?: (paperId: string) => void;
   // R10.5.5: 最近搜索 (localStorage LRU 5 条)
   // R10.5.28 (CD.txt 修复): 类型改为 RecentEntry, 支持分本地/真实两路.
   // R10.5.29 (simplify): RecentEntry / RuntimeMode 都从 useSearch / services/api
@@ -82,6 +85,8 @@ export function QueryPanel({
   currentStep = 0, elapsedSec = 0, pipelineSteps = [],
   isDegradedResponse = false, fallbackPaperCount = 0,
   selectedPaperId = null, onSelectPaper,
+  // R10.5.30 (D5 P1-2): 多选 (Shift+click 凑 2 篇触发 CompareDrawer)
+  selectedPaperIds = [], onTogglePaperSelection,
   recentSearches = [], onClearRecent,
 }: Props) {
   // R10.5.5: 从 localStorage 恢复预算/迭代/provider 默认值
@@ -920,16 +925,24 @@ export function QueryPanel({
             标题用 Newsreader 15px 衬线 (长阅读), 元数据 mono + 细线分隔. */}
         <ul>
           {papers.map((p, i) => {
+            // R10.5.30 (D5 P1-2): 同名变量已在上面 map 内, 删除这个外层 shadow
             const isSelected = p.paper_id && p.paper_id === selectedPaperId;
+            // R10.5.30 (D5 P1-2): 多选高亮 — Shift+click 凑齐 2 篇时 CompareDrawer 自动显示
+            const isMultiSelected = p.paper_id && (selectedPaperIds || []).includes(p.paper_id);
             return (
               <li
                 key={p.paper_id || i}
                 className="px-3 py-2 cursor-pointer transition-colors border-b"
                 style={{
                   borderColor: 'var(--sf-border)',
+                  // 多选用紫色左边框区分
+                  borderLeft: isMultiSelected
+                    ? '3px solid rgb(168, 85, 247)'
+                    : isSelected
+                    ? '3px solid var(--sf-accent)'
+                    : '3px solid transparent',
                   backgroundColor: isSelected ? 'var(--sf-bg-elev)' : undefined,
-                  borderLeft: isSelected ? '3px solid var(--sf-accent)' : '3px solid transparent',
-                  paddingLeft: isSelected ? '13px' : '16px',
+                  paddingLeft: (isSelected || isMultiSelected) ? '13px' : '16px',
                 }}
                 onMouseEnter={(e) => {
                   if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--sf-bg-elev)';
@@ -949,10 +962,15 @@ export function QueryPanel({
                     return;
                   }
                   if (p.paper_id && onSelectPaper) {
-                    onSelectPaper(isSelected ? null : p.paper_id);
+                    // R10.5.30 (D5 P1-2): Shift+click 多选 (凑 2 篇触发 CompareDrawer).
+                    if (e.shiftKey && onTogglePaperSelection) {
+                      onTogglePaperSelection(p.paper_id);
+                    } else {
+                      onSelectPaper(isSelected ? null : p.paper_id);
+                    }
                   }
                 }}
-                title={`${p.title}\n单击 = 跨组件聚焦 · 双击 / Ctrl+单击 = 打开论文`}
+                title={`${p.title}\n单击 = 跨组件聚焦 · Shift+单击 = 多选 (凑齐 2 篇触发对比) · 双击 / Ctrl+单击 = 打开论文`}
               >
                 <div className="flex items-start gap-2.5">
                   <span
