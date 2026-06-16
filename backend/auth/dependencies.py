@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Cookie, Depends, Header, HTTPException, Request
 
 from backend.utils.cache import _connect_with_wal
 
@@ -185,12 +185,17 @@ def _lookup_user_by_key(raw_key: str) -> Optional[User]:
 
 # ===== FastAPI 依赖 =====
 async def get_current_user(
+    request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
+    sf_session_id: Optional[str] = Cookie(default=None, alias="sf_session_id"),
 ) -> User:
-    """FastAPI dependency: 校验 X-API-Key 头, 返 User.
+    """FastAPI dependency: 校验 X-API-Key 头或 session cookie, 返 User.
 
+    优先级 (R10.5.30 D3 翻转):
+      1. X-API-Key 头 (向后兼容 R10.5.28 前端 + curl / SDK)
+      2. sf_session_id cookie (CG.txt §1 P1 #4 真修)
     OPEN_MODE=true 时: 跳过校验, 返合成 'dev-user' (无 DB 写入).
-    OPEN_MODE=false 时: 校验 key, 无效或缺失返 401.
+    OPEN_MODE=false 时: 校验 key 或 cookie, 无效或缺失返 401.
     """
     if OPEN_MODE:
         # 跳过认证, 返合成用户.  budget 走 'dev-user' 单账户, 行为跟旧版兼容.
@@ -201,10 +206,42 @@ async def get_current_user(
             is_dev_user=True,
         )
 
+    if not x_api_key and sf_session_id:
+        # R10.5.30 (D3 P0-1): 兜底 cookie session 鉴权 (CG.txt §1 P1 #4 真修).
+        # 前端可选改用 credentials: 'include' + X-CSRF-Token, 后端走 session.
+        sess_id = sf_session_id
+        if sess_id:
+            from backend.utils.session_store import resolve_session
+            sess = resolve_session(sess_id)
+            if sess:
+                # 查 user 表返 user
+                conn = _connect_with_wal("auth")
+                try:
+                    row = conn.execute(
+                        "SELECT user_id, display_name, created_at FROM users WHERE user_id=?",
+                        (sess["user_id"],),
+                    ).fetchone()
+                finally:
+                    conn.close()
+                if row:
+                    return User(
+                        user_id=row[0],
+                        display_name=row[1],
+                        created_at=row[2],
+                        is_dev_user=False,
+                    )
+                # user_id 不在 users 表 (可能 DB 清空), 返 session 里的 user_id
+                return User(
+                    user_id=sess["user_id"],
+                    display_name="",
+                    created_at=0.0,
+                    is_dev_user=False,
+                )
     if not x_api_key:
         raise HTTPException(
             status_code=401,
-            detail="缺少 X-API-Key header. 请先 /auth/register 或 /auth/login 拿 key, "
+            detail="缺少 X-API-Key header 或 sf_session_id cookie. "
+                   "请先 /auth/register 或 /auth/login 拿 key, "
                    "或在 .env 设 OPEN_MODE=true (仅本地开发)",
         )
     user = _lookup_user_by_key(x_api_key)

@@ -240,6 +240,7 @@ def _init_db() -> None:
             )
         # R10.5 Fix-P0-B: 多用户 + API Key 认证.
         # users 表: api_key_hash (sha256, 不存明文) + display_name + created_at.
+        # R10.5.28 (CG.txt 审计 P0 #1): 加 password_hash (PBKDF2) + salt + updated_at.
         # budget_user 表: 替代原 budget_state 单 global 行的 per-user 余额.
         # OPEN_MODE=true 时所有用户共享 'dev-user' 虚拟账户, 行为跟旧版一致.
         conn.execute(
@@ -252,6 +253,18 @@ def _init_db() -> None:
             )
             """
         )
+        # R10.5.28: 兼容旧 users 表 (无 password 列). ALTER TABLE IF NOT EXISTS
+        # 是 SQLite 不支持的; 用 PRAGMA table_info 检测, 缺列就 ALTER.
+        user_cols = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "password_hash" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+        if "password_salt" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN password_salt TEXT")
+        if "password_updated_at" not in user_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN password_updated_at REAL")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS budget_user (

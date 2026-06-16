@@ -11,11 +11,14 @@ OPEN_MODE=false 时 /auth/register + /auth/login 是新用户唯一入口.
 from __future__ import annotations
 
 import logging
+import os
 import time
 from collections import OrderedDict, defaultdict, deque
+import hmac
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
+from typing import Optional
 
 from backend.auth.dependencies import (
     OPEN_MODE,
@@ -36,6 +39,12 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 # FastAPI 0.115+ compatibility
 router.on_startup = []  # type: ignore[attr-defined]
 router.on_shutdown = []  # type: ignore[attr-defined]
+
+
+# R10.5.30 (D3): Set-Cookie 的 Secure flag 在 dev/test (HTTP) 下不能 True,
+# 不然 TestClient / curl 不会存 cookie. 默认 False, 生产可设 SECURE_COOKIES=true.
+def _is_cookie_secure() -> bool:
+    return os.getenv("SECURE_COOKIES", "").lower() in ("1", "true", "yes")
 
 
 # ===== 请求/响应模型 =====
@@ -168,7 +177,11 @@ def _check_rate_limit(client_ip: str) -> None:
 
 # ===== 端点 =====
 @router.post("/register", response_model=AuthResponse)
-async def register(req: RegisterRequest) -> AuthResponse:
+async def register(
+    req: RegisterRequest,
+    request: Request,  # R10.5.30 (D3 P0-1): Set-Cookie 需要 Request
+    response: Response,
+) -> AuthResponse:
     """注册新用户, 返一次性 API Key (丢失需 /auth/login 重新拿).
 
     R10.5 Fix-X3: 跟 /auth/login 保持 user_id 派生一致 — 用 email sha256 派生,
@@ -207,6 +220,21 @@ async def register(req: RegisterRequest) -> AuthResponse:
             status_code=400,
             detail="密码至少 8 字符, 请重新注册时设强密码.",
         )
+    # R10.5.30 (D3 P0-1): 注册成功也 Set-Cookie (跟 login 一样)
+    from backend.utils.session_store import create_session
+    sess = create_session(user_id, ip_address=get_real_ip(request))
+    response.set_cookie(
+        key="sf_session_id",
+        value=sess["session_id"],
+        max_age=sess["ttl_sec"],
+        httponly=True, secure=True, samesite="strict", path="/",
+    )
+    response.set_cookie(
+        key="sf_csrf_token",
+        value=sess["csrf_token"],
+        max_age=sess["ttl_sec"],
+        httponly=False, secure=True, samesite="strict", path="/",
+    )
     return AuthResponse(
         user_id=user_id,
         display_name=req.display_name or req.email,
@@ -216,7 +244,11 @@ async def register(req: RegisterRequest) -> AuthResponse:
 
 
 @router.post("/login", response_model=AuthResponse)
-async def login(req: RegisterRequest) -> AuthResponse:
+async def login(
+    req: RegisterRequest,
+    request: Request,  # R10.5.30 (D3 P0-1): 用于 Set-Cookie + get_real_ip
+    response: Response,  # R10.5.30 (D3 P0-1): 用于 Set-Cookie
+) -> AuthResponse:
     """用 email 拿 key. 已有用户返新 key (旧 key 失效), 新用户自动注册.
 
     学术工具信任模型: 高校邮箱是身份凭据. 不实现密码 (SMTP / OAuth
@@ -224,6 +256,10 @@ async def login(req: RegisterRequest) -> AuthResponse:
 
     R10.5.25 (深度审计 §5): 返 key_rotated 字段告诉前端"是否轮换了 key".
     前端拿 true 弹警告, 让用户警觉 Session DoS 攻击.
+
+    R10.5.30 (D3 P0-1): 除返 api_key 外, 同时 Set-Cookie session_id +
+    csrf_token (HttpOnly + Secure + SameSite=Strict). 前端 credentials:
+    'include' 后, 写操作自动带 cookie + 必须在头显式带 X-CSRF-Token.
     """
     # R10.5 Fix-P1-Audit-2.4: 进程内限流 (防字典攻击)
     client_key = f"email:{req.email.lower()}"
@@ -239,6 +275,31 @@ async def login(req: RegisterRequest) -> AuthResponse:
     if not result:
         raise HTTPException(status_code=400, detail="email 格式无效")
     api_key, rotated = result
+    # R10.5.17: user_id 派生用 hash_user_id 单源 (跟 register / audit log 一致)
+    from backend.utils.user_id import hash_user_id
+    user_id = hash_user_id(req.email)
+    # R10.5.30 (D3 P0-1): 创建 session, Set-Cookie 给前端. 双 cookie (session_id
+    # HttpOnly + csrf_token JS-readable) 走双重提交 cookie 防 CSRF.
+    from backend.utils.session_store import create_session
+    sess = create_session(user_id, ip_address=get_real_ip(request))
+    response.set_cookie(
+        key="sf_session_id",
+        value=sess["session_id"],
+        max_age=sess["ttl_sec"],
+        httponly=True,
+        secure=_is_cookie_secure(),  # 生产强制 HTTPS, dev/test 走 .env 配置
+        samesite="strict",
+        path="/",
+    )
+    response.set_cookie(
+        key="sf_csrf_token",
+        value=sess["csrf_token"],
+        max_age=sess["ttl_sec"],
+        httponly=False,  # CSRF token 必须 JS 可读才能放 X-CSRF-Token 头
+        secure=_is_cookie_secure(),
+        samesite="strict",
+        path="/",
+    )
     # R10.5.17: 同 register, 用 hash_user_id 单源
     from backend.utils.user_id import hash_user_id
     user_id = hash_user_id(req.email)
@@ -289,6 +350,70 @@ async def me(user: User = Depends(get_current_user)) -> UserInfo:
         user_id=user.user_id,
         display_name=user.display_name,
         created_at=user.created_at,
+    )
+
+
+# ===== R10.5.30 (D3 P0-1): HttpOnly cookie 登出 + CSRF token =====
+class LogoutResponse(BaseModel):
+    logged_out: bool
+    user_id: Optional[str] = None
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    request: Request,
+    response: Response,
+) -> LogoutResponse:
+    """R10.5.30 (D3 P0-1): 登出 — 删 session, Set-Cookie 立即过期.
+
+    鉴权依赖 (Cookie → User), 不需 X-CSRF-Token (登出是降权操作, 跨站请求
+    反而帮用户清 cookie, 攻击者要的是登出, 不需防护; 但需 valid session).
+    """
+    from backend.utils.session_store import resolve_session, delete_session
+    sess_id = request.cookies.get("sf_session_id")
+    sess = resolve_session(sess_id) if sess_id else None
+    user_id = sess["user_id"] if sess else None
+    if sess_id:
+        delete_session(sess_id)
+    # 清 cookie — 立即过期
+    response.delete_cookie("sf_session_id", path="/")
+    response.delete_cookie("sf_csrf_token", path="/")
+    return LogoutResponse(logged_out=True, user_id=user_id)
+
+
+class CsrfTokenResponse(BaseModel):
+    csrf_token: str
+    expires_in: int
+
+
+@router.get("/csrf-token", response_model=CsrfTokenResponse)
+async def csrf_token_endpoint(
+    request: Request,
+    user: User = Depends(get_current_user),  # R10.5.30 (D3): 鉴权 (OPEN_MODE → dev-user)
+) -> CsrfTokenResponse:
+    """R10.5.30 (D3 P0-1): 给前端读 CSRF token (写到 X-CSRF-Token 头).
+
+    双重提交 cookie 模式: CSRF token 存在 sf_csrf_token cookie (JS-readable,
+    non-HttpOnly) + 后端 SQLite session 行里. 前端 fetch POST/PUT/DELETE
+    时读 cookie 放到 X-CSRF-Token 头, 后端校验跟 session 行里一致.
+
+    鉴权: OPEN_MODE=true → dev-user 可访问; false → 需 valid session.
+    """
+    from backend.utils.session_store import resolve_session
+    if OPEN_MODE and user.is_dev_user:
+        # OPEN_MODE=true: 没 session 也返一个伪 csrf_token, 方便 dev 测试
+        # 真生产没 OPEN_MODE 时 user 必有 session.
+        return CsrfTokenResponse(csrf_token="dev_mode_csrf_stub", expires_in=86400)
+    sess_id = request.cookies.get("sf_session_id")
+    sess = resolve_session(sess_id) if sess_id else None
+    if not sess:
+        raise HTTPException(
+            status_code=401,
+            detail="session 无效或过期, 请重新 /auth/login",
+        )
+    return CsrfTokenResponse(
+        csrf_token=sess["csrf_token"],
+        expires_in=86400,
     )
 
 
@@ -380,6 +505,49 @@ def _gc_stream_tokens() -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+# ===== R10.5.30 (D3 P0-1): CSRF 校验依赖 =====
+# 双重提交 cookie 模式: POST/PUT/DELETE 必须带 X-CSRF-Token 头 (值跟
+# sf_csrf_token cookie 一致), 且跟 server-side session 行里 csrf_token
+# 一致. 这是 R10.5.30 真正修 CG.txt P1 #4 的关键 — 跨站请求攻击者读不到
+# HttpOnly session_id, 也拿不到 JS-readable csrf_token (同源策略).
+async def require_csrf(
+    request: Request = None,  # type: ignore[assignment]
+    x_csrf_token: Optional[str] = None,  # type: ignore[assignment]
+) -> None:
+    """FastAPI 依赖: 校验 X-CSRF-Token 头.
+
+    1) 客户端必须带 sf_session_id cookie + X-CSRF-Token 头
+    2) 头值必须跟 session.csrf_token 一致 (查 SQLite)
+    3) 缺失 / 不匹配 → 403
+    """
+    if OPEN_MODE:
+        # 开发模式: 跳过 CSRF, 简化测试
+        return
+    if not x_csrf_token:
+        raise HTTPException(
+            status_code=403,
+            detail="缺少 X-CSRF-Token 头 (防 CSRF 攻击, 详情见 docs/CG.txt §1 P1 #4)",
+        )
+    sess_id = request.cookies.get("sf_session_id")
+    if not sess_id:
+        raise HTTPException(
+            status_code=403,
+            detail="缺少 session cookie, 请先 /auth/login",
+        )
+    from backend.utils.session_store import resolve_session
+    sess = resolve_session(sess_id)
+    if not sess:
+        raise HTTPException(
+            status_code=403,
+            detail="session 无效或过期, 请重新 /auth/login",
+        )
+    if not hmac.compare_digest(sess["csrf_token"], x_csrf_token):
+        raise HTTPException(
+            status_code=403,
+            detail="X-CSRF-Token 跟 session 不匹配",
+        )
 
 
 class StreamTokenResponse(BaseModel):
