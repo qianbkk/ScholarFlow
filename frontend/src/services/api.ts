@@ -251,3 +251,44 @@ export async function fetchMe(): Promise<UserInfo | null> {
 export function hasApiKey(): boolean {
   return !!getApiKey();
 }
+
+// R10.5.32 (F7): CommandPalette /summarize + /critique 端点 helper.
+// 后端 /api/v1/agents/{summarize,critique} 收 AgentPaperRequest, 返
+// AgentPaperResponse. error 兜底返 {error: msg}, 让前端 handleCommand
+// 一处集中处理成功/失败.
+export interface AgentPaperRequest {
+  paper_id: string;
+  title: string;
+  abstract?: string;
+  query?: string;
+}
+
+export interface AgentPaperResponse {
+  paper_id: string;
+  agent: 'summarize' | 'critique';
+  result: Record<string, unknown>;
+  total_cost_usd: number;
+  total_tokens_used: number;
+  elapsed_seconds: number;
+  runtime_mode: string;
+}
+
+export async function callAgent(
+  agent: 'summarize' | 'critique',
+  req: AgentPaperRequest
+): Promise<AgentPaperResponse> {
+  const resp = await fetch(`${API_BASE}/agents/${agent}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(req),
+  });
+  if (!resp.ok) {
+    let detail = `Agent ${agent} failed`;
+    try {
+      const err = await resp.json();
+      detail = err.detail || detail;
+    } catch { /* ignore */ }
+    throw new Error(detail);
+  }
+  return resp.json();
+}

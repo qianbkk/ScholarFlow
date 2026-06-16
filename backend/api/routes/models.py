@@ -122,6 +122,30 @@ class PaperResult(BaseModel):
     final_score: float = 0.0
 
 
+# R10.5.32 (F7): CommandPalette /summarize + /critique 端点的 Pydantic 模型.
+# 用户从前端 CommandPalette (Cmd+K) 触发, 选中论文后:
+#   /summarize: 生成 200 字结构化摘要 (background/method/result/conclusion)
+#   /critique: 复用 critic_agent 评审逻辑, 返 quality_score + recommendation
+# 复用 backend.agents.critic_agent 的 prompt + call_llm, 不重写 LLM 调用逻辑.
+class AgentPaperRequest(BaseModel):
+    """CommandPalette /summarize + /critique 入参: 一篇论文核心字段."""
+    paper_id: str = Field(..., min_length=1, max_length=128)
+    title: str = Field(..., min_length=1, max_length=500)
+    abstract: str = Field(default="", max_length=5000)
+    query: str = Field(default="", max_length=2000, description="用户当前查询, 给 context")
+
+
+class AgentPaperResponse(BaseModel):
+    """统一返 agent output + 论文标识 + 用量."""
+    paper_id: str
+    agent: str  # "summarize" | "critique"
+    result: dict = Field(..., description="agent 输出: summarize={summary_md} / critique={quality_score, recommendation, ...}")
+    total_cost_usd: float = 0.0
+    total_tokens_used: int = 0
+    elapsed_seconds: float = 0.0
+    runtime_mode: str = "unknown"
+
+
 class SearchResponse(BaseModel):
     report: str
     ranked_papers: list[PaperResult]

@@ -49,7 +49,7 @@ import backend.config as _config
 from backend.utils.budget_guard import check_budget
 from backend.utils.cache import get_cached_async, set_cached_async
 from backend.utils.observability import get_request_id
-from backend.utils.runtime_mode import get_runtime_mode
+from backend.utils.runtime_mode import get_runtime_mode, is_runtime_mock  # R10.5.32 (F7): /agents/* 用
 from backend.utils.sanitize import sanitize_query
 from backend.workflow.graph import search_graph
 from backend.api.services.budget import _check_and_reserve_budget, _return_budget
@@ -58,6 +58,8 @@ from backend.api.routes.models import (
     SearchRequest,
     SearchCancelRequest,
     SearchResponse,
+    AgentPaperRequest,    # R10.5.32 (F7): /summarize + /critique
+    AgentPaperResponse,
     _build_search_response,
     _make_initial_state,
 )
@@ -505,4 +507,142 @@ async def search_stream(
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+# ===== R10.5.32 (F7): /agents/summarize + /agents/critique =====
+# CommandPalette 11+2 真 handler 配套. R10.5.31 F5 留的 2 个 stub
+# (summarize / critique) 现在接真后端. 不重写 critic_agent 逻辑, 直接
+# 复用 call_llm + CRITIC_PROMPT_TEMPLATE. /summarize 用一个简版摘要 prompt.
+# 这条是迈向 CD.txt §2.2 'planner/controller' 缺失 的第一步, 2 个 agent
+# endpoint 后续可作为真正 multi-agent runtime 的基础 (Phase 2 升级).
+
+_SUMMARIZE_PROMPT_TEMPLATE = """你是一位学术助手 (Summarizer Agent). 为以下论文生成 200 字以内的结构化摘要, 输出必须是 Markdown 格式:
+
+## 背景
+(1-2 句)
+
+## 方法
+(1-2 句)
+
+## 结果
+(1-2 句)
+
+## 结论
+(1 句)
+
+## 待评审论文
+标题: {title}
+摘要: {abstract}
+"""
+
+
+@router.post("/agents/summarize", response_model=AgentPaperResponse)
+async def summarize_paper(
+    req: AgentPaperRequest,
+    user: User = Depends(get_current_user),
+) -> AgentPaperResponse:
+    """CommandPalette /summarize: 给选中论文生成 200 字结构化摘要 (MD 格式)."""
+    from backend.utils.llm_client import call_llm
+    from backend.api.services.providers import _resolve_provider
+    import time as _time
+
+    t0 = _time.time()
+    # 选 provider — _resolve_provider 只接 provider, 不接 user_id
+    provider_id = _resolve_provider("minimax")
+    prompt = _SUMMARIZE_PROMPT_TEMPLATE.format(
+        title=req.title,
+        abstract=req.abstract or "无摘要",
+    )
+    try:
+        text, usage = await call_llm(
+            prompt=prompt,
+            model_override="gpt-4o-mini",
+            task_type="fast",
+            provider=provider_id,
+            max_tokens=500,
+            json_mode=False,
+        )
+    except Exception as exc:
+        # 兜底: 摘要失败返错误信息, 前端显示 stub
+        return AgentPaperResponse(
+            paper_id=req.paper_id,
+            agent="summarize",
+            result={"summary_md": f"_摘要生成失败: {exc}_"},
+            total_cost_usd=0.0,
+            total_tokens_used=0,
+            elapsed_seconds=round(_time.time() - t0, 2),
+            runtime_mode=("mock" if is_runtime_mock() else "real"),
+        )
+
+    return AgentPaperResponse(
+        paper_id=req.paper_id,
+        agent="summarize",
+        result={"summary_md": text.strip()},
+        total_cost_usd=float((usage or {}).get("cost", 0.0)),
+        total_tokens_used=int((usage or {}).get("tokens", 0)),
+        elapsed_seconds=round(_time.time() - t0, 2),
+        runtime_mode=("mock" if is_runtime_mock() else "real"),
+    )
+
+
+@router.post("/agents/critique", response_model=AgentPaperResponse)
+async def critique_paper(
+    req: AgentPaperRequest,
+    user: User = Depends(get_current_user),
+) -> AgentPaperResponse:
+    """CommandPalette /critique: 复用 critic_agent 评审逻辑, 返 quality_score + recommendation."""
+    from backend.agents.critic_agent import CRITIC_PROMPT_TEMPLATE
+    from backend.utils.llm_client import call_llm
+    from backend.api.services.providers import _resolve_provider
+    import time as _time
+    import json as _json
+
+    t0 = _time.time()
+    provider_id = _resolve_provider("minimax")
+    prompt = CRITIC_PROMPT_TEMPLATE.format(
+        title=req.title,
+        abstract=req.abstract or "无摘要",
+        query=req.query or "通用学术研究",
+    )
+    try:
+        text, usage = await call_llm(
+            prompt=prompt,
+            model_override="gpt-4o-mini",
+            task_type="fast",
+            provider=provider_id,
+            max_tokens=500,
+            json_mode=True,
+        )
+    except Exception as exc:
+        return AgentPaperResponse(
+            paper_id=req.paper_id,
+            agent="critique",
+            result={"error": f"_评审失败: {exc}_"},
+            total_cost_usd=0.0,
+            total_tokens_used=0,
+            elapsed_seconds=round(_time.time() - t0, 2),
+            runtime_mode=("mock" if is_runtime_mock() else "real"),
+        )
+
+    # 解析 LLM JSON 输出, 拿 quality_score + recommendation
+    try:
+        # 找 JSON 块 (LLM 可能裹在 markdown 里)
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        if start >= 0 and end > start:
+            review = _json.loads(text[start:end])
+        else:
+            review = {"raw_response": text[:200]}
+    except _json.JSONDecodeError:
+        review = {"raw_response": text[:200]}
+
+    return AgentPaperResponse(
+        paper_id=req.paper_id,
+        agent="critique",
+        result=review,
+        total_cost_usd=float((usage or {}).get("cost", 0.0)),
+        total_tokens_used=int((usage or {}).get("tokens", 0)),
+        elapsed_seconds=round(_time.time() - t0, 2),
+        runtime_mode=("mock" if is_runtime_mock() else "real"),
     )

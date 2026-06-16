@@ -19,6 +19,7 @@ import { useSearch } from './hooks/useSearch';
 import {
   healthCheck,
   logout as authLogout,
+  callAgent,
   type UserInfo,
 } from './services/api';
 
@@ -189,11 +190,44 @@ function AppInner() {
         // 跟 QueryPanel 现有 [data-search-input] 约定一致.
         document.querySelector<HTMLTextAreaElement>('[data-search-input]')?.focus();
         break;
-      // ===== agent (留待 F7+ 后端 agent endpoint) =====
+      // ===== agent (F7: 调真后端 /api/v1/agents/{summarize,critique}) =====
       case 'summarize':
-      case 'critique':
-        console.info(`[CommandPalette] /${cmdId}: 后端 agent endpoint 待建, 暂留 stub`);
+      case 'critique': {
+        // 取最近一篇 result 里的论文作为目标 (CommandPalette 当前不接 selectedPaperId).
+        // 用户体验: 跑过 /search 后 CommandPalette /summarize 或 /critique
+        // 直接作用于最近一篇. 后续可扩成"让用户选哪篇"二级菜单.
+        const target = (result?.ranked_papers ?? [])[0] as
+          | { paper_id?: string; title?: string; abstract?: string }
+          | undefined;
+        if (!target?.title) {
+          console.info(`[CommandPalette] /${cmdId}: 请先跑一次搜索拿到论文再触发此命令`);
+          break;
+        }
+        const agent = cmdId;  // 'summarize' | 'critique'
+        callAgent(agent as 'summarize' | 'critique', {
+          paper_id: target.paper_id || 'unknown',
+          title: target.title,
+          abstract: target.abstract || '',
+          query: lastQuery,
+        })
+          .then((resp) => {
+            // R10.5.32 (F7): 成功/失败都 console.info, 后续可挂到 UI (e.g. toast
+            // 或 inline card). 当前先打 log 让用户看到 agent 真跑通.
+            if ('error' in resp.result) {
+              console.warn(`[CommandPalette] /${agent} 失败:`, resp.result.error);
+            } else {
+              console.info(
+                `[CommandPalette] /${agent} 完成 (cost=$${resp.total_cost_usd.toFixed(4)}, ` +
+                `tokens=${resp.total_tokens_used}, elapsed=${resp.elapsed_seconds}s, mode=${resp.runtime_mode}):`,
+                resp.result
+              );
+            }
+          })
+          .catch((err) => {
+            console.warn(`[CommandPalette] /${agent} 请求失败:`, err?.message || err);
+          });
         break;
+      }
       default:
         console.info('[CommandPalette] unknown command:', cmdId);
     }
