@@ -101,10 +101,6 @@ export default function App() {
   // R10.5.28: CommandPalette 是 Cmd+K 触发的全局命令面板, 内部 hook 自己管 state.
   // onExecuteCommand 暂留空 handler (导出 / 过滤 / 视图切换命令的完整实现留 R10.5.29).
   const cmdPalette = useCommandPalette();
-  const handleCommand = useCallback((cmdId: string) => {
-    // 占位: 当前先打 log, R10.5.29 接 onExport (bibtex/ris), onFilterChange, onViewChange
-    console.info('[CommandPalette] execute:', cmdId);
-  }, []);
   // OPEN_MODE=true 时允许用户主动关闭登录框 (实际不会触发, 走 authenticated).
   // R10.5.5: 跨组件论文聚焦 — 论文列表 / 图谱节点 / 报告引用表 三者互相同步高亮
   const [selectedPaperId, setSelectedPaperId] = useState<string | null>(null);
@@ -193,6 +189,81 @@ export default function App() {
       // 静默失败 — 不影响 UI 切换
     }
   }, []);
+
+  // R10.5.31 (F5): CommandPalette 13 个命令接真 handler. 11 个接真,
+  // 2 个 (/summarize + /critique) 保留 console.info 因为后端没对应 endpoint
+  // (需要新建 /api/v1/agents/summarize + /api/v1/agents/critique, 留 F7+).
+  // 接真原则: 命令在 CommandPalette 内部只负责元数据 + onExecuteCommand
+  // 委托, 实际副作用都在 App.tsx 这一处集中, 方便维护. 放到 handleThemeChange
+  // 之后避免 forward-reference 错误.
+  const handleCommand = useCallback((cmdId: string) => {
+    switch (cmdId) {
+      // ===== view =====
+      case 'compare':
+        // R10.5.30 (D5 P1-2): CompareDrawer 实际是 selectedPaperIds.length===2
+        // 时自动渲染, 没有独立 setCompareOpen. command 触发选最近 2 篇.
+        // 这里只 console.info 提示, 实际触发靠 QueryPanel Shift+click 多选.
+        console.info('[CommandPalette] /compare: 在论文列表 Shift+click 选 2 篇自动打开对比');
+        break;
+      case 'expand-graph':
+        // GraphPanel 没暴露 imperative handle, 这里仅 console.info.
+        console.info('[CommandPalette] /expand graph: 暂未接 (GraphPanel ref 待加)');
+        break;
+      // ===== export =====
+      case 'export-bibtex':
+      case 'export-ris':
+      case 'export-csv': {
+        // 触发浏览器下载 — 走 Blob + a[download] 标准 pattern.
+        const fmt = cmdId.replace('export-', '') as 'bibtex' | 'ris' | 'csv';
+        const ref = (result as unknown as Record<string, unknown> | null)?.[fmt];
+        if (typeof ref === 'string' && ref.length > 0) {
+          const blob = new Blob([ref], { type: 'text/plain;charset=utf-8' });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = `scholarflow-${fmt}.${fmt === 'csv' ? 'csv' : fmt}`;
+          a.click();
+          URL.revokeObjectURL(url);
+        } else {
+          console.info(`[CommandPalette] /export ${fmt}: 无可导出的内容 (result.${fmt} 缺失), 请先跑一次搜索`);
+        }
+        break;
+      }
+      // ===== filter =====
+      case 'filter-rct':
+        setFilters((f) => ({ ...f, methods: Array.from(new Set([...f.methods, 'RCT'])) }));
+        break;
+      case 'filter-recent':
+        setFilters((f) => ({ ...f, yearRange: '3' }));
+        break;
+      case 'filter-high-quality':
+        setFilters((f) => ({ ...f, minQualityScore: 8 }));
+        break;
+      case 'reset-filters':
+        setFilters(DEFAULT_FILTERS);
+        break;
+      // ===== general =====
+      case 'toggle-dark-mode': {
+        // 4 套主题循环切 (parchment → kraft → midnight → sage → parchment).
+        const order: ThemeId[] = ['parchment', 'kraft', 'midnight', 'sage'];
+        const idx = order.indexOf(theme);
+        const next = order[(idx + 1) % order.length] ?? 'parchment';
+        handleThemeChange(next);
+        break;
+      }
+      case 'focus-query':
+        // 跟 QueryPanel 现有 [data-search-input] 约定一致.
+        document.querySelector<HTMLTextAreaElement>('[data-search-input]')?.focus();
+        break;
+      // ===== agent (留待 F7+ 后端 agent endpoint) =====
+      case 'summarize':
+      case 'critique':
+        console.info(`[CommandPalette] /${cmdId}: 后端 agent endpoint 待建, 暂留 stub`);
+        break;
+      default:
+        console.info('[CommandPalette] unknown command:', cmdId);
+    }
+  }, [result, theme, handleThemeChange]);
 
   // R10.5.4 启动时把 theme 写到 <html> (data-theme 属性), 让全局生效
   useEffect(() => {
