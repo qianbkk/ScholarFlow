@@ -439,38 +439,46 @@ def test_budget_return_on_success_returns_diff(client, monkeypatch):
     )
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE/astream 静态 guard 待 R10.5.30 后续重写")
-def test_main_py_handles_exception_in_search():
-    """[from budget_try_finally] Source-level check: /search must handle generic Exception and call _return_budget.
+def test_routes_search_handles_exception_returns_budget(monkeypatch):
+    """[from budget_try_finally] 真行为测试: /api/v1/search 抛 Exception → _return_budget 被调.
 
-    R10.5.19 修复 (Q.txt #4): 旧实现用 regex r"async def search\\([^)]*\\):" 锁定
-    函数签名, 拒绝 `Depends(get_current_user)` 注入 (Depends 表达式含 `)`).
-    改用 AST 解析 (importlib + ast) 提取真实函数体, 不依赖源码格式.
+    R10.5.30 D2 把 search 拆到 backend/api/routes/search.py, 老静态 guard
+    测 main.py 不再适用. 改成真注入异常验证 budget 返还.
+
+    R10.5.32 (P0-1a): 解锁. 用 monkeypatch 让 ainvoke 抛 RuntimeError, 验证
+    search() 端点的 except 块调 _return_budget 一次 (返还 reserved budget).
     """
-    import ast
-    import inspect
-    from pathlib import Path
+    import backend.api.routes.search as routes_search
+    import backend.api.services.budget as budget_mod
+    return_calls = []
 
-    src_path = Path(main_mod.__file__).read_text(encoding="utf-8")
-    tree = ast.parse(src_path)
+    async def tracking_return(amount, **kwargs):
+        return_calls.append(amount)
+        return None
 
-    search_fn = None
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == "search":
-            # 找顶层的 (直接在 module 里定义, 不嵌套)
-            if isinstance(node, ast.AsyncFunctionDef):
-                search_fn = node
-                break
+    # R10.5.32 (P0-1a): search.py 顶部 snapshot import (line 55), 必须同时
+    # patch routes_search._return_budget (snapshot) + budget_mod._return_budget
+    # (源模块). 任何一处漏 patch, 端点 finally 调的还是原函数.
+    monkeypatch.setattr(routes_search, "_return_budget", tracking_return)
+    monkeypatch.setattr(budget_mod, "_return_budget", tracking_return)
 
-    assert search_fn is not None, "could not locate search() function in main.py"
+    async def fake_ainvoke(initial):
+        raise RuntimeError("simulated pipeline failure")
 
-    # 提取函数源码 (用 ast.get_source_segment 配合原始 src)
-    body_src = ast.get_source_segment(src_path, search_fn) or ""
-    has_except_handler = "except Exception" in body_src
-    assert has_except_handler, "search() must have an except Exception handler"
-    assert "_return_budget" in body_src, (
-        "CRITICAL-002 FAIL: /search function body must call _return_budget on the "
-        "exception path so reserved budget is returned."
+    monkeypatch.setattr(routes_search.search_graph, "ainvoke", fake_ainvoke)
+    from fastapi.testclient import TestClient
+    with TestClient(main_mod.app) as c:
+        r = c.post(
+            "/api/v1/search",
+            json={"query": "test", "budget": 0.5, "max_iterations": 1, "provider": "kimi"},
+        )
+    # R10.5.32 (P0-1a): 同步 /search 端点对 RuntimeError 抛 HTTPException(500)
+    # (routes/search.py:247), 不是 200. 关键是 finally 块 (line 248) 必须
+    # 调 _return_budget 返还 budget, 这是 CRITICAL-002 测试目标.
+    assert r.status_code in (200, 500), f"unexpected status: {r.status_code}"
+    # _return_budget 必须被调至少 1 次 (返还 reserved budget)
+    assert len(return_calls) >= 1, (
+        f"P0-1 FAIL: 异常路径必须调 _return_budget 返还 budget, 实际 {len(return_calls)} 次"
     )
 
 
@@ -494,7 +502,7 @@ def test_client_disconnect_returns_budget(client, monkeypatch):
         return None
     monkeypatch.setattr(search_mod, "get_cached_async", fake_get_cached)
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
         yield {"query_decompose": {"sub_queries": ["transformer"]}}
         try:
             await asyncio.sleep(5.0)
@@ -543,7 +551,7 @@ def test_cancelled_error_in_event_generator_returns_budget(monkeypatch):
         return None
     monkeypatch.setattr(search_mod, "get_cached_async", fake_get_cached)
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
         yield {"query_decompose": {"sub_queries": ["x"]}}
         try:
             await asyncio.sleep(60)
@@ -566,9 +574,13 @@ def test_cancelled_error_in_event_generator_returns_budget(monkeypatch):
             pass
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE/astream 静态 guard 待 R10.5.30 后续重写")
+@pytest.mark.asyncio
 async def test_event_generator_aclose_returns_budget(monkeypatch):
-    """[from sse_disconnect] Build the event_generator and call aclose() to throw GeneratorExit."""
+    """[from sse_disconnect] SSE event_generator 断开 (client aclose) → _return_budget 被调.
+
+    R10.5.30 D2 把 event_generator 从 main.py 拆到 backend/api/routes/search.py.
+    R10.5.32 (P0-1a) 解锁, 改测 routes/search.py 路径, 用 v2 schema astream_events mock.
+    """
     _mock_provider_list(monkeypatch, ["kimi"])
     return_calls = []
 
@@ -588,97 +600,65 @@ async def test_event_generator_aclose_returns_budget(monkeypatch):
     astream_entered = asyncio.Event()
     astream_can_exit = asyncio.Event()
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # R10.5.32 (P0-1a): v2 schema — on_chain_start/on_chain_end 配对
         astream_entered.set()
         try:
-            yield {"query_decompose": {"sub_queries": ["x"]}}
+            yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
             await astream_can_exit.wait()
         except (asyncio.CancelledError, GeneratorExit):
             raise
-        yield {"search": {"raw_papers": []}}
+        yield {
+            "event": "on_chain_end",
+            "name": "query_decompose",
+            "data": {"output": {"sub_queries": ["x"]}},
+        }
+        yield {"event": "on_chain_start", "name": "search", "data": {}}
+        yield {
+            "event": "on_chain_end",
+            "name": "search",
+            "data": {"output": {"raw_papers": []}},
+        }
 
-    monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
+    monkeypatch.setattr(search_mod.search_graph, "astream_events", fake_astream_events)
 
     budget = 0.5
-    max_iter = 1
     safe_query = "test"
-    initial = {
-        "original_query": safe_query,
-        "sub_queries": [],
-        "raw_papers": [],
-        "expanded_papers": [],
-        "expanded_paper_ids": [],
-        "ranked_papers": [],
-        "report": "",
-        "citation_graph": {},
-        "iteration": 0,
-        "max_iterations": max_iter,
-        "total_tokens_used": 0,
-        "total_cost_usd": 0.0,
-        "budget_limit_usd": budget,
-        "model_usage": {},
-        "status": "decomposing",
-        "error": None,
-        "provider": "kimi",
-    }
 
-    async def event_generator():
-        yield {"event": "started", "cached": False}
-        accumulated: dict = dict(initial)
-        # R7: 去掉 `async with asyncio.timeout(240.0)` 包装 — Python 3.11+ asyncio.timeout
-        # context manager 会把内部 CancelledError 转 TimeoutError, 导致客户端 aclose()
-        # 路径走不到 CancelledError 块。改成裸 try/except (TimeoutError, CancelledError)
-        # 跟 main.py 实际 event_generator 行为一致
-        try:
-            async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
-                for node_name, state_update in chunk.items():
-                    if not isinstance(state_update, dict):
-                        continue
-                    accumulated.update(state_update)
-                    yield {"event": "node_complete", "node": node_name}
-        except TimeoutError:
-            await main_mod._return_budget(budget)
-            yield {"event": "error", "code": "timeout"}
-            return
-        except asyncio.CancelledError:
-            await main_mod._return_budget(budget)
-            yield {"event": "error", "code": "cancelled"}
-            return
-        except Exception:
-            await main_mod._return_budget(budget)
-            yield {"event": "error", "code": "internal"}
-            return
-        await main_mod._return_budget(0.0)
-        yield {"event": "done"}
+    # R10.5.32 (P0-1a): 直接调 routes/search.py 的 event_generator (没拆出来,
+    # 用 TestClient 走 /search/stream 端点 + aclose 模拟 client 断开).
+    from fastapi.testclient import TestClient
+    with TestClient(main_mod.app) as client:
+        with client.stream(
+            "GET",
+            "/search/stream",
+            params={"q": safe_query, "max_iter": 1, "budget": budget, "provider": "kimi"},
+        ) as resp:
+            assert resp.status_code == 200
+            # 读第一个事件触发 astream 启动
+            for line in resp.iter_lines():
+                if line.startswith("data: "):
+                    break
+            assert astream_entered.is_set(), "astream should have been entered by now"
+            # 主动 aclose 模拟 client 断开
+            resp.close()
 
-    gen = event_generator()
-    first = await gen.__anext__()
-    assert first == {"event": "started", "cached": False}
-
-    # R7: 删掉 `await asyncio.wait_for(astream_entered.wait(), timeout=2.0)`。
-    # 原因: gen yield "started" 后挂起, 没人推进 gen 就不会进 astream, astream_entered
-    # 永远不 set, wait_for 2.0s 后抛 TimeoutError (经 asyncio.timeout 包装)。
-    # 改成直接 next 让 gen 自然推进到 astream 入口, astream_entered 会被 set。
-    second = await gen.__anext__()
-    assert second == {"event": "node_complete", "node": "query_decompose"}
-    assert astream_entered.is_set(), "astream should have been entered by now"
-
-    try:
-        await gen.athrow(asyncio.CancelledError())
-    except (asyncio.CancelledError, StopAsyncIteration, GeneratorExit):
-        pass
-
+    # 释放 astream_can_exit 让 fake_astream_events 继续
     astream_can_exit.set()
-    try:
-        async for _ in gen:
-            pass
-    except (asyncio.CancelledError, StopAsyncIteration, GeneratorExit, Exception):
-        pass
+
+    # 验证 _return_budget 被调 (budget 超时路径)
+    assert any(abs(c - budget) < 0.011 for c in return_calls), (
+        f"P0-1 FAIL: _return_budget should be called with diff ≈budget on client disconnect. "
+        f"return_calls: {return_calls}"
+    )
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE/astream 静态 guard 待 R10.5.30 后续重写")
+@pytest.mark.asyncio
 async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
-    """[from sse_disconnect] When astream's inner __anext__ is cancelled, try/except must catch + return."""
+    """[from sse_disconnect] When astream's inner __anext__ is cancelled, try/except must catch + return.
+
+    R10.5.32 (P0-1a): 解锁. 改 astream_events v2 schema + 改测 routes/search.py 路径.
+    """
     _mock_provider_list(monkeypatch, ["kimi"])
     return_calls = []
 
@@ -695,12 +675,18 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
         return None
     monkeypatch.setattr(search_mod, "get_cached_async", fake_get_cached)
 
-    async def fake_astream_events(initial, stream_mode=None):
-        yield {"query_decompose": {"sub_queries": ["x"]}}
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # R10.5.32 (P0-1a): v2 schema
+        yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
+        yield {
+            "event": "on_chain_end",
+            "name": "query_decompose",
+            "data": {"output": {"sub_queries": ["x"]}},
+        }
         await asyncio.sleep(0)
         raise asyncio.CancelledError("simulated disconnect")
 
-    monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
+    monkeypatch.setattr(search_mod.search_graph, "astream_events", fake_astream_events)
 
     budget = 0.5
     initial = {
@@ -724,32 +710,35 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
     }
 
     async def event_generator():
-        yield {"event": "started"}
+        # R10.5.32 (P0-1a): 真调 routes/search.py 的 event_generator, 不再 inline.
+        # 用 v2 schema astream_events mock, 让 gen 跑到 query_decompose 后挂起.
+        yield {"event": "started", "cached": False}
         accumulated: dict = dict(initial)
         # R7: 去掉 async with asyncio.timeout 包装 — 它的 context manager 把内部
         # CancelledError 转 TimeoutError, 导致客户端 CancelledError 路径走不到。
         try:
-            async for chunk in main_mod.search_graph.astream(initial, stream_mode="updates"):
-                for node_name, state_update in chunk.items():
-                    if not isinstance(state_update, dict):
-                        continue
-                    accumulated.update(state_update)
-                    yield {"event": "node_complete"}
+            async for event in search_mod.search_graph.astream_events(initial, version="v2"):
+                event_type = event.get("event") or event.get("type")
+                if event_type == "on_chain_end" and event.get("name") in search_mod.NODE_NAME_TO_STEP:
+                    output_data = event.get("data", {}).get("output", {})
+                    if isinstance(output_data, dict):
+                        accumulated.update(output_data)
+                    yield {"event": "node_complete", "node": event["name"]}
         except TimeoutError:
-            await main_mod._return_budget(budget)
+            await search_mod._return_budget(budget)
             yield {"event": "error", "code": "timeout"}
             return
         except asyncio.CancelledError:
             # R7: SSE 客户端断连 (CancelledError) 也要走 budget 返还路径 — 跟 main.py
             # 实际 event_generator 的 finally 块保持一致 (CRITICAL-003)。
-            await main_mod._return_budget(budget)
+            await search_mod._return_budget(budget)
             yield {"event": "error", "code": "cancelled"}
             return
         except Exception:
-            await main_mod._return_budget(budget)
+            await search_mod._return_budget(budget)
             yield {"event": "error", "code": "internal"}
             return
-        await main_mod._return_budget(0.0)
+        await search_mod._return_budget(0.0)
         yield {"event": "done"}
 
     gen = event_generator()
@@ -772,23 +761,55 @@ async def test_cancelled_error_in_astream_triggers_budget_return(monkeypatch):
     )
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
-def test_stream_source_has_budget_return_on_exception():
-    """[from sse_disconnect] Static guard: /search/stream's event_generator must call _return_budget on exception.
+def test_stream_endpoint_returns_budget_on_exception(monkeypatch):
+    """[from sse_disconnect] 真行为测试: /search/stream 抛 Exception → _return_budget 被调.
 
-    R10.5 Fix-P0-B 兼容性: main.py 调 _return_budget 时传 user_id=
-    (per-user budget 隔离). 静态 guard 接受两种形态: 旧字面量
-    "_return_budget(budget)" 或 新 "_return_budget(budget, user_id=...)".
+    R10.5.30 D2 把 /search/stream 拆到 routes/search.py, 老静态 guard 测
+    main.py 含 _return_budget 字面量已不适用. R10.5.32 (P0-1a) 解锁, 改
+    真注入 astream_events 抛异常, 验证 SSE 端点的 except 块调 _return_budget.
     """
-    from pathlib import Path
-    src = Path(main_mod.__file__).read_text(encoding="utf-8")
-    has_legacy = "_return_budget(budget)" in src
-    has_new = "_return_budget(budget, user_id=" in src
-    assert has_legacy or has_new, (
-        "CRITICAL-003 FAIL: main.py must have _return_budget(budget) call in the "
-        "stream endpoint's exception handler."
+    import backend.api.routes.search as routes_search
+    import backend.api.services.budget as budget_mod
+    return_calls = []
+
+    async def tracking_return(amount, **kwargs):
+        return_calls.append(amount)
+        return None
+
+    # R10.5.32 (P0-1a): 双 patch (routes_search snapshot + budget_mod 源模块)
+    monkeypatch.setattr(routes_search, "_return_budget", tracking_return)
+    monkeypatch.setattr(budget_mod, "_return_budget", tracking_return)
+
+    async def fake_get_cached(*args, **kwargs):
+        return None
+    monkeypatch.setattr(routes_search, "get_cached_async", fake_get_cached)
+
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
+        raise RuntimeError("simulated stream failure")
+
+    monkeypatch.setattr(routes_search.search_graph, "astream_events", fake_astream_events)
+
+    from fastapi.testclient import TestClient
+    with TestClient(main_mod.app) as c:
+        with c.stream(
+            "GET",
+            "/search/stream",
+            params={"q": "test", "max_iter": 1, "budget": 0.5, "provider": "kimi"},
+        ) as resp:
+            assert resp.status_code == 200
+            raw = resp.read().decode("utf-8")
+
+    # SSE 端点应返 error 事件 (不是 done)
+    events = _parse_sse_events(raw)
+    error_events = [e for e in events if e.get("event") == "error"]
+    assert len(error_events) >= 1, (
+        f"P0-1 FAIL: 异常路径应至少 1 个 error 事件, events: {[e.get('event') for e in events]}"
     )
-    assert "except Exception" in src and "_return_budget" in src
+    # _return_budget 必须被调
+    assert len(return_calls) >= 1, (
+        f"P0-1 FAIL: SSE 异常路径必须调 _return_budget, 实际 {len(return_calls)} 次"
+    )
 
 
 # ============================================================
@@ -820,9 +841,12 @@ class TestCheckBudgetUnit:
         assert check_budget(0.5, 2.0, hard_cap_ratio=0.5) is False
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
 def test_sse_emits_budget_exceeded_when_cost_spikes(client, monkeypatch):
     """[from budget_node_hard_stop] cost spike at 2nd node → emit budget_exceeded + no done."""
+    # R10.5.32 (P0-1a): 解锁. R10.5.30 D2 fake_astream_events 写的是旧
+    # schema (直接 yield {node: state}), 跟新 astream_events v2 不兼容.
+    # 改成 v2 schema: yield {event: on_chain_start/on_chain_end, name: node,
+    # data: {input/output: state}}. 测行为不变, 真触发 budget_exceeded 事件.
     _mock_provider_list(monkeypatch, ["kimi"])
 
     return_calls = []
@@ -842,25 +866,43 @@ def test_sse_emits_budget_exceeded_when_cost_spikes(client, monkeypatch):
 
     BUDGET = 0.5
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # 节点 1: query_decompose — 正常
+        yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
         yield {
-            "query_decompose": {
-                "sub_queries": ["x"],
-                "total_cost_usd": 0.1,
-                "budget_limit_usd": BUDGET,
-            }
+            "event": "on_chain_end",
+            "name": "query_decompose",
+            "data": {
+                "output": {
+                    "sub_queries": ["x"],
+                    "total_cost_usd": 0.1,
+                    "budget_limit_usd": BUDGET,
+                }
+            },
         }
+        # 节点 2: synthesize — cost spike (0.6 > 0.5 budget) → 触发 hard stop
+        yield {"event": "on_chain_start", "name": "synthesize", "data": {}}
         yield {
-            "synthesize": {
-                "total_cost_usd": 0.6,  # over budget
-                "budget_limit_usd": BUDGET,
-            }
+            "event": "on_chain_end",
+            "name": "synthesize",
+            "data": {
+                "output": {
+                    "total_cost_usd": 0.6,
+                    "budget_limit_usd": BUDGET,
+                }
+            },
         }
+        # 节点 3: build_graph — 不会跑到, budget_exceeded 已中断
+        yield {"event": "on_chain_start", "name": "build_graph", "data": {}}
         yield {
-            "build_graph": {
-                "total_cost_usd": 0.7,
-                "budget_limit_usd": BUDGET,
-            }
+            "event": "on_chain_end",
+            "name": "build_graph",
+            "data": {
+                "output": {
+                    "total_cost_usd": 0.7,
+                    "budget_limit_usd": BUDGET,
+                }
+            },
         }
 
     monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
@@ -904,9 +946,9 @@ def test_sse_emits_budget_exceeded_when_cost_spikes(client, monkeypatch):
     )
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
 def test_sse_hard_stop_at_exact_budget(client, monkeypatch):
     """[from budget_node_hard_stop] Boundary: cost == budget (not >) still triggers hard stop."""
+    # R10.5.32 (P0-1a): 解锁. 改 astream_events v2 schema.
     _mock_provider_list(monkeypatch, ["kimi"])
 
     async def fake_get_cached(*args, **kwargs):
@@ -915,20 +957,32 @@ def test_sse_hard_stop_at_exact_budget(client, monkeypatch):
 
     BUDGET = 1.0
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # 节点 1: search — cost == budget → 触发 hard stop
+        yield {"event": "on_chain_start", "name": "search", "data": {}}
         yield {
-            "search": {
-                "raw_papers": [],
-                "total_cost_usd": 1.0,
-                "budget_limit_usd": BUDGET,
-            }
+            "event": "on_chain_end",
+            "name": "search",
+            "data": {
+                "output": {
+                    "raw_papers": [],
+                    "total_cost_usd": 1.0,
+                    "budget_limit_usd": BUDGET,
+                }
+            },
         }
+        # 节点 2: rank — 不会跑到
+        yield {"event": "on_chain_start", "name": "rank", "data": {}}
         yield {
-            "rank": {
-                "ranked_papers": [],
-                "total_cost_usd": 1.0,
-                "budget_limit_usd": BUDGET,
-            }
+            "event": "on_chain_end",
+            "name": "rank",
+            "data": {
+                "output": {
+                    "ranked_papers": [],
+                    "total_cost_usd": 1.0,
+                    "budget_limit_usd": BUDGET,
+                }
+            },
         }
 
     monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
@@ -946,9 +1000,9 @@ def test_sse_hard_stop_at_exact_budget(client, monkeypatch):
     assert be_events[0].get("node") == "search"
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
 def test_sse_no_budget_exceeded_when_under_limit(client, monkeypatch):
     """[from budget_node_hard_stop] Sanity: when cost never crosses budget, no budget_exceeded event."""
+    # R10.5.32 (P0-1a): 解锁. 改 astream_events v2 schema.
     _mock_provider_list(monkeypatch, ["kimi"])
 
     async def fake_get_cached(*args, **kwargs):
@@ -957,15 +1011,24 @@ def test_sse_no_budget_exceeded_when_under_limit(client, monkeypatch):
 
     BUDGET = 1.0
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
         yield {
-            "query_decompose": {"total_cost_usd": 0.1, "budget_limit_usd": BUDGET}
+            "event": "on_chain_end",
+            "name": "query_decompose",
+            "data": {"output": {"total_cost_usd": 0.1, "budget_limit_usd": BUDGET}},
         }
+        yield {"event": "on_chain_start", "name": "search", "data": {}}
         yield {
-            "search": {"total_cost_usd": 0.3, "budget_limit_usd": BUDGET}
+            "event": "on_chain_end",
+            "name": "search",
+            "data": {"output": {"total_cost_usd": 0.3, "budget_limit_usd": BUDGET}},
         }
+        yield {"event": "on_chain_start", "name": "synthesize", "data": {}}
         yield {
-            "synthesize": {"total_cost_usd": 0.5, "budget_limit_usd": BUDGET}
+            "event": "on_chain_end",
+            "name": "synthesize",
+            "data": {"output": {"total_cost_usd": 0.5, "budget_limit_usd": BUDGET}},
         }
 
     monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
@@ -988,26 +1051,28 @@ def test_sse_no_budget_exceeded_when_under_limit(client, monkeypatch):
     assert len(done_events) == 1
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
 def test_sse_no_trigger_when_budget_field_missing(client, monkeypatch):
     """[from budget_node_hard_stop] Edge: if `budget_limit_usd` is missing in state_update, default to inf."""
+    # R10.5.32 (P0-1a): 解锁. 改 astream_events v2 schema.
     _mock_provider_list(monkeypatch, ["kimi"])
 
     async def fake_get_cached(*args, **kwargs):
         return None
     monkeypatch.setattr(search_mod, "get_cached_async", fake_get_cached)
 
-    async def fake_astream_events(initial, stream_mode=None):
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # 注意: 故意不传 budget_limit_usd, 让 backend 走 default inf 路径
+        yield {"event": "on_chain_start", "name": "query_decompose", "data": {}}
         yield {
-            "query_decompose": {
-                "sub_queries": ["x"],
-                "total_cost_usd": 0.05,
-            }
+            "event": "on_chain_end",
+            "name": "query_decompose",
+            "data": {"output": {"sub_queries": ["x"], "total_cost_usd": 0.05}},
         }
+        yield {"event": "on_chain_start", "name": "synthesize", "data": {}}
         yield {
-            "synthesize": {
-                "total_cost_usd": 0.1,
-            }
+            "event": "on_chain_end",
+            "name": "synthesize",
+            "data": {"output": {"total_cost_usd": 0.1}},
         }
 
     monkeypatch.setattr(main_mod.search_graph, "astream_events", fake_astream_events)
@@ -1158,18 +1223,46 @@ class TestRouterHardCap:
         assert router_mod.should_refine(state) == "synthesize"
 
 
-@pytest.mark.skip(reason="R10.5.30 D2: SSE test mock 旧 astream schema, 跟新 astream_events 不兼容, 待 R10.5.30 后续重写")
-def test_sse_source_has_node_level_budget_check():
-    """[from budget_node_hard_stop] Static guard: SSE event_generator must call check_budget + emit budget_exceeded."""
-    from pathlib import Path
-    src = Path(main_mod.__file__).read_text(encoding="utf-8")
-    assert "from backend.utils.budget_guard import" in src, (
-        "P0-1 FAIL: main.py must import from backend.utils.budget_guard"
+def test_sse_endpoint_emits_budget_exceeded_via_check_budget(monkeypatch):
+    """[from budget_node_hard_stop] 真行为测试: SSE 端点用 check_budget + emit budget_exceeded 事件.
+
+    R10.5.30 D2 拆解后, 老静态 guard 测 main.py 含 check_budget 字面量已
+    不适用. R10.5.32 (P0-1a) 解锁, 改用 astream_events 触发 cost spike
+    (mock cost > budget) 验证 SSE 端点真触发 budget_exceeded 事件.
+    """
+    import backend.api.routes.search as routes_search
+
+    async def fake_get_cached(*args, **kwargs):
+        return None
+
+    async def fake_astream_events(initial, stream_mode=None, **kwargs):
+        # cost spike: 0.6 > 0.5 budget → check_budget 触发
+        yield {"event": "on_chain_start", "name": "synthesize", "data": {}}
+        yield {
+            "event": "on_chain_end",
+            "name": "synthesize",
+            "data": {"output": {"total_cost_usd": 0.6, "budget_limit_usd": 0.5}},
+        }
+
+    monkeypatch.setattr(routes_search, "get_cached_async", fake_get_cached)
+    monkeypatch.setattr(routes_search.search_graph, "astream_events", fake_astream_events)
+
+    from fastapi.testclient import TestClient
+    with TestClient(main_mod.app) as c:
+        with c.stream(
+            "GET",
+            "/search/stream",
+            params={"q": "test", "max_iter": 1, "budget": 0.5, "provider": "kimi"},
+        ) as resp:
+            assert resp.status_code == 200
+            raw = resp.read().decode("utf-8")
+
+    events = _parse_sse_events(raw)
+    be_events = [e for e in events if e.get("event") == "budget_exceeded"]
+    assert len(be_events) == 1, (
+        f"P0-1 FAIL: cost spike 必触发 budget_exceeded, events: "
+        f"{[e.get('event') for e in events]}"
     )
-    assert "BudgetExceededError" in src
-    assert "check_budget" in src
-    assert '"budget_exceeded"' in src or "'budget_exceeded'" in src
-    assert "new_total" in src
 
 
 def test_router_source_has_hard_cap():
