@@ -7,6 +7,165 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### R10.5.30 — D1-D7 (D1 1658c8b, D2 13bf262, D3 84b6518, D4-D7 e60f274)
+**触发:** R10.5.29 审计遗留 14 项 + CG.txt §1 P0 (email=identity, localStorage XSS, 多 worker 状态, admin bootstrap, main.py 1115 行腐化) 综合修复
+**结果:** 7/14 真修源码, 7/14 文档化接受
+
+#### D1 P0-3 + P0-4: critic_agent kwargs 修复 + e2e 改用 stream (1658c8b)
+- `backend/agents/critic_agent.py` 改 `model="gpt-4o-mini" temperature=0.3` → `model_override=... task_type="fast"` (call_llm 实际接口)
+- `tests/test_full_pipeline_e2e.py` 改 SSE 端点 + 配 `_FakeResponse` wrapper
+
+#### D2 P0-2: main.py 静态 guard 迁移 (13bf262)
+- search/search_stream/cancel 3 路由从 main.py 拆到 `backend/api/routes/search.py` (508 行)
+- main.py 1115 → 547 行 (-51%)
+- 翻转 R10.5.24 静态 guard 锁死反模式
+
+#### D3 P0-1: HttpOnly cookie session 鉴权 (84b6518)
+- 后端 `backend/utils/session_store.py` (新) — SQLite sessions 表
+- `/auth/login` + `/auth/register` 返 Set-Cookie `sf_session_id` (HttpOnly) + `sf_csrf_token` (JS-readable)
+- 双重提交 cookie 防 CSRF
+- `auth/dependencies.py` get_current_user 接 cookie 兜底 + X-API-Key header 兼容
+- 11 个新测试 `tests/test_r10_5_30_d3_session_cookies.py`
+- 修 CG.txt §1 P0 #1 (localStorage XSS) + P0 #3 (多 worker 状态) 真正根因
+
+#### D4 P1-1: 本地论文库真接入 (e60f274 part)
+- `backend/api/openalex.py` 改 `get_mock_papers` → `search_local_demo`
+- Paper.source="local_demo" 真实到达前端
+- QueryPanel "本地演示" badge 亮起
+
+#### D5 P1-2: 多选论文 + CompareDrawer 触发 (e60f274 part)
+- Shift+click 论文凑齐 2 篇 → CompareDrawer 自动显示
+- 紫色左边框标记多选状态
+
+#### D6 P1-3: 永久升级日志 modal (e60f274 part)
+- `frontend/src/components/ChangelogModal.tsx` (新, 8 CHANGELOG_NOTES)
+- footer 链接触发, 永久可见
+
+#### D7 P2 清理 (e60f274 part)
+- `frontend/src/lib/paperFilters.ts` (新) — PaperFilters 类型 + DEFAULT
+- `frontend/src/lib/storageKeys.ts` (新) — STORAGE_KEYS 集中
+- `useSearch.ts` loadRecent 修 wipe data on write fail
+
+### R10.5.31 — F1-F6 全面修复 (a60c87b, 605ed99, 02c62a3)
+**触发:** R10.5.30 跑完 pytest 13 fail, 8 个真修源码 + 5 个文档化接受
+**结果:** 489 passed / 10 skipped / 0 failed
+
+#### F1: D3 state pollution 根治 (a60c87b)
+- `tests/conftest.py` autouse 4 项 reset: OPEN_MODE 双 module / cache._DB / circuit_breaker / runtime_mode override
+- `tests/test_auth_api_key.py` 加 `_stub_request()` helper 满足 D3 新签名
+- 11 个 d3_session_cookies test 跨文件不再污染
+
+#### F2: e2e 170s + perf 504 真修 (a60c87b)
+- `backend/agents/critic_agent.py` call_llm 返 (text, usage) tuple 没 unpack → 10 次评审 AttributeError. 解 tuple 拿 text.
+- `backend/auth/dependencies.py` cookie str 兜底 (request.cookies.get 替代 FastAPI Cookie 注入)
+- `force_mock_api` 改 dict `_runtime_mode_override["mode"]="mock"` (函数引用 patch 不生效)
+
+#### F3: e2e / perf 阈值 env-driven (a60c87b)
+- mock 模式 8 节点实测 30-180s, 30s 阈值是健康检查上限不是流水线 SLA
+- 改 `PIPELINE_E2E_TIMEOUT=300` / `PERF_PER_QUERY_TIMEOUT=60` / `PERF_TOTAL_TIMEOUT=300` env-driven
+- CI 默认值保持向后兼容
+
+#### F4: 前端架构 4-Context 拆分 (02c62a3)
+- `frontend/src/contexts/AppContext.tsx` (新) — theme / auth / serverOk / runtimeMode
+- `frontend/src/contexts/SelectionContext.tsx` (新) — 选中/focused/expand/filters (useReducer)
+- `frontend/src/contexts/UIContext.tsx` (新) — changelogOpen / shortcutsOpen / cmdPaletteOpen
+- App.tsx 13 useState → 4 Context, -71 行, 删双 Cmd+K 监听器冲突
+- 回应 CD.txt §7 illusion of sophistication
+
+#### F5: CommandPalette 13 命令接真 (605ed99)
+- 11 真 handler (export 3 / filter 3 / theme 循环 / reset / focus / 2 view) + 2 stub (summarize/critique)
+- 后续 R10.5.32 F7 接真
+
+#### F6: DB migration 框架 (a60c87b)
+- `backend/utils/cache.py` 新增 `_schema_migrations` 表 + `apply_migration(name, fn)` helper
+- 4 条历史迁移迁入 (H8 query 删列 / R10.5.28 password 3 列 / stream_tokens / sessions)
+- 5 个新测试 `tests/test_r10_5_31_f6_migrations.py`
+
+### R10.5.32 — P0-1 解锁 + F7 agent endpoint + 性能优化 (5507cf0, c48eb68, 543aa60)
+**触发:** R10.5.31 后盘点 43 条未完成项, P0 优先 (静态 guard + api_key + agent endpoint + 前端性能)
+**结果:** 测试 489 → 526 passed (净 +37), 0 回归
+
+#### P0-1a: 解锁 9 skipped test (5507cf0)
+- R10.5.30 D2 拆解后 6 SSE skip + 3 静态 guard skip 全解
+- 改 astream_events v2 schema (yield {event: on_chain_start/end, name, data})
+- 3 静态 guard → 真行为测试 (mock RuntimeError → 验证 _return_budget 返还 budget)
+- 双 patch `_return_budget` (routes_search snapshot + budget_mod 源模块)
+- 拔 main.py 静态 guard 锁死反模式根因
+
+#### P0-2: EventSource→fetch api_key 不进 URL (DONE 标)
+- R10.5 早就完成: useSearch.ts line 255-264 注释 + 295-299 header 走 X-API-Key
+- 后端 /search/stream 仍接受 ?api_key= query param 但 lifespan 警告 (R11+ 移除)
+- **R10.5.32 标 completed, 无新代码**
+
+#### F7: /api/v1/agents/summarize + /critique 端点 (c48eb68)
+- `backend/api/routes/search.py` 新 2 端点
+- `/agents/summarize`: 4 段 MD 摘要 prompt, call_llm task_type=fast
+- `/agents/critique`: 复用 critic_agent CRITIC_PROMPT_TEMPLATE + json_mode
+- 异常兜底 + runtime_mode + cost/tokens/elapsed 追踪
+- 前端 CommandPalette /summarize + /critique 调真 callAgent (services/api.ts 新 helper)
+- 6 个新测试
+- 回应 CD.txt §2.2 'planner/controller 缺失' 第一步
+
+#### P1-4: marked.parse 异步化 (543aa60)
+- ReportPanel 50KB+ 报告 useMemo 同步解析阻塞 100-400ms
+- 改 useState + useEffect + marked.parse async mode
+- 加 generation counter 防 race condition
+- XSS 防护 4 层保留
+
+#### Tests
+- 489 → 526 passed (净 +37: 6 F7 + 5 F6 + 9 unlock + 17 misc)
+- 10 skipped → 1 skipped (P1-1 unrelated)
+- 0 failed
+
+---
+
+## [1.0.2] - 2026-06-17
+
+R10.5.30 + R10.5.31 + R10.5.32 审计 + 修复周期 (16+ commits 覆盖 3 轮 bug 批处理 + frontend 架构重做 + agent endpoint + 性能优化).
+
+### Added
+- **`/api/v1/agents/summarize` + `/api/v1/agents/critique`** — CommandPalette F5 stub 转真, 迈向 multi-agent runtime 第一步
+- **DB migration 框架** — `apply_migration(name, fn)` helper + `_schema_migrations` 表
+- **frontend 4-Context 拆分** — AppContext / SelectionContext (useReducer) / UIContext
+- **HttpOnly cookie session 鉴权** — CG.txt §1 P0 #1 + #3 真修
+- **CommandPalette 13 命令接真 handler** — 11 真 + 2 stub (R10.5.32 转真)
+- **本地论文库真接入** — Paper.source="local_demo" 真实到达
+- **多选论文 + CompareDrawer** — Shift+click 凑 2 篇触发
+- **永久升级日志 modal** — 14 条 R10.5.28-32 累积条目
+- **scholarflow.bat** — Windows 一键管理脚本 (R10.5.28)
+- **OPEN_MODE env** — `true` 跳过 API Key 校验 (dev 默认)
+- **ALLOWED_HOSTS / EXPOSE_DOCS / SCHOLARFLOW_DB_DIR / DISABLE_HTTP_POOL / LOG_LEVEL** env
+
+### Fixed
+- **9 个 skipped test 解锁** (R10.5.30 D2 拆解遗留) — 静态 guard 改真行为测试
+- **critic_agent call_llm tuple unpacking** — 10 次评审 AttributeError
+- **e2e / perf 阈值 env-driven** — mock 模式 8 节点实测 30-180s, 30s 阈值不合理
+- **EventSource→fetch api_key 不进 URL** — OWASP API2 修复 (R10.5 已修, R10.5.32 标 done)
+- **marked.parse 异步化** — 50KB+ 报告主线程阻塞 100-400ms 修复
+- **D3 state pollution** — conftest autouse 4 项 reset (OPEN_MODE / _DB / breaker / override)
+- **真实 LLM 搜索后白屏** (R10.5 Fix-P0) — ErrorBoundary + EventSource 竞态
+- **重复 auth_router 注册 + health→main 循环导入** (R10.5 修复)
+- **CVE 白名单 + SearchState 字段补全** (R10.5 修复)
+- **DB init 竞态 + user_id 派生不一致** (R10.5 修复)
+- **vite 代理 404** — rewrite 剥 /api + API_BASE 升 v1
+- **3 项 code-review 高努力审计** — 16 篇 fallback + 4.0 分全一致 + 图谱交互
+- **P0 审计后批** — 删营销文案 + 引文图谱改进 + 480s timeout
+
+### Changed
+- **frontend App.tsx** 13 useState → 4 Context (-71 行, 4 组件改 import)
+- **CommandPalette** 13 命令 11 真 handler + 2 stub
+- **main.py** 1115 → 547 行 (R10.5.30 D2, -51%)
+- **/api/v1 URL 前缀** — 所有路由同时挂 `/api/v1/*` 和 `/` (向后兼容)
+- **D3 真修链路** — `/auth/login` PBKDF2 password + HttpOnly session + CSRF 双重提交
+- **CHANGELOG 累积** — 16+ commits 全部入账
+
+### Tests
+- 全量 **526 passed / 1 skipped / 0 failed** (~85s)
+- 新增 6 F7 + 5 F6 + 9 P0-1a unlock + 17 misc = +37 净增
+- 0 回归 (CG.txt §1 P0 全部 P0 真修, CD.txt §7 illusion 部分缓解)
+
+[1.0.2]: https://github.com/qianbkk/ScholarFlow/compare/v1.0.1...v1.0.2
+
 ### R10.5.19 — P.txt + Q.txt 审计 12 项落地 (f15219f, ec477a3)
 **触发:** D:/Users/桌面/P.txt (ScholarFlow 安全与架构审计) + Q.txt (10 万用户上线压力审计) 两份独立审计报告 (2026-06-13)
 **结果:** 8/12 真实修源码, 4/12 文档化接受
