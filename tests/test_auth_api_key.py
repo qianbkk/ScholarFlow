@@ -148,6 +148,19 @@ class TestIssueKeyForEmail:
 
 # ===== get_current_user =====
 
+def _stub_request():
+    """R10.5.31 (F1): 构造最小 Starlette Request, 给直接调 get_current_user() 用.
+
+    D3 commit 84b6518 把 get_current_user 签名改成
+    (request: Request, x_api_key: Header, sf_session_id: Cookie) — request
+    成了第一个必填位置参数. 旧 4 个 case 仍按旧签名调 → TypeError
+    missing 'request'. 这里 mock 一个空 scope 的 Request, 满足类型签名但不
+    真正走 ASGI 栈 (认证分支只看 header / cookie, 不读 request body).
+    """
+    from starlette.requests import Request
+    return Request(scope={"type": "http", "headers": []})
+
+
 class TestGetCurrentUser:
     @pytest.mark.asyncio
     async def test_open_mode_returns_dev_user(self, monkeypatch):
@@ -155,7 +168,7 @@ class TestGetCurrentUser:
         from backend.auth import dependencies
         monkeypatch.setattr(dependencies, "OPEN_MODE", True)
         # 即使没 header, 返 dev-user
-        user = await get_current_user(x_api_key=None)
+        user = await get_current_user(request=_stub_request(), x_api_key=None)
         assert user.user_id == "dev-user"
         assert user.is_dev_user is True
 
@@ -165,7 +178,7 @@ class TestGetCurrentUser:
         from backend.auth import dependencies
         monkeypatch.setattr(dependencies, "OPEN_MODE", False)
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(x_api_key=None)
+            await get_current_user(request=_stub_request(), x_api_key=None)
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -179,7 +192,7 @@ class TestGetCurrentUser:
         monkeypatch.setattr(dependencies, "OPEN_MODE", False)
 
         with pytest.raises(HTTPException) as exc_info:
-            await get_current_user(x_api_key="sf_invalid_xxx")
+            await get_current_user(request=_stub_request(), x_api_key="sf_invalid_xxx")
         assert exc_info.value.status_code == 401
 
     @pytest.mark.asyncio
@@ -193,7 +206,7 @@ class TestGetCurrentUser:
         monkeypatch.setattr(dependencies, "OPEN_MODE", False)
 
         _, raw_key = _register_user(display_name="Prod Test")
-        user = await get_current_user(x_api_key=raw_key)
+        user = await get_current_user(request=_stub_request(), x_api_key=raw_key)
         assert user.is_dev_user is False
         assert user.display_name == "Prod Test"
 

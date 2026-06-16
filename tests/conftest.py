@@ -125,6 +125,64 @@ def _reset_global_state(request):
                 auth_deps.ADMIN_USER_IDS = frozenset({"dev-user"})
         except (ImportError, AttributeError):
             pass
+        # R10.5.31 (F1): D3 commit 84b6518 在 backend.auth.dependencies 跟
+        # backend.api.routes.auth 各放了一份模块级 OPEN_MODE (后者是
+        # `from backend.auth.dependencies import OPEN_MODE` 的 snapshot copy),
+        # 旧 reset 没覆盖这俩 → D3 test 改 OPEN_MODE=False 后, 状态泄露到
+        # 后续 test_auth_api_key / e2e / perf → 14 个 fail. 强制 reset 回
+        # conftest.py:31 setdefault 的 env 默认值 (True, dev mode).
+        try:
+            from backend.auth import dependencies as _auth_deps_reset
+            from backend.api.routes import auth as _auth_routes_reset
+            _auth_deps_reset.OPEN_MODE = True
+            _auth_routes_reset.OPEN_MODE = True
+        except (ImportError, AttributeError):
+            pass
+        # R10.5.31 (F1): tests 用 tmp_path 切 _DB, 跨 test 残留会让后续
+        # test 写到旧 path → 'no such table' 或数据串味. reset 回默认
+        # cache.sqlite + 清 _DB_INITIALIZED, 让 _init_db_once() 重新走.
+        try:
+            from backend.utils import cache as _cache_reset
+            _cache_reset._DB = _cache_reset._DB_PATHS["cache"]
+            _cache_reset._DB_INITIALIZED = False
+            _cache_reset._DB_INITIALIZED_PATH = None
+        except (ImportError, AttributeError):
+            pass
+        # R10.5.31 (F2): circuit breaker 是模块级单例 (ss_breaker / oa_breaker),
+        # OPEN 状态跨 test 残留会让后续 e2e / perf test 第一个 query 立即
+        # 降级 mock → 论文数 0 触发断言或 504 timeout. 强制 reset 到 CLOSED.
+        try:
+            from backend.utils import runtime_mode as _rt_reset
+            _rt_reset._runtime_mode_override = {"mode": "auto"}
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.utils import circuit_breaker as _cb_reset
+            for _breaker_name in ("ss_breaker", "oa_breaker"):
+                _breaker = getattr(_cb_reset, _breaker_name, None)
+                if _breaker is None:
+                    continue
+                # 兼容两种 API: 内部属性 _state/_failures 或公开 state/failures
+                for _attr in ("_state", "state"):
+                    if hasattr(_breaker, _attr):
+                        setattr(_breaker, _attr, getattr(_cb_reset, "CircuitState", type("S", (), {"CLOSED": "CLOSED"})).CLOSED if hasattr(_cb_reset, "CircuitState") else "CLOSED")
+                        break
+                for _attr in ("_failures", "_failure_count", "failures"):
+                    if hasattr(_breaker, _attr):
+                        try:
+                            setattr(_breaker, _attr, 0)
+                        except (AttributeError, TypeError):
+                            pass
+                        break
+                for _attr in ("_opened_at", "opened_at"):
+                    if hasattr(_breaker, _attr):
+                        try:
+                            setattr(_breaker, _attr, 0.0)
+                        except (AttributeError, TypeError):
+                            pass
+                        break
+        except (ImportError, AttributeError):
+            pass
     except (ImportError, AttributeError):
         pass
 
@@ -155,6 +213,56 @@ def _reset_global_state(request):
                 log_throttle._THROTTLES.clear()
         except (ImportError, AttributeError):
             pass
+        # R10.5.31 (F1+F2): 跟 setup 段同步 reset OPEN_MODE / _DB / breaker,
+        # 避免最后一个 test 跑完留的脏状态污染 (D3 state pollution 根因).
+        try:
+            from backend.auth import dependencies as _auth_deps_teardown
+            from backend.api.routes import auth as _auth_routes_teardown
+            _auth_deps_teardown.OPEN_MODE = True
+            _auth_routes_teardown.OPEN_MODE = True
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.utils import runtime_mode as _rt_teardown
+            _rt_teardown._runtime_mode_override = {"mode": "auto"}
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.utils import cache as _cache_teardown
+            _cache_teardown._DB = _cache_teardown._DB_PATHS["cache"]
+            _cache_teardown._DB_INITIALIZED = False
+            _cache_teardown._DB_INITIALIZED_PATH = None
+        except (ImportError, AttributeError):
+            pass
+        try:
+            from backend.utils import circuit_breaker as _cb_teardown
+            for _breaker_name in ("ss_breaker", "oa_breaker"):
+                _breaker = getattr(_cb_teardown, _breaker_name, None)
+                if _breaker is None:
+                    continue
+                for _attr in ("_state", "state"):
+                    if hasattr(_breaker, _attr):
+                        try:
+                            setattr(_breaker, _attr, "CLOSED")
+                        except (AttributeError, TypeError):
+                            pass
+                        break
+                for _attr in ("_failures", "_failure_count", "failures"):
+                    if hasattr(_breaker, _attr):
+                        try:
+                            setattr(_breaker, _attr, 0)
+                        except (AttributeError, TypeError):
+                            pass
+                        break
+                for _attr in ("_opened_at", "opened_at"):
+                    if hasattr(_breaker, _attr):
+                        try:
+                            setattr(_breaker, _attr, 0.0)
+                        except (AttributeError, TypeError):
+                            pass
+                        break
+        except (ImportError, AttributeError):
+            pass
     except (ImportError, AttributeError):
         pass
 
@@ -175,14 +283,26 @@ def force_mock_api(monkeypatch):
     We patch both so that whichever module is looked up at call time, the
     mock short-circuit fires — preventing accidental real-LLM traffic when
     a developer happens to have API keys configured locally.
+
+    R10.5.31 (F2): 旧版只 patch 4 个模块级常量, 但 is_runtime_mock() 还
+    读 _runtime_mode_override dict + env. 之前 test 调过
+    set_runtime_mode("real") 把 override 改 real → 当前 test 走真 API
+    → e2e 170s + perf 504. 强 reset override + patch is_runtime_mock
+    函数返 True, 双保险.
     """
     import backend.api.semantic_scholar as ss_mod
     import backend.api.openalex as oa_mod
     import backend.config as cfg_mod
     import backend.utils.llm_client as llm_mod
+    import backend.utils.runtime_mode as rt_mod
 
     monkeypatch.setattr(ss_mod, "API_MOCK", True)
     monkeypatch.setattr(oa_mod, "API_MOCK", True)
     monkeypatch.setattr(cfg_mod, "LLM_MOCK", True)
     monkeypatch.setattr(llm_mod, "LLM_MOCK", True)
+    # R10.5.31 (F2): 双保险 — 重置 override dict 让 is_runtime_mock() 返 True.
+    # 注: ss_mod / oa_mod 顶部 `from backend.utils.runtime_mode import
+    # is_runtime_mock` 拿的是函数引用, monkeypatch rt_mod.is_runtime_mock
+    # 不会同步过去. 改 dict 是唯一对所有 caller 都生效的方式.
+    rt_mod._runtime_mode_override["mode"] = "mock"
     return monkeypatch

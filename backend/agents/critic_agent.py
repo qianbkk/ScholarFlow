@@ -67,7 +67,10 @@ async def critic_review_node(state: SearchState) -> SearchState:
                 query=query
             )
             
-            response_text = await call_llm(
+            # R10.5.31 (F2): call_llm 返 (text, usage) tuple, 旧版直接当 str 用
+            # → line 87 response_text.find('{') 抛 'tuple' has no attribute 'find'.
+            # 解 tuple 拿 text, 用法保持一致.
+            response_text, _usage = await call_llm(
                 prompt=prompt,
                 # D1 (P0-3): 旧版用 model="gpt-4o-mini" + temperature=0.3, 这 2 个
                 # 都是 call_llm() 不接受的 kwarg (call_llm 只接 model_override, 无 temperature),
@@ -79,7 +82,7 @@ async def critic_review_node(state: SearchState) -> SearchState:
                 max_tokens=500,
                 json_mode=True,  # critic 评审需要 JSON 结构化输出
             )
-            
+
             # 解析 JSON 响应
             import json
             try:

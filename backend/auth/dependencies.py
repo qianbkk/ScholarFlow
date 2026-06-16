@@ -206,10 +206,14 @@ async def get_current_user(
             is_dev_user=True,
         )
 
-    if not x_api_key and sf_session_id:
-        # R10.5.30 (D3 P0-1): 兜底 cookie session 鉴权 (CG.txt §1 P1 #4 真修).
-        # 前端可选改用 credentials: 'include' + X-CSRF-Token, 后端走 session.
-        sess_id = sf_session_id
+    if not x_api_key:
+        # R10.5.31 (F1): 显式从 request.cookies 读, 而不是依赖 FastAPI 把
+        # Cookie(default=None) 注入的 str 化. test 跟某些 custom 中间件
+        # 路径下 sf_session_id 可能是 Cookie 对象不是 str, str() 转换失败
+        # → sqlite3.ProgrammingError: type 'Cookie' is not supported.
+        sess_id = request.cookies.get("sf_session_id") or sf_session_id
+        if sess_id and not isinstance(sess_id, str):
+            sess_id = str(sess_id)
         if sess_id:
             from backend.utils.session_store import resolve_session
             sess = resolve_session(sess_id)

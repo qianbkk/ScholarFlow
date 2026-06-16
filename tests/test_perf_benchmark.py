@@ -8,15 +8,20 @@ R10.5.x 优化"效果飘" — 任何 commit 不能让 mock 模式平均耗时退
   - 跑 5 个不同复杂度 query, mock 模式 (LLM_MOCK + API_MOCK)
   - 记录: elapsed_seconds / total_cost_usd / papers 数 / nodes 数
   - 阈值 (CI 不会飘):
-      * 单 query dev 模式 < 30s
-      * 全 5 query 总 < 90s
+      * 单 query dev 模式 < 30s (R10.5.31 放宽为 60s, 8 节点 mock 流水线
+        实测 30-60s 取决于论文数)
+      * 全 5 query 总 < 90s (R10.5.31 放宽为 300s, 用户指示 mock 快速
+        反应不必要, 把阈值调成 env-driven)
       * 论文数 ≥ 1 (mock 应有 fallback)
   - 输出: pytest 报告 + stdout 表格 (一行一 case)
 
 R10.5.15 阈值来源:
   - dev 模式 30s: R10.5.7 实测 mock 平均 1-3s, 5-6s 留 5x buffer
   - 真实 LLM 120s: 留 1.5x R10.5.7 实测 ~84s
+  - R10.5.31 (F3): 用户放宽阈值. 默认 60s/300s, env 覆盖:
+      PERF_PER_QUERY_TIMEOUT=30 PERF_TOTAL_TIMEOUT=90 pytest
 """
+import os
 import time
 import uuid
 import statistics
@@ -24,6 +29,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.main as main_mod
+
+
+# R10.5.31 (F3): env-driven 阈值, 默认放宽. 8 节点 mock 流水线实测
+# 30-60s (R10.5.30 D4 加本地论文库后论文数 50+).
+PERF_PER_QUERY_TIMEOUT = float(os.getenv("PERF_PER_QUERY_TIMEOUT", "60.0"))
+PERF_TOTAL_TIMEOUT = float(os.getenv("PERF_TOTAL_TIMEOUT", "300.0"))
 
 
 QUERY_BENCHMARKS = [
@@ -53,7 +64,7 @@ class TestPerfBenchmark:
     """R10.5.15 (P1-B): 性能基准."""
 
     def test_per_query_latency_under_30s(self, bench_client):
-        """每 query dev 模式 mock 跑 < 30s (5x buffer 兜底 R10.5.7 1-3s)."""
+        """每 query dev 模式 mock 跑 < PERF_PER_QUERY_TIMEOUT (R10.5.31 F3 默认 60s)."""
         timings = []
         for label, q in QUERY_BENCHMARKS:
             t0 = time.time()
@@ -61,7 +72,10 @@ class TestPerfBenchmark:
             elapsed = time.time() - t0
             timings.append((label, elapsed, r.status_code))
             assert r.status_code == 200, f"{label} failed: {r.status_code}"
-            assert elapsed < 30.0, f"{label} too slow: {elapsed:.1f}s (>30s budget)"
+            assert elapsed < PERF_PER_QUERY_TIMEOUT, (
+                f"{label} too slow: {elapsed:.1f}s "
+                f"(>{PERF_PER_QUERY_TIMEOUT}s budget)"
+            )
         # 输出表格
         print("\n=== Per-query latency (mock mode) ===")
         for label, el, code in timings:
@@ -70,13 +84,17 @@ class TestPerfBenchmark:
         print(f"  {'AVERAGE':14s}: {avg:6.2f}s")
 
     def test_total_budget_under_90s(self, bench_client):
-        """5 个 query 总耗时 < 90s. 防止某 commit 让 mock 模式慢 10x 还能 CI 绿."""
+        """5 个 query 总耗时 < PERF_TOTAL_TIMEOUT (R10.5.31 F3 默认 300s).
+        防止某 commit 让 mock 模式慢 10x 还能 CI 绿."""
         t0 = time.time()
         for _, q in QUERY_BENCHMARKS:
             r = _post(bench_client, q)
             assert r.status_code == 200
         total = time.time() - t0
-        assert total < 90.0, f"5-query total too slow: {total:.1f}s"
+        assert total < PERF_TOTAL_TIMEOUT, (
+            f"5-query total too slow: {total:.1f}s "
+            f"(>{PERF_TOTAL_TIMEOUT}s budget)"
+        )
         print(f"\n=== 5-query total: {total:.2f}s ===")
 
     def test_each_query_returns_papers(self, bench_client):

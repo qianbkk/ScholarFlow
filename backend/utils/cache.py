@@ -305,8 +305,213 @@ def _init_db_once() -> None:
     if _DB_INITIALIZED and _DB_INITIALIZED_PATH == str(_DB):
         return
     _init_db()
+    _init_migrations_table()
+    _run_registered_migrations()  # R10.5.31 (F6)
     _DB_INITIALIZED = True
     _DB_INITIALIZED_PATH = str(_DB)
+
+
+# ===== R10.5.31 (F6): _schema_migrations 表 + apply_migration 框架 =====
+# 现有 _init_db() 的 schema 检测是"列是否存在"的原子 PRAGMA 检查, 适合
+# 简单 ADD COLUMN 场景. 复杂场景 (删列、VACUUM、跨表) 没有"已做/未做"
+# 记录, 每次启动都重新跑会重复消耗 + 潜在副作用.
+# 新增 _schema_migrations 表记录 migration 名称 + applied_at 时间戳, 后续
+# 任何想"应用过就跳过"的 migration 都用 apply_migration(name, fn) 包一下.
+import time as _time
+
+_MIGRATION_TABLE = "_schema_migrations"
+
+
+def _init_migrations_table() -> None:
+    """建 _schema_migrations 表 (idempotent). 任何 apply_migration() 调用前
+    自动触发; 也可单独调."""
+    conn = _connect_with_wal()
+    try:
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {_MIGRATION_TABLE} (
+                name TEXT PRIMARY KEY,
+                applied_at REAL NOT NULL
+            )
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _migration_applied(name: str) -> bool:
+    """查 name 是否在 _schema_migrations 表里."""
+    conn = _connect_with_wal()
+    try:
+        row = conn.execute(
+            f"SELECT 1 FROM {_MIGRATION_TABLE} WHERE name=?", (name,)
+        ).fetchone()
+        return row is not None
+    finally:
+        conn.close()
+
+
+def _record_migration(name: str) -> None:
+    """把 name 写入 _schema_migrations 表."""
+    conn = _connect_with_wal()
+    try:
+        conn.execute(
+            f"INSERT OR REPLACE INTO {_MIGRATION_TABLE} (name, applied_at) "
+            f"VALUES (?, ?)",
+            (name, _time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def apply_migration(name: str, sql_fn) -> bool:
+    """R10.5.31 (F6): 单条 migration 入口. 幂等: 应用过则跳过.
+
+    Args:
+        name: 唯一 migration 标识 (e.g. "r10_5_30_password_cols").
+        sql_fn: 接受一个 sqlite3.Connection, 在里面跑任意 DDL.
+
+    Returns:
+        True = 本次执行了 migration, False = 之前已应用过, 跳过.
+
+    用法 (在 _init_db() 末尾或 lifespan startup):
+        def _m_password_cols(conn):
+            cols = {row[1] for row in conn.execute(
+                "PRAGMA table_info(users)").fetchall()}
+            if "password_hash" not in cols:
+                conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            # ...
+        apply_migration("r10_5_30_password_cols", _m_password_cols)
+    """
+    _init_migrations_table()
+    if _migration_applied(name):
+        return False
+    conn = _connect_with_wal()
+    try:
+        sql_fn(conn)
+        conn.commit()
+    finally:
+        conn.close()
+    _record_migration(name)
+    return True
+
+
+# ===== F6 落地的 4 条 migration =====
+# 之前散落在 _init_db() 内的 ALTER TABLE + CREATE TABLE IF NOT EXISTS 块
+# 全部接入 apply_migration 框架, 跨 worker 启动 / 测试 fixture 切换
+# 都能正确跳过. 原有 _init_db() 内的 PRAGMA table_info 兜底保留作
+# "old DB 没 _schema_migrations 表时的过渡路径", 不会冲突 (新路径优先
+# 在 _schema_migrations 标记 done, 旧路径再跑也是幂等的).
+
+def _m_h8_drop_query_col(conn) -> None:
+    """R10.5 之前: search_cache 旧 schema 含 query 列 (隐私风险).
+    检测到列存在 → CREATE 新表 → 拷无 query 数据 → DROP + RENAME + VACUUM."""
+    cur = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='search_cache'"
+    )
+    if cur.fetchone() is None:
+        return  # 表还没建, 兜底 _init_db() CREATE IF NOT EXISTS 会处理
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(search_cache)").fetchall()
+    }
+    if "query" not in cols:
+        return
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS search_cache_new (
+            query_hash TEXT PRIMARY KEY,
+            response_json TEXT NOT NULL,
+            cost_usd REAL NOT NULL,
+            tokens INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO search_cache_new
+            (query_hash, response_json, cost_usd, tokens, created_at)
+        SELECT query_hash, response_json, cost_usd, tokens, created_at
+        FROM search_cache
+        """
+    )
+    conn.execute("DROP TABLE search_cache")
+    conn.execute("ALTER TABLE search_cache_new RENAME TO search_cache")
+    conn.commit()  # VACUUM 不能在事务内, 先 commit
+    conn.execute("VACUUM")
+    import logging
+    logging.getLogger(__name__).info(
+        "[migrations] h8_drop_query_col: scrubbed query text from disk"
+    )
+
+
+def _m_r10_5_30_password_cols(conn) -> None:
+    """R10.5.30 D3: users 表加 password_hash / password_salt / password_updated_at.
+    PBKDF2 200k 迭代 + 16 字节 salt 散列存储 (D3 替代 email=identity 的 P0).
+    旧表没这些列 → ADD COLUMN. 已建过 → 跳过 (PRAGMA 兜底)."""
+    cols = {
+        row[1]
+        for row in conn.execute("PRAGMA table_info(users)").fetchall()
+    }
+    if "password_hash" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    if "password_salt" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_salt TEXT")
+    if "password_updated_at" not in cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_updated_at REAL")
+
+
+def _m_r10_5_28_stream_tokens(conn) -> None:
+    """R10.5.28: /auth/stream-token endpoint 的 token 存表 (替代进程内 dict,
+    CG.txt §1 P0 #3 多 worker 一致性修复)."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stream_tokens (
+            token TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_stream_tokens_expires "
+        "ON stream_tokens(expires_at)"
+    )
+
+
+def _m_r10_5_30_sessions_table(conn) -> None:
+    """R10.5.30 D3: HttpOnly cookie session 鉴权 (CG.txt §1 P1 #4 真修).
+    之前 session_store.py 懒建, 改为 startup migration 注册, 让 schema
+    集中在 _init_db_once() 一个入口, 避免散落."""
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            csrf_token TEXT NOT NULL,
+            expires_at REAL NOT NULL,
+            created_at REAL NOT NULL,
+            last_seen_at REAL NOT NULL,
+            ip_address TEXT
+        )
+        """
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at)"
+    )
+
+
+def _run_registered_migrations() -> None:
+    """在 _init_db_once() 末尾自动调, 把所有迁移走一遍 apply_migration 框架.
+    新加 migration 只需要在这里 append 一行."""
+    apply_migration("h8_drop_query_col", _m_h8_drop_query_col)
+    apply_migration("r10_5_30_password_cols", _m_r10_5_30_password_cols)
+    apply_migration("r10_5_28_stream_tokens", _m_r10_5_28_stream_tokens)
+    apply_migration("r10_5_30_sessions_table", _m_r10_5_30_sessions_table)
 
 
 def wal_checkpoint_all() -> dict[str, int]:
