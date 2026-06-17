@@ -83,14 +83,19 @@ def test_ss_search_papers_mock_respects_limit(force_mock_api):
 # ===== Mock 模式：OpenAlex search_papers =====
 
 def test_openalex_search_papers_mock_returns_papers(force_mock_api):
-    """Mock 模式下 OpenAlex 搜索返回 Paper 列表"""
+    """Mock 模式下 OpenAlex 搜索返回 Paper 列表.
+
+    R10.5.34: R10.5.30 D4 把 openalex.py mock 改走 search_local_demo
+    (CD.txt 隐性问题修复), Paper.source 现在是 'local_demo' 而非
+    'openalex'. 老测试硬编码 'openalex' 已漂移, 改为 'local_demo'.
+    """
     from backend.api.openalex import search_papers
     papers = asyncio.run(search_papers("transformer", limit=5))
     assert isinstance(papers, list)
     for p in papers:
         assert isinstance(p, Paper)
-        # OpenAlex 来源
-        assert p.source == "openalex"
+        # R10.5.30 D4: 本地论文库真接入, source 改 'local_demo'.
+        assert p.source == "local_demo"
 
 
 def test_openalex_search_papers_mock_has_abstract(force_mock_api):

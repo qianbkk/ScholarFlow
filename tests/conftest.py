@@ -216,17 +216,17 @@ def _reset_global_state(request):
             pass
         # R10.5.31 (F1+F2): 跟 setup 段同步 reset OPEN_MODE / _DB / breaker,
         # 避免最后一个 test 跑完留的脏状态污染 (D3 state pollution 根因).
-        # R10.5.34 反向修复: 这里也**不强制**改回 True, 信任各 test 自己的
-        # setup/teardown. D3 test 的 try/finally 在 test body 内显式控制
-        # OPEN_MODE, autouse 不要在 teardown 又把状态搞乱.
-        # try:
-        #     from backend.auth import dependencies as _auth_deps_teardown
-        #     from backend.api.routes import auth as _auth_routes_teardown
-        #     _auth_deps_teardown.OPEN_MODE = True
-        #     _auth_routes_teardown.OPEN_MODE = True
-        # except (ImportError, AttributeError):
-        #     pass
-        pass  # 占位, 见上注释
+        # R10.5.34 反向修复: setup 段不动 OPEN_MODE (让 D3 test module-level
+        # os.environ["OPEN_MODE"]="false" 跟 test body 内 monkeypatch 生效),
+        # teardown 段**强制 reset 回 True** 兜底, 防止下一个 test 拿到上次的 False.
+        # 之前我注释掉 teardown 段, 导致 CI 27677520680 D3 跑时 OPEN_MODE 仍 True.
+        try:
+            from backend.auth import dependencies as _auth_deps_teardown
+            from backend.api.routes import auth as _auth_routes_teardown
+            _auth_deps_teardown.OPEN_MODE = True
+            _auth_routes_teardown.OPEN_MODE = True
+        except (ImportError, AttributeError):
+            pass
         try:
             from backend.utils import runtime_mode as _rt_teardown
             _rt_teardown._runtime_mode_override = {"mode": "auto"}

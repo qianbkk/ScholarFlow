@@ -119,8 +119,16 @@ def test_session_store_gc_removes_expired():
 
 # ===== 2-3. /auth/login + /auth/register Set-Cookie =====
 def test_login_sets_session_and_csrf_cookies(monkeypatch):
-    """/auth/login Set-Cookie: sf_session_id (HttpOnly) + sf_csrf_token (JS-readable)."""
-    # 直接覆盖模块级 OPEN_MODE, 跳过 reload (reload 复杂, 多个模块相互 import 会失败)
+    """/auth/login Set-Cookie: sf_session_id (HttpOnly) + sf_csrf_token (JS-readable).
+
+    R10.5.34: 跟 test_register 一致 - reload + 重新 import main, 拿到
+    新的 app 引用 (含新 register/login endpoint).
+    """
+    import importlib
+    import backend.auth.dependencies
+    import backend.api.routes.auth
+    importlib.reload(backend.auth.dependencies)
+    importlib.reload(backend.api.routes.auth)
     import backend.auth.dependencies as _deps
     import backend.api.routes.auth as _auth_mod
     orig_deps_om = _deps.OPEN_MODE
@@ -130,6 +138,9 @@ def test_login_sets_session_and_csrf_cookies(monkeypatch):
     try:
         _ensure_db()
         from fastapi.testclient import TestClient
+        import sys
+        if "backend.main" in sys.modules:
+            importlib.reload(sys.modules["backend.main"])
         import backend.main as m
         with TestClient(m.app) as c:
             email = f"d3_login_{int(time.time()*1000)}@x.com"
@@ -150,7 +161,18 @@ def test_login_sets_session_and_csrf_cookies(monkeypatch):
 
 
 def test_register_sets_session_and_csrf_cookies():
-    """/auth/register 同样 Set-Cookie."""
+    """/auth/register 同样 Set-Cookie.
+
+    R10.5.34 关键修复: FastAPI app 在 startup 时 import routes/auth,
+    register 函数作为 endpoint 绑定到 app.router. reload routes/auth 不会
+    替换 app 已绑定的 function 对象. 解法: reload 后, **重新构造 FastAPI app**
+    (重新 include_router 拿新 register). TestClient 用新 app 跑.
+    """
+    import importlib
+    import backend.auth.dependencies
+    import backend.api.routes.auth
+    importlib.reload(backend.auth.dependencies)
+    importlib.reload(backend.api.routes.auth)
     import backend.auth.dependencies as _deps
     import backend.api.routes.auth as _auth_mod
     orig_deps_om = _deps.OPEN_MODE
@@ -160,6 +182,10 @@ def test_register_sets_session_and_csrf_cookies():
     try:
         _ensure_db()
         from fastapi.testclient import TestClient
+        # reload 后, 重新 import main 让 app 重新 include_router (拿新 register)
+        import sys
+        if "backend.main" in sys.modules:
+            importlib.reload(sys.modules["backend.main"])
         import backend.main as m
         with TestClient(m.app) as c:
             r = c.post("/auth/register", json={
@@ -178,6 +204,7 @@ def test_register_sets_session_and_csrf_cookies():
 
 # ===== 4. /auth/logout =====
 def test_logout_clears_session_and_cookies(monkeypatch):
+    """R10.5.34: 已有 importlib.reload, 保留."""
     monkeypatch.setenv("OPEN_MODE", "false")
     import importlib
     import backend.auth.dependencies
