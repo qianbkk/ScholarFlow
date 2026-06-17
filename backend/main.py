@@ -405,6 +405,32 @@ async def lifespan(app: FastAPI):
     # 此处显式再跑一次 — 显式 > 隐式，避免依赖 service 模块副作用）
     _load_budget_state()
     yield
+    # 关闭：R10.5.32 (wave 7) 优雅 shutdown. k8s 滚动更新时, SIGTERM 触发
+    # lifespan shutdown, 此时可能还有 in-flight SSE 流正在跑. 直接关
+    # client 会让 in-flight 流报 "client disconnected" → 用户看到 1000s
+    # loading. 正确做法: 等 in-flight 流 (最多 30s) 自然完成, 然后关
+    # client + 跑 cache GC.
+    inflight = list(_in_flight_searches.items())
+    if inflight:
+        logger.info(
+            f"[lifespan] shutdown: waiting for {len(inflight)} in-flight search(es) "
+            "(max 30s)..."
+        )
+        deadline = asyncio.get_event_loop().time() + 30.0
+        while _in_flight_searches and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.5)
+        if _in_flight_searches:
+            logger.warning(
+                f"[lifespan] shutdown timeout: {_in_flight_searches} still in-flight, "
+                "force-cancelling"
+            )
+    # 跑 cache GC 一次 (lifespan 退出前清旧条目, 跟磁盘做"出关检查")
+    try:
+        from backend.utils.cache import gc_cache
+        gc_results = gc_cache(max_age_days=30, max_rows=1000)
+        logger.info(f"[lifespan] shutdown: cache GC done: {gc_results}")
+    except Exception as e:
+        logger.warning(f"[lifespan] shutdown: cache GC failed (non-fatal): {e}")
     # 关闭：释放 httpx 连接池
     await _ss_mod.close_client()
     await _oa_mod.close_client()

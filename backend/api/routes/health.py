@@ -43,6 +43,23 @@ logger = logging.getLogger(__name__)
 # (之前模块级 _START_TIME 跟 audit_log 各算一份, 跨 import 顺序会 drift).
 
 
+def _get_version() -> str:
+    """R10.5.32 (wave 7): 读项目根 VERSION 文件作为权威版本号. 找不到兜底 unknown.
+
+    项目结构: VERSION 在仓库根 (/VERSION), backend/ 在子目录. 路径推导:
+    backend/api/routes/health.py → 3 层 parents[2] = backend/, 再上 1 层 = 项目根.
+    """
+    try:
+        # backend/api/routes/health.py → backend/api/routes/ → backend/api/ → backend/
+        backend_dir = Path(__file__).resolve().parents[2]
+        version_path = backend_dir.parent / "VERSION"
+        if version_path.exists():
+            return version_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass
+    return "unknown"
+
+
 def _check_cache_writable() -> dict:
     """R10 (M-20): 验证 backend/.cache 目录 SQLite 可写.
 
@@ -120,10 +137,12 @@ async def health():
     """
     cache_check = _check_cache_writable()
     status = "ok" if cache_check["writable"] else "degraded"
+    # R10.5.32 (wave 7): version 走 _get_version() 读 backend/VERSION 文件,
+    # 跟 pyproject.toml + CHANGELOG 同步. 找不到兜底 "unknown" 不硬编码.
     resp = {
         "status": status,
         "service": "ScholarFlow",
-        "version": "1.0.0",
+        "version": _get_version(),
     }
     # 仅当 cache 异常时附 details, 正常情况不暴露 (减少响应体积 + 信息泄露)
     if not cache_check["writable"]:
@@ -149,7 +168,7 @@ async def health_detailed():
     return {
         "status": "ok" if cache_check["writable"] else "degraded",
         "service": "ScholarFlow",
-        "version": "1.0.0",
+        "version": _get_version(),
         "uptime_sec": round(get_uptime_sec(), 1),
         "environment": {
             "name": ENVIRONMENT,
@@ -185,7 +204,7 @@ async def list_providers(request: Request):
 async def root():
     return {
         "service": "ScholarFlow",
-        "version": "1.0.0",
+        "version": _get_version(),
         "docs": "/docs",
         "endpoints": ["GET /health", "GET /providers", "POST /search", "GET /search/stream"],
     }
