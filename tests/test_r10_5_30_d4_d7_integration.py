@@ -75,8 +75,10 @@ def test_d6_changelog_modal_has_8_entries():
     # 数 CHANGELOG_NOTES 数组里 emoji 字段
     import re
     emojis = re.findall(r"emoji:\s*'([^']+)'", src)
-    assert len(emojis) == 8, f"D6 应有 8 个升级条目, 实际 {len(emojis)}"
-    # 必须包含 D1-D6 关键标识
+    # R10.5.34: 之前硬编码 8 (D1-D6), R10.5.31 F1-F6 + R10.5.32 F1-F6 累积 6 条,
+    # 现共 14 条 (8 + 6). 改为 ≥ 8 软约束, 仍守住 D1-D6 关键标识.
+    assert len(emojis) >= 8, f"D6 应有 ≥8 个升级条目, 实际 {len(emojis)}"
+    # 必须包含 D1-D6 关键标识 (旧 D 关键修复 + R10.5.31-32 新波)
     must_have = [
         "HttpOnly Cookie",  # D3
         "本地论文库",  # D4
@@ -86,6 +88,12 @@ def test_d6_changelog_modal_has_8_entries():
         "/simplify 8 项",  # simplify
         "Holographic 5 组件",  # holographic
         "Admin 后门修复",  # admin
+        # R10.5.31+ 新波 (F1-F6, R10.5.32 F7)
+        "D3 state pollution",  # F1
+        "4-Context",  # F4
+        "summarize",  # F5
+        "apply_migration",  # F6
+        "优雅 shutdown",  # wave 7
     ]
     for kw in must_have:
         assert kw in src, f"D6 changelog 缺关键字: {kw}"
@@ -94,7 +102,9 @@ def test_d6_changelog_modal_has_8_entries():
 def test_d6_footer_link_in_app():
     src = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "changelog-footer-link" in src, "App.tsx 缺 changelog footer 链接"
-    assert "setChangelogOpen" in src, "App.tsx 缺 setChangelogOpen"
+    # R10.5.34: R10.5.31 F4 4-Context 拆分后, setChangelogOpen 改名为
+    # openChangelog (useUI() 暴露的 setter). 老 D6 测试 hardcode 旧名.
+    assert "openChangelog" in src, "App.tsx 缺 openChangelog (R10.5.31 F4 后改名)"
     assert "<ChangelogModal" in src, "App.tsx 缺 ChangelogModal 挂载"
 
 
@@ -106,12 +116,17 @@ def test_d7_paper_filters_lib_exists():
     src = lib_path.read_text(encoding="utf-8")
     assert "export interface PaperFilters" in src
     assert "export const DEFAULT_FILTERS" in src
-    # App.tsx 应导入 (消除 inline 重复)
-    app_src = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    assert "from './lib/paperFilters'" in app_src, (
-        "D7: App.tsx 没从 lib/paperFilters 导入"
+    # R10.5.34: R10.5.31 F4 4-Context 拆分后, PaperFilters 由
+    # SelectionContext 内部 import, App.tsx 不直接用. 改验证
+    # SelectionContext 用 lib/paperFilters (1 source of truth).
+    selection_ctx = (
+        ROOT / "frontend" / "src" / "contexts" / "SelectionContext.tsx"
+    ).read_text(encoding="utf-8")
+    assert "from '../lib/paperFilters'" in selection_ctx, (
+        "D7: SelectionContext 没从 lib/paperFilters 导入"
     )
-    # 不应再有 inline 重复定义
+    # App.tsx 不应再有 inline PaperFilters 重复定义
+    app_src = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
     assert "yearRange: 'all' | '1' | '3' | '5'" not in app_src, (
         "D7: App.tsx 仍有 inline PaperFilters 重复定义"
     )

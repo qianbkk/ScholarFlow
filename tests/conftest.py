@@ -129,15 +129,16 @@ def _reset_global_state(request):
         # backend.api.routes.auth 各放了一份模块级 OPEN_MODE (后者是
         # `from backend.auth.dependencies import OPEN_MODE` 的 snapshot copy),
         # 旧 reset 没覆盖这俩 → D3 test 改 OPEN_MODE=False 后, 状态泄露到
-        # 后续 test_auth_api_key / e2e / perf → 14 个 fail. 强制 reset 回
-        # conftest.py:31 setdefault 的 env 默认值 (True, dev mode).
-        try:
-            from backend.auth import dependencies as _auth_deps_reset
-            from backend.api.routes import auth as _auth_routes_reset
-            _auth_deps_reset.OPEN_MODE = True
-            _auth_routes_reset.OPEN_MODE = True
-        except (ImportError, AttributeError):
-            pass
+        # 后续 test_auth_api_key / e2e / perf → 14 个 fail.
+        #
+        # R10.5.34 反向修复: 这里**不强制 reset**回 True, 而是
+        # 保留 module-level monkeypatch 的设置. D3 test (test_r10_5_30_d3_session_cookies.py)
+        # 自己在 test body 内 set _deps.OPEN_MODE = False, 而 test_auth_api_key 的
+        # 4 case (TestGetCurrentUser) 显式 monkeypatch.setattr(dependencies, "OPEN_MODE", True/False).
+        # 把这里强制重置为 True 会覆盖 test 自己的设置, 导致 D3 跑出
+        # "OPEN_MODE=true 时不支持注册" 错 (CI 2026-06-17 4:32 观察).
+        # 取舍: 信任各 test 自己的 setup/teardown 显式控制 OPEN_MODE,
+        # autouse 不主动改它.
         # R10.5.31 (F1): tests 用 tmp_path 切 _DB, 跨 test 残留会让后续
         # test 写到旧 path → 'no such table' 或数据串味. reset 回默认
         # cache.sqlite + 清 _DB_INITIALIZED, 让 _init_db_once() 重新走.
@@ -215,13 +216,17 @@ def _reset_global_state(request):
             pass
         # R10.5.31 (F1+F2): 跟 setup 段同步 reset OPEN_MODE / _DB / breaker,
         # 避免最后一个 test 跑完留的脏状态污染 (D3 state pollution 根因).
-        try:
-            from backend.auth import dependencies as _auth_deps_teardown
-            from backend.api.routes import auth as _auth_routes_teardown
-            _auth_deps_teardown.OPEN_MODE = True
-            _auth_routes_teardown.OPEN_MODE = True
-        except (ImportError, AttributeError):
-            pass
+        # R10.5.34 反向修复: 这里也**不强制**改回 True, 信任各 test 自己的
+        # setup/teardown. D3 test 的 try/finally 在 test body 内显式控制
+        # OPEN_MODE, autouse 不要在 teardown 又把状态搞乱.
+        # try:
+        #     from backend.auth import dependencies as _auth_deps_teardown
+        #     from backend.api.routes import auth as _auth_routes_teardown
+        #     _auth_deps_teardown.OPEN_MODE = True
+        #     _auth_routes_teardown.OPEN_MODE = True
+        # except (ImportError, AttributeError):
+        #     pass
+        pass  # 占位, 见上注释
         try:
             from backend.utils import runtime_mode as _rt_teardown
             _rt_teardown._runtime_mode_override = {"mode": "auto"}

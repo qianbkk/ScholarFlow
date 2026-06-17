@@ -31,6 +31,20 @@ const CHANGELOG_NOTES: ChangelogNote[] = [
     tagColor: 'var(--sf-accent)',
   },
   {
+    emoji: '🌊',
+    title: '优雅 shutdown + /health version 联动 (R10.5.32 wave 7)',
+    body: 'lifespan shutdown 等 in-flight 搜索 (≤30s) + 跑 cache GC. /health + /health/detailed + / 三处 version 字段从 VERSION 文件读, 跟 pyproject.toml + CHANGELOG 同步. K8s 滚动更新 0 报错.',
+    tag: 'wave 7',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
+    emoji: '🦠',
+    title: 'CD.txt §3.1 缓解 — 9 agent 节点 0 单测 → 10 个',
+    body: 'R10.5.33: critic_review_node (空 / 多论文 / LLM 异常 / 切片 [:10]) + query_decomposer._fallback_decompose + _fallback_constraints + _sanitize_str_list 共 10 个 case. 后续扩到 7 个剩余 agent.',
+    tag: 'R10.5.33',
+    tagColor: 'var(--sf-accent)',
+  },
+  {
     emoji: '🎯',
     title: 'CommandPalette 13 命令接真 (F5)',
     body: '11 真 handler (export 3 + filter 3 + theme 循环 + reset + focus + 2 view) + 2 stub (summarize/critique 等后端 agent endpoint). Cmd+K 走 UIContext 集中.',
