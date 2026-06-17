@@ -1,10 +1,10 @@
 # ScholarFlow 后续路线图
 
-> **当前 HEAD**: `e5f0086` (R10.5.34)
+> **当前 HEAD**: pending (R10.5.36) — 见本文档 §7
 > **VERSION**: 1.0.2
 > **测试基线**: 543 passed / 1 skipped / 0 failed (10m 28s)
 > **CI**: 4/4 job 全绿 (test / security / frontend / docker)
-> **最近更新**: 2026-06-18 — R10.5.34 收口
+> **最近更新**: 2026-06-18 — R10.5.36 impeccable 前端 v2 收口
 
 本文件是 ScholarFlow 项目**唯一**的"后续待处理"总览，替代以下已废弃文件：
 
@@ -12,6 +12,7 @@
 - ~~`docs/HANDOFF.md`~~ (R10.5.19 写的 AI 接手清单)
 - ~~`docs/COMPREHENSIVE_UPGRADE_REPORT.md`~~ (R10.5.x 升级总报告)
 - ~~`docs/UPGRADE_ARCHITECTURE.md`~~ (R10.5.28 holographic 升级报告)
+- ~~`README.md` / `CHANGELOG.md` / `CONTRIBUTING.md` / `SECURITY.md` / `CODE_OF_CONDUCT.md` / `LICENSE`~~ (R10.5.36 GitHub 治理文件删, 改用 `PRODUCT.md` + `DESIGN.md` + 本文件)
 
 历史记录查 `git log` + `CHANGELOG.md`。新功能加这里，状态改了也改这里。
 
@@ -236,3 +237,4 @@ R10.5.30-34 三波 (16 commits) 修了：
 - **HANDOFF.md** (R10.5.19 14 条) — 已废弃，整合到此文件
 - **审计 XYZ.txt** (R10.5.x 14 项) — R10.5 已完成
 - **P.txt + Q.txt** (R10.5.19 12 项) — R10.5.19 已完成
+- **R10.5.36** impeccable 前端 v2 重建: `PRODUCT.md` + `DESIGN.md` + `frontend/v2/` 从零重做, 旧 `frontend/src/` 保留不动
