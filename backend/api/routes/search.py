@@ -122,9 +122,25 @@ NODE_NAME_TO_STEP = {
 }
 
 
-def _sse_format(data: dict) -> str:
-    """格式化一个 SSE 事件（data 字段必须是 JSON 字符串）。"""
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+def _sse_format(data: dict, event_id: Optional[int] = None) -> str:
+    """格式化一个 SSE 事件.
+
+    R10.5.45 (P0/P1 SSE resilience): 加 event_id 参数. SSE 标准 id 字段
+    让客户端 reconnect 时通过 Last-Event-ID header 告知服务端从哪续.
+    当前阶段 (R10.5.45) 仅 emit id 字段作为基础设施, 不真正实现 resume
+    (R11+ 接 LangGraph checkpointer 后再做断点续传).
+
+    Args:
+        data: 事件 payload, JSON-serializable.
+        event_id: 事件序号. None = 不发 id 字段 (向后兼容).
+
+    Returns:
+        SSE 格式字符串, 末尾 \n\n 分隔.
+    """
+    payload = json.dumps(data, ensure_ascii=False)
+    if event_id is None:
+        return f"data: {payload}\n\n"
+    return f"id: {event_id}\ndata: {payload}\n\n"
 
 
 # ===== /search =====
@@ -289,6 +305,16 @@ async def search_stream(
     budget: float = Query(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0),
     max_iter: int = Query(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, alias="max_iter"),
     provider: Optional[str] = Query(default=None, max_length=64, description="LLM provider id"),
+    # R10.5.45 (P0/P1 SSE resilience): 接收客户端 Last-Event-ID 重连 resume.
+    # 当前阶段仅记日志 + 接受 header 透传 (R10.5.45 不真正续传,
+    # R11+ 接 LangGraph checkpointer 后才能从 last_event_id 状态续).
+    # 通过 query param 而非 header: fetch + ReadableStream 不容易设置
+    # Last-Event-ID header (浏览器 fetch 不允许设置这个 forbidden header),
+    # 走 query param 兼容.
+    last_event_id: Optional[int] = Query(
+        default=None, ge=0, le=10_000_000,
+        description="R10.5.45 SSE resume: 客户端最后收到的 event id (R11+ 真续传, R10.5 仅 log)"
+    ),
     user: User = Depends(get_current_user),  # R10.5.30 D2
 ):
     """SSE 流式搜索端点：每完成一个 LangGraph 节点推一次进度事件。"""
@@ -308,8 +334,26 @@ async def search_stream(
 
     t0 = time.time()
 
+    # R10.5.45: 客户端 Last-Event-ID 重连. 当前不真续传, 仅记日志供观测.
+    if last_event_id is not None:
+        logger.info(
+            f"[/search/stream] client resume request with last_event_id={last_event_id} "
+            f"(R10.5.45 仅记录, 实际从事件 0 重跑; R11+ 接 checkpointer 才真续)"
+        )
+
     async def event_generator():
         return_amount = budget
+        # R10.5.45: 事件序号 (per-request). 每个 emit 的 SSE 事件带 id: <n>.
+        # 客户端断线后用 Last-Event-ID 重连时, 服务端能识别客户端"已经看过几个".
+        # 当前 R10.5.45 只 emit 不续; 续传逻辑 R11+ 接 LangGraph checkpointer.
+        event_seq = 0
+
+        def _emit(data: dict) -> str:
+            """emit 一个 SSE 事件 + 自增序号. 替换原来 _sse_format 的位置."""
+            nonlocal event_seq
+            seq = event_seq
+            event_seq += 1
+            return _sse_format(data, event_id=seq)
 
         try:
             cached = await get_cached_async(
@@ -320,8 +364,8 @@ async def search_stream(
                 logger.info(
                     f"[/search/stream] cache hit q='{safe_query[:40]}'"
                 )
-                yield _sse_format({"event": "started", "cached": True})
-                yield _sse_format({
+                yield _emit({"event": "started", "cached": True})
+                yield _emit({
                     "event": "done",
                     "cached": True,
                     "result": cached_response,
@@ -329,7 +373,7 @@ async def search_stream(
                 })
                 return
 
-            yield _sse_format({"event": "started", "cached": False, "max_iter": max_iter})
+            yield _emit({"event": "started", "cached": False, "max_iter": max_iter})
 
             accumulated: dict = dict(initial)
             step_count = 0
@@ -363,7 +407,7 @@ async def search_stream(
                             )
                             return_amount = max(0.0, budget - accumulated_cost)
                             try:
-                                yield _sse_format({
+                                yield _emit({
                                     "event": "error",
                                     "code": "client_disconnected",
                                     "message": "客户端已断开, 搜索已中止, budget 已返还",
@@ -380,7 +424,7 @@ async def search_stream(
                             metadata = event.get("data", {}).get("input", {})
                             model_used = metadata.get("provider") or metadata.get("model", "unknown")
                             
-                            yield _sse_format({
+                            yield _emit({
                                 "event": "node_started",
                                 "node": node_name,
                                 "step": mapped if mapped is not None else step_count,
@@ -407,7 +451,7 @@ async def search_stream(
                             )
                             
                             # Phase 1: 增强节点完成事件 - 包含成本和模型信息
-                            yield _sse_format({
+                            yield _emit({
                                 "event": "node_complete",
                                 "node": node_name,
                                 "step": mapped if mapped is not None else step_count,
@@ -422,7 +466,7 @@ async def search_stream(
                                 iteration_id = accumulated.get("iteration", 0)
                                 citation_graph = accumulated.get("citation_graph", {})
                                 if citation_graph:
-                                    yield _sse_format({
+                                    yield _emit({
                                         "event": "graph_snapshot",
                                         "iteration": iteration_id,
                                         "graph": citation_graph,
@@ -439,7 +483,7 @@ async def search_stream(
                                     f"after node '{node_name}' (step={step_count})"
                                 )
                                 try:
-                                    yield _sse_format({
+                                    yield _emit({
                                         "event": "budget_exceeded",
                                         "node": node_name,
                                         "step": mapped if mapped is not None else step_count,
@@ -466,7 +510,7 @@ async def search_stream(
                 await _return_budget(budget)
                 return_amount = 0.0
                 try:
-                    yield _sse_format({
+                    yield _emit({
                         "event": "error",
                         "code": "timeout",
                         "message": "搜索超时（>480s）。建议缩小查询范围或降低 max_iter。",
@@ -492,7 +536,7 @@ async def search_stream(
                 return_amount = max(0.0, budget - accumulated_cost)
                 # 通知 client (best-effort, 连接可能已断)
                 try:
-                    yield _sse_format({
+                    yield _emit({
                         "event": "error",
                         "code": "cancelled",
                         "message": "搜索被取消, budget 已返还",
@@ -506,7 +550,7 @@ async def search_stream(
                 await _return_budget(budget)
                 return_amount = 0.0
                 try:
-                    yield _sse_format({
+                    yield _emit({
                         "event": "error",
                         "code": "internal",
                         "message": "内部服务错误，请稍后重试",
@@ -539,7 +583,7 @@ async def search_stream(
                     f"[/search/stream] cache write failed (non-fatal): {cache_err}"
                 )
 
-            yield _sse_format({
+            yield _emit({
                 "event": "done",
                 "result": response_obj.model_dump(),
                 "elapsed": round(elapsed, 2),

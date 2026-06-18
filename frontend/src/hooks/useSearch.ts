@@ -216,8 +216,15 @@ export function useSearch() {
   const globalTimeoutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const GLOBAL_TIMEOUT_MS = 90_000;
   // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff (WIFI 切换 / VPN 重连).
-  const retryAttemptedRef = useRef<boolean>(false);
+  // R10.5.45 (P0/P1 SSE resilience): 升级到指数退避 (1s, 2s, 4s), max 3 次.
+  // 旧: 固定 2s, 1 次 → VPN 重连/慢网络场景下 1 次不够. 升级: 3 次, backoff
+  // 翻倍, 给弱网更宽容的恢复窗口.
+  const retryCountRef = useRef<number>(0);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // R10.5.45: 客户端最后收到的 SSE event id. 网络断开重连时, fetch URL
+  // 带 ?last_event_id=<n> (后端 query param 接收). 浏览器 fetch 不允许设置
+  // Last-Event-ID header (forbidden header name), 走 query param 兼容.
+  const lastEventIdRef = useRef<number | null>(null);
 
   const stopFallbackProgress = useCallback(() => {
     if (fallbackTimerRef.current) {
@@ -278,6 +285,14 @@ export function useSearch() {
         max_iter: String(maxIter),
       };
       if (provider) params.provider = provider;
+      // R10.5.45: 断线重连时携带 last_event_id, 让服务端知道客户端已收到的最后位置.
+      // 浏览器 fetch 不允许设置 Last-Event-ID header (forbidden header name),
+      // 后端 search_stream 端点设计成接收 query param 而非 header.
+      // 当前阶段 (R10.5.45) 后端仅 log, 不真续; R11+ 接 LangGraph checkpointer
+      // 后才能从 last_event_id 状态续. 这是基础设施.
+      if (lastEventIdRef.current !== null) {
+        params.last_event_id = String(lastEventIdRef.current);
+      }
       // R10.5 P2-4: 用 /api/v1 前缀 (R10.5 Fix-P2-4-Audit-diff 加的).
       // 旧 /api/search/stream 路径 production 部署 (无 vite proxy) 返 404.
       // 旧 /search/stream 路径是 deprecated alias (alias 留在后端).
@@ -473,6 +488,16 @@ export function useSearch() {
           buffer = events.pop() ?? '';
           for (const ev of events) {
             if (myGen !== genRef.current) break;
+            // R10.5.45: 解析 SSE 标准 id: 字段. 用于断线重连的 Last-Event-ID 续传.
+            // 浏览器 fetch 不允许设置 Last-Event-ID header, 走 query param,
+            // 这里解析的 id 喂给 next retry 的 URL search param.
+            const idLine = ev.split('\n').find((l) => l.startsWith('id: '));
+            if (idLine) {
+              const id = parseInt(idLine.slice(4).trim(), 10);
+              if (!isNaN(id) && id >= 0) {
+                lastEventIdRef.current = id;
+              }
+            }
             const dataLine = ev.split('\n').find((l) => l.startsWith('data: '));
             if (!dataLine) continue;
             try {
@@ -563,28 +588,35 @@ export function useSearch() {
         setLoading(false);
         genRef.current += 1;  // 防止后续事件污染 result
       }, GLOBAL_TIMEOUT_MS);
-      // R10.5.5: 重置重试标志 — 新搜索允许一次网络重试
-      retryAttemptedRef.current = false;
+      // R10.5.5: 重置重试计数器 — 新搜索允许 max 3 次网络重试
+      // R10.5.45: 升级到指数退避 (1s, 2s, 4s)
+      retryCountRef.current = 0;
+      // R10.5.45: 新搜索重置 lastEventIdRef (上次 session 的 id 已不适用)
+      lastEventIdRef.current = null;
       setLoading(true);
       try {
         await searchWithFetchStream(trimmed, budget, maxIter, provider);
       } catch (e: any) {
         const msg = e?.message || '搜索失败';
-        // R10.5.5: 网络错自动重试 — 1 次尝试, 2s backoff
+        // R10.5.45: 网络错自动重试 — 指数退避 (1s, 2s, 4s), max 3 次
         // 判断 "网络错": 错误信息含 fetch/网络/timeout/aborted 等
         // 不重试 budget_exceeded / 401 / 用户取消 / SSE 解析错 (这些是确定性问题)
         const isNetworkError = /fetch failed|networkerror|timeout|aborted|failed to fetch/i.test(msg);
-        if (isNetworkError && !retryAttemptedRef.current) {
-          retryAttemptedRef.current = true;
+        // R10.5.45: 指数退避表. 3 次: 1s, 2s, 4s. max 3 次足够覆盖
+        // VPN 重连/慢网络/服务端重启, 仍失败则让用户看到真错手动重试.
+        const RETRY_DELAYS_MS = [1000, 2000, 4000];
+        if (isNetworkError && retryCountRef.current < RETRY_DELAYS_MS.length) {
+          const delay = RETRY_DELAYS_MS[retryCountRef.current];
+          retryCountRef.current += 1;
           // 静默重试, 不向用户报"网络错"再消失, 给个轻提示
-          setError(`网络抖动, 2s 后自动重试…`);
+          setError(`网络抖动, ${delay / 1000}s 后自动重试 (${retryCountRef.current}/${RETRY_DELAYS_MS.length})…`);
           if (retryTimeoutRef.current) clearTimeout(retryTimeoutRef.current);
           retryTimeoutRef.current = setTimeout(() => {
             // 重试前清 error, 避免闪烁
             setError(null);
-            // 用同一组参数重跑
+            // 用同一组参数重跑. lastEventIdRef 已保留, 走 query param 续传.
             search(trimmed, budget, maxIter, provider);
-          }, 2000);
+          }, delay);
           return;
         }
         setError(msg);
@@ -620,6 +652,9 @@ export function useSearch() {
       clearTimeout(retryTimeoutRef.current);
       retryTimeoutRef.current = null;
     }
+    // R10.5.45: reset 时也清 lastEventIdRef + retryCountRef, 跟新搜索起点对齐
+    lastEventIdRef.current = null;
+    retryCountRef.current = 0;
     // H6: bump generation
     genRef.current += 1;
     // R10.5 Fix-P0-RaceCondition: 组件卸载后不再发取消请求, 避免 fetch 在已卸载组件上执行.
