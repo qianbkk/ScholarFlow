@@ -285,29 +285,75 @@ async def search_stream(
 
             accumulated: dict = dict(initial)
             step_count = 0
+            iteration_id = 0  # Phase 2: 演化时间轴 - 记录当前迭代版本
 
             try:
                 # R10.5 Fix 10: 240 → 480s. 跟 /search 非流式 endpoint 对齐.
                 # 详见 /search 端的 TimeoutError 注释.
                 async with asyncio.timeout(480.0):
-                    async for chunk in search_graph.astream(initial, stream_mode="updates"):
-                        for node_name, state_update in chunk.items():
-                            if not isinstance(state_update, dict):
-                                continue
-                            accumulated.update(state_update)
-                            step_count += 1
+                    # Phase 1: 使用 astream_events 替代 astream，捕获节点进入/退出事件
+                    async for event in search_graph.astream_events(initial, version="v2"):
+                        event_type = event.get("type")
+                        
+                        # Phase 1: 态势感知 - 节点开始事件
+                        if event_type == "on_chain_start" and event.get("name") in NODE_NAME_TO_STEP:
+                            node_name = event.get("name")
                             mapped = NODE_NAME_TO_STEP.get(node_name)
+                            # 从 event 数据中提取模型信息 (如果 agent 注入了 metadata)
+                            metadata = event.get("data", {}).get("input", {})
+                            model_used = metadata.get("provider") or metadata.get("model", "unknown")
+                            
+                            yield _sse_format({
+                                "event": "node_started",
+                                "node": node_name,
+                                "step": mapped if mapped is not None else step_count,
+                                "elapsed": round(time.time() - t0, 2),
+                                "iteration": accumulated.get("iteration", 0),
+                                "model": model_used,
+                                "status": "running",
+                            })
+                        
+                        # Phase 1: 态势感知 - 节点完成事件
+                        elif event_type == "on_chain_end" and event.get("name") in NODE_NAME_TO_STEP:
+                            node_name = event.get("name")
+                            mapped = NODE_NAME_TO_STEP.get(node_name)
+                            
+                            # 提取状态更新和成本信息
+                            output_data = event.get("data", {}).get("output", {})
+                            if isinstance(output_data, dict):
+                                accumulated.update(output_data)
+                            
+                            step_count += 1
+                            new_total = float(accumulated.get("total_cost_usd", 0.0))
+                            budget_limit = float(
+                                accumulated.get("budget_limit_usd", float("inf"))
+                            )
+                            
+                            # Phase 1: 增强节点完成事件 - 包含成本和模型信息
                             yield _sse_format({
                                 "event": "node_complete",
                                 "node": node_name,
                                 "step": mapped if mapped is not None else step_count,
                                 "elapsed": round(time.time() - t0, 2),
                                 "iteration": accumulated.get("iteration", 0),
+                                "cost_usd": round(new_total, 4),
+                                "tokens": accumulated.get("total_tokens_used", 0),
                             })
-                            new_total = float(accumulated.get("total_cost_usd", 0.0))
-                            budget_limit = float(
-                                accumulated.get("budget_limit_usd", float("inf"))
-                            )
+                            
+                            # Phase 2: 演化时间轴 - 每次迭代完成时记录图谱快照
+                            if node_name == "build_graph":
+                                iteration_id = accumulated.get("iteration", 0)
+                                citation_graph = accumulated.get("citation_graph", {})
+                                if citation_graph:
+                                    yield _sse_format({
+                                        "event": "graph_snapshot",
+                                        "iteration": iteration_id,
+                                        "graph": citation_graph,
+                                        "node_count": len(citation_graph.get("nodes", [])),
+                                        "link_count": len(citation_graph.get("links", [])),
+                                    })
+                            
+                            # 预算检查
                             if check_budget(new_total, budget_limit):
                                 accumulated["status"] = "budget_exceeded"
                                 logger.warning(
@@ -332,6 +378,11 @@ async def search_stream(
                                     pass
                                 return_amount = max(0.0, budget - new_total)
                                 return
+                        
+                        # Phase 3: Critic Agent - 评审事件 (未来扩展点)
+                        elif event_type == "on_tool_start" or event_type == "on_llm_call":
+                            # 预留：用于 Critic Agent 的工具调用和 LLM 调用追踪
+                            pass
             except TimeoutError:
                 # R10.5 Fix 10: 240 → 480s 错误消息同步
                 logger.warning("[/search/stream] timed out after 480s")
