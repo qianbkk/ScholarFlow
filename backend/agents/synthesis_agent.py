@@ -71,9 +71,29 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
     query = state["original_query"]
 
     if not ranked:
+        # R10.5.46 (P1 LangGraph safety net): empty_result_streak >= 2
+        # 触发 router 强制 synthesize. 给用户友好提示而不是冷冰冰的"未检索到",
+        # 否则用户不知道为什么 / 怎么改.
+        streak = int(state.get("empty_result_streak") or 0)
+        if streak >= 2:
+            report = (
+                "⚠️ **检索结果不足, 建议修改查询措辞**\n\n"
+                f"连续 {streak} 次迭代都未从 Semantic Scholar / OpenAlex 检索到相关论文。\n\n"
+                "**可能原因:**\n"
+                "- 查询过于冷门 / 小众, 公开论文数 < 5\n"
+                "- 关键术语拼写错误或使用了非标准缩写\n"
+                "- 该方向暂无公开论文 (e.g. 太新的研究方向)\n\n"
+                "**建议:**\n"
+                "- 换更通用的关键词, 去掉年份/作者等限定\n"
+                "- 用英文重新表述 (中文学术论文在 SS/OA 覆盖较少)\n"
+                "- 降低时间范围要求 (e.g. 2020+ → 2015+)\n"
+                "- 增加方法论关键词 (e.g. 'transformer', 'RL', 'CNN')\n"
+            )
+        else:
+            report = "未检索到相关论文。"
         return {
             **state,
-            "report": "未检索到相关论文。",
+            "report": report,
             "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 透传
             "status": "building_graph",
         }

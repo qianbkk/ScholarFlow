@@ -1,12 +1,14 @@
 """
 U.txt + U2.txt + U3.txt 审计 #2 修复测试 (R10.5.22).
+R10.5.46 (P1): 抽到 _state_utils.py, search_node 入口也调.
 
 原问题: LangGraph state 在 refine 循环中 raw_papers / expanded_papers /
 ranked_papers 无限累积, max_iter=3 时 state 从 ~50 论文膨胀到 ~150+,
 下游 LLM 拼接 + SSE 序列化线性放大 Token 成本.
 
-修复: backend.agents.query_refiner.prune_state() — 按 relevance_score
-排序后截到 3 个 cap (RAW/EXPANDED=50, RANKED=30).
+修复: backend.agents._state_utils.prune_state() — 按 relevance_score
+排序后截到 3 个 cap (RAW/EXPANDED=50, RANKED=30). 任何节点入口都可调,
+不仅是 query_refiner. R10.5.46 加 search_node 入口也调, 第一次 pass 也有保护.
 
 测试覆盖:
   1. prune_state 不修改 len ≤ cap 的 list (idempotent)
@@ -15,6 +17,8 @@ ranked_papers 无限累积, max_iter=3 时 state 从 ~50 论文膨胀到 ~150+,
   4. 嵌套 dict (paper 内部字段) 完整保留, 不做 key 裁剪
   5. RAW/EXPANDED/RANKED 三个 cap 独立生效
   6. cap 上限值正确 (常量 50/50/30)
+  7. (R10.5.46) search_node 入口也调 prune_state — 验证 mock search_node
+     入口能正确 cap, 防止测试侧遗漏集成
 """
 from __future__ import annotations
 
@@ -26,7 +30,8 @@ sys.path.insert(0, str(ROOT))
 
 import pytest
 
-from backend.agents.query_refiner import (
+# R10.5.46: prune_state 抽到 _state_utils.py, query_refiner.py 不再定义.
+from backend.agents._state_utils import (
     prune_state,
     RAW_PAPERS_CAP,
     EXPANDED_PAPERS_CAP,

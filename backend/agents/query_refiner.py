@@ -8,61 +8,16 @@ from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
+# R10.5.46: prune_state 抽到 _state_utils.py 共享, search_node 入口也调.
+from backend.agents._state_utils import prune_state
 
 logger = logging.getLogger(__name__)
-
-
-# R10.5.22 (U.txt + U2.txt + U3.txt 审计 #2): 跨迭代 state 裁剪.
-# 旧实现: raw_papers / expanded_papers / ranked_papers 在 refine 循环里无限累积,
-# max_iter=3 时 state 总论文数从 ~50 膨胀到 ~150, 序列化到 SSE 事件 + LLM
-# sub_queries 拼接时全部要走一遍, Token 成本 + 内存 + 延迟都线性放大.
-# 修复: 入口处按 relevance_score 排序后截到上限, 高相关保留, 噪声裁掉.
-# 阈值:
-#   - RAW_PAPERS_CAP: SS 原始检索结果, 50 篇足够覆盖多源双 iter
-#   - EXPANDED_PAPERS_CAP: 引文扩展, 50 篇 (跟 citation_expander MAX_TOTAL_PAPERS 对齐)
-#   - RANKED_PAPERS_CAP: LLM 实际消费的, 30 篇足以喂出高质量综述
-RAW_PAPERS_CAP = 50
-EXPANDED_PAPERS_CAP = 50
-RANKED_PAPERS_CAP = 30
-
-
-def _prune_papers_by_score(papers: list[dict], cap: int) -> list[dict]:
-    """按 relevance_score 降序裁到 cap. 0 分论文也保留 (ranker 跳过情况), 仅按原序.
-
-    这里不复制 state, 直接返回新 list (LangGraph reducer 自然合并).
-    """
-    if len(papers) <= cap:
-        return papers
-    # 优先保留有 relevance_score 的, 按分数降序
-    with_score = [p for p in papers if (p.get("relevance_score") or 0) > 0]
-    without_score = [p for p in papers if (p.get("relevance_score") or 0) <= 0]
-    with_score.sort(key=lambda p: p.get("relevance_score", 0), reverse=True)
-    return (with_score + without_score)[:cap]
-
-
-def prune_state(state: SearchState) -> SearchState:
-    """U.txt 审计 #2 修复: 跨迭代 state 裁剪, 防 raw/expanded/ranked 无限累积.
-
-    在 query_refine_node 入口 + 每次 refine 后调一次. 不修改 iteration / status,
-    只把 3 个 paper list 截到上限, 减少下游 LLM 拼接 + SSE 序列化成本.
-    """
-    raw = state.get("raw_papers") or []
-    expanded = state.get("expanded_papers") or []
-    ranked = state.get("ranked_papers") or []
-    new_state = dict(state)
-    if len(raw) > RAW_PAPERS_CAP:
-        new_state["raw_papers"] = _prune_papers_by_score(raw, RAW_PAPERS_CAP)
-    if len(expanded) > EXPANDED_PAPERS_CAP:
-        new_state["expanded_papers"] = _prune_papers_by_score(expanded, EXPANDED_PAPERS_CAP)
-    if len(ranked) > RANKED_PAPERS_CAP:
-        new_state["ranked_papers"] = _prune_papers_by_score(ranked, RANKED_PAPERS_CAP)
-    return new_state  # type: ignore[return-value]
 
 
 async def query_refine_node(state: SearchState) -> SearchState:
     """分析当前结果的不足，生成补充查询词。"""
 
-    # R10.5.22: 入口先裁剪 state, 防止本 iter 读到大膨胀 list
+    # R10.5.22 + R10.5.46: 入口先裁剪 state, 防止本 iter 读到大膨胀 list
     state = prune_state(state)
 
     ranked = state.get("ranked_papers") or []

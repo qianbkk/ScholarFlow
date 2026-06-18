@@ -93,7 +93,20 @@ def should_refine(state: SearchState) -> str:
             return "synthesize"
 
     if len(ranked) < 5:
-        logger.info(f"[Router] Too few papers ({len(ranked)}) -> refine")
+        # R10.5.46 (P1 LangGraph safety net): 连续 0 结果 → 强制收口, 不要再 refine.
+        # 场景: 冷门查询 (e.g. "xyzzy" / 拼错术语) → SS/OA 永远 0 → 死磕 budget.
+        # 旧实现: papers < 5 → 永远 refine → 3 次空迭代, 浪费 token + budget.
+        # 新实现: empty_result_streak >= 2 强制 synthesize, synthesis 收到 streak
+        # 标记后给用户友好提示 (建议修改查询措辞).
+        streak = int(state.get("empty_result_streak") or 0)
+        if streak >= 2:
+            logger.warning(
+                f"[Router] empty_result_streak={streak} >= 2, "
+                f"too few papers ({len(ranked)}) -> force synthesize "
+                f"(avoid wasted refine on cold/junk query)"
+            )
+            return "synthesize"
+        logger.info(f"[Router] Too few papers ({len(ranked)}), streak={streak} -> refine")
         return "refine"
 
     # 质量检查：Top5 平均相关性

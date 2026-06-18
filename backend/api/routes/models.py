@@ -73,6 +73,10 @@ def make_initial_state(
         # R10.5.14 (P0-A): query_decomposer 抽出的结构化约束. 初始 None,
         # 节点成功返回后会被覆盖. TypedDict 已声明该字段.
         "constraints": None,
+        # R10.5.46 (P1 LangGraph safety net): 连续 0 结果迭代计数器. 初始 0,
+        # search_node 在 dedup 后唯一论文数为 0 时 +1, 否则重置 0. router
+        # 在 streak >= 2 时强制 synthesize (防冷门/乱码查询死磕 budget).
+        "empty_result_streak": 0,
     }
     if not include_expanded_ids:
         out.pop("expanded_paper_ids", None)

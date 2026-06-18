@@ -20,6 +20,8 @@ from backend.api import semantic_scholar, openalex, arxiv, crossref, pubmed
 from backend.utils.text_utils import deduplicate_papers, _safe_year
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 from backend.utils.async_helpers import bounded_gather  # VULN-004
+# R10.5.46 (P1): 共享 state 裁剪. search_node 入口也调, 第一次 pass 也有 cap.
+from backend.agents._state_utils import prune_state
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +63,12 @@ async def _throttled_search(coro, semaphore: asyncio.Semaphore):
 
 async def search_node(state: SearchState) -> SearchState:
     """并行调用双源 API，合并去重。"""
+
+    # R10.5.46 (P1): 入口先裁剪 state. 第一次 pass (iter 1, 还没 refine) 也调,
+    # 避免长 query 拉满 state (raw 50+ / expanded 50+ 不裁会跟着 LLM
+    # context 走 + 序列化到 SSE 事件). 之前只 query_refine_node 调, 第一次
+    # pass 没保护, 长 query 用户直接撞 token 失控.
+    state = prune_state(state)
 
     # M-A 修复 (P0-2 PER_ITER 语义): search_agent 是每个 iter 的入口节点 (无论 iter 1
     # 由 query_decompose 调入, 还是 iter N 由 query_refiner→search 回环调入)。在节点
@@ -179,9 +187,20 @@ async def search_node(state: SearchState) -> SearchState:
 
     logger.info(f"[search_node] iter={iteration} | sub_queries={len(sub_queries)} | unique={len(unique_papers)}")
 
+    # R10.5.46 (P1 LangGraph safety net): 跟踪连续 0 结果迭代数.
+    # 0 唯一论文 (deduplicate 后) → streak +1; 否则 streak = 0.
+    # router.should_refine 在 streak >= 2 时强制 synthesize, 防冷门/乱码查询
+    # 在 refine 循环里死磕 budget 耗尽.
+    prev_streak = int(state.get("empty_result_streak") or 0)
+    if len(unique_papers) == 0:
+        new_streak = prev_streak + 1
+    else:
+        new_streak = 0
+
     return {
         **state,
         "raw_papers": [p.to_dict() for p in unique_papers],
         "prev_iter_cost_usd": prev_iter_cost,  # M-A P0-2: 本轮起点成本透传
+        "empty_result_streak": new_streak,
         "status": "expanding",
     }

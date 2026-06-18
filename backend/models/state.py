@@ -86,3 +86,9 @@ class SearchState(TypedDict):
     # R10.5.15 (P1-D): 加 query_type (simple/survey/method/comparison/latest),
     # 让 search/synthesize 节点可按意图调 sub_queries 数量 / 报告侧重.
     constraints: Optional[dict]
+
+    # R10.5.46 (P1 LangGraph safety net): 连续 0 结果迭代计数器.
+    # 防"冷门查询 / 乱码查询"在 refine 循环里死磕 budget 耗尽.
+    # 0 结果: streak +1; 有结果: streak = 0.
+    # router.should_refine 在 streak >= 2 时强制 synthesize (避免 3 次空迭代).
+    empty_result_streak: int
