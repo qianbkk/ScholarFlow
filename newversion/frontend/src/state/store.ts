@@ -1,13 +1,14 @@
-// v3 state — a single module-scope reactive store. The product is small
-// enough that we don't need Redux/Zustand. The store exposes typed
-// actions and a `subscribe` for fine-grained re-render.
+// v4 state — single module-scope reactive store.
+// v3 had 13 useState + 3 contexts. v4 has one store + a useStore hook.
 
 import type { NodeProgress, Paper, SearchResult } from '../types';
 
+export type AppMode = 'empty' | 'running' | 'done';
+export type Overlay = null | 'graph' | 'papers' | 'compare';
+
 export interface StoreState {
+  mode: AppMode;
   query: string;
-  running: boolean;
-  error: string | null;
   result: SearchResult | null;
   cost: number;
   tokens: number;
@@ -15,11 +16,15 @@ export interface StoreState {
   nodes: NodeProgress[];
   selected: string[];
   hovered: string | null;
-  events: Array<{ event: string; ts: number; data: unknown }>;
+  // The currently-expanded inline paper card in the report
+  expandedPaperId: string | null;
+  // ⌘G / ⌘P / ⌘E overlays
+  overlay: Overlay;
   searchId: string | null;
+  error: string | null;
 }
 
-const PIPELINE = [
+const PIPELINE: Array<{ id: string; label: string }> = [
   { id: 'query_decomposer', label: 'Decompose' },
   { id: 'query_refiner', label: 'Refine' },
   { id: 'paper_searcher', label: 'Search' },
@@ -30,20 +35,31 @@ const PIPELINE = [
   { id: 'synthesis', label: 'Synthesize' },
 ];
 
+function initialNodes(): NodeProgress[] {
+  return PIPELINE.map((n) => ({
+    node_id: n.id,
+    label: n.label,
+    status: 'pending' as const,
+    started_at: null,
+    finished_at: null,
+  }));
+}
+
 function initial(): StoreState {
   return {
+    mode: 'empty',
     query: '',
-    running: false,
-    error: null,
     result: null,
     cost: 0,
     tokens: 0,
     startedAt: null,
-    nodes: PIPELINE.map((n) => ({ node_id: n.id, label: n.label, status: 'pending', started_at: null, finished_at: null })),
+    nodes: initialNodes(),
     selected: [],
     hovered: null,
-    events: [],
+    expandedPaperId: null,
+    overlay: null,
     searchId: null,
+    error: null,
   };
 }
 
@@ -60,7 +76,9 @@ export const store = {
   },
   subscribe(fn: () => void): () => void {
     listeners.add(fn);
-    return () => listeners.delete(fn);
+    return () => {
+      listeners.delete(fn);
+    };
   },
   setQuery(q: string) {
     state = { ...state, query: q };
@@ -69,19 +87,19 @@ export const store = {
   startSearch() {
     state = {
       ...initial(),
+      mode: 'running',
       query: state.query,
-      running: true,
       startedAt: Date.now(),
-      nodes: PIPELINE.map((n) => ({ node_id: n.id, label: n.label, status: 'pending', started_at: null, finished_at: null })),
+      nodes: initialNodes(),
     };
     notify();
   },
   finishSearch(result: SearchResult) {
-    state = { ...state, running: false, result, searchId: result.search_id };
+    state = { ...state, mode: 'done', result, searchId: result.search_id };
     notify();
   },
   failSearch(err: string) {
-    state = { ...state, running: false, error: err };
+    state = { ...state, mode: 'empty', error: err };
     notify();
   },
   updateNode(nodeId: string, patch: Partial<NodeProgress>) {
@@ -95,11 +113,9 @@ export const store = {
     state = { ...state, cost, tokens };
     notify();
   },
-  pushEvent(event: string, data: unknown) {
-    state = {
-      ...state,
-      events: [...state.events, { event, ts: Date.now(), data }].slice(-100),
-    };
+  expandPaper(id: string | null) {
+    state = { ...state, expandedPaperId: id };
+    notify();
   },
   toggleSelect(id: string) {
     if (state.selected.includes(id)) {
@@ -119,8 +135,8 @@ export const store = {
     state = { ...state, hovered: id };
     notify();
   },
-  setSearchId(id: string) {
-    state = { ...state, searchId: id };
+  setOverlay(o: Overlay) {
+    state = { ...state, overlay: o };
     notify();
   },
   reset() {
@@ -129,5 +145,5 @@ export const store = {
   },
 };
 
-export const PIPELINE_NODES = PIPELINE;
+export { PIPELINE };
 export type { Paper };

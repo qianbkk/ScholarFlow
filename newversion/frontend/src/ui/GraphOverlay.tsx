@@ -1,5 +1,5 @@
-// GraphPanel — D3 force-directed graph. Viridis by year, color-blind safe.
-// Hover highlights 1-hop neighborhood. ~320px wide.
+// GraphOverlay — ⌘G. Fullscreen D3 force-directed graph.
+// Dark stage, no panels, just the graph centered with the query above.
 
 import { useEffect, useRef } from 'react';
 import * as d3 from 'd3';
@@ -7,8 +7,8 @@ import { useStore } from '../hooks/useStore';
 import { store } from '../state/store';
 import type { CitationGraph, SimNode } from '../types';
 
-const W = 320;
-const H = 380;
+const W = 920;
+const H = 580;
 const VIRIDIS = ['#fde725', '#b5de2b', '#6ece58', '#35b779', '#1f9e89', '#26828e', '#31688e', '#3e4989', '#482878', '#440154'];
 
 function viridis(t: number): string {
@@ -20,12 +20,10 @@ interface Props {
   graph: CitationGraph;
 }
 
-export function GraphPanel({ graph }: Props) {
+export function GraphOverlay({ graph }: Props) {
   const ref = useRef<SVGSVGElement | null>(null);
   const simRef = useRef<d3.Simulation<SimNode, undefined> | null>(null);
-  const state = useStore();
-  const hoveredId = state.hovered;
-  const selected = state.selected;
+  const { hovered, selected } = useStore();
 
   useEffect(() => {
     const svg = ref.current;
@@ -40,7 +38,7 @@ export function GraphPanel({ graph }: Props) {
         .attr('y', H / 2)
         .attr('text-anchor', 'middle')
         .attr('font-family', '"JetBrains Mono", monospace')
-        .attr('font-size', 11)
+        .attr('font-size', 12)
         .attr('fill', 'var(--ink-3)')
         .text('graph empty');
       return;
@@ -72,12 +70,12 @@ export function GraphPanel({ graph }: Props) {
         d3
           .forceLink<SimNode, d3.SimulationLinkDatum<SimNode>>(links as d3.SimulationLinkDatum<SimNode>[])
           .id((d) => d.id)
-          .distance(50)
+          .distance(70)
           .strength(0.6),
       )
-      .force('charge', d3.forceManyBody().strength(-80))
+      .force('charge', d3.forceManyBody().strength(-110))
       .force('center', d3.forceCenter(W / 2, H / 2))
-      .force('collide', d3.forceCollide<SimNode>().radius((d) => d.size + 3))
+      .force('collide', d3.forceCollide<SimNode>().radius((d) => d.size + 4))
       .alphaDecay(0.1);
     simRef.current = sim;
 
@@ -95,13 +93,17 @@ export function GraphPanel({ graph }: Props) {
       .selectAll<SVGCircleElement, SimNode>('circle')
       .data(nodes)
       .join('circle')
-      .attr('r', (d) => Math.max(3, d.size))
+      .attr('r', (d) => Math.max(4, d.size))
       .attr('fill', (d) => (d.year ? color(d.year) : viridis(0.5)))
       .attr('stroke', (d) => (selected.includes(d.id) ? 'var(--accent)' : 'var(--base)'))
-      .attr('stroke-width', (d) => (selected.includes(d.id) ? 2 : 1))
+      .attr('stroke-width', (d) => (selected.includes(d.id) ? 2.5 : 1))
       .style('cursor', 'pointer')
       .on('mouseenter', (_e, d) => store.setHover(d.id))
       .on('mouseleave', () => store.setHover(null))
+      .on('click', (_e, d) => {
+        store.expandPaper(d.id);
+        store.setOverlay(null);
+      })
       .call(
         d3
           .drag<SVGCircleElement, SimNode>()
@@ -151,7 +153,7 @@ export function GraphPanel({ graph }: Props) {
       node.attr('opacity', (d) => (n.has(d.id) ? 1 : 0.2));
       link.attr('stroke-opacity', (l) => (l.source === id || l.target === id ? 0.95 : 0.1));
     };
-    apply(hoveredId);
+    apply(hovered);
     (sim as unknown as { _apply?: (id: string | null) => void })._apply = apply;
 
     return () => {
@@ -161,41 +163,18 @@ export function GraphPanel({ graph }: Props) {
 
   useEffect(() => {
     const sim = simRef.current as unknown as { _apply?: (id: string | null) => void } | null;
-    sim?._apply?.(hoveredId);
-  }, [hoveredId]);
+    sim?._apply?.(hovered);
+  }, [hovered]);
 
   return (
-    <div className="relative" style={{ background: 'var(--surface-1)' }}>
-      <svg
-        ref={ref}
-        viewBox={`0 0 ${W} ${H}`}
-        width="100%"
-        height={H}
-        role="img"
-        aria-label="Citation graph"
-        style={{ display: 'block' }}
-      />
-      <div
-        className="absolute bottom-1.5 left-2 mono text-[9px]"
-        style={{ color: 'var(--ink-3)' }}
-      >
-        {graph.metadata.total_papers} nodes · {graph.metadata.total_links} edges
-      </div>
-      <div
-        className="absolute bottom-1.5 right-2 flex items-center gap-1.5"
-        style={{ color: 'var(--ink-3)' }}
-      >
-        <span className="mono text-[9px]">year</span>
-        <span
-          aria-hidden
-          style={{
-            display: 'inline-block',
-            width: 50,
-            height: 5,
-            background: 'linear-gradient(to right, #1f9e89, #26828e, #3e4989, #440154)',
-          }}
-        />
-      </div>
-    </div>
+    <svg
+      ref={ref}
+      viewBox={`0 0 ${W} ${H}`}
+      width="100%"
+      height="100%"
+      role="img"
+      aria-label="Citation graph"
+      style={{ display: 'block', maxHeight: 'calc(100vh - 240px)' }}
+    />
   );
 }

@@ -1,4 +1,4 @@
-// v3 domain types — mirror newversion/backend/scholarflow_v3/models.py
+// v4 domain types — mirror newversion/backend/scholarflow_v3/models.py
 
 export type PaperSource = 'semantic_scholar' | 'openalex' | 'local_demo' | 'synthesis';
 

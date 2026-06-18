@@ -1,4 +1,4 @@
-// v3 API client. Calls the v3 backend at /api/v3/* via the vite proxy.
+// v4 API client. Calls /api/v3/* via the vite proxy on port 9000.
 
 import type { LiveEvent, SearchResult } from '../types';
 
@@ -18,7 +18,7 @@ export interface SearchHandlers {
   onPapers: (papers: unknown[]) => void;
   onRanked: (papers: unknown[]) => void;
   onCritique: (text: string) => void;
-  onLog: (text: string) => void;
+  onLog: () => void;
   onResult: (result: SearchResult) => void;
   onError: (err: Error) => void;
   signal?: AbortSignal;
@@ -83,7 +83,7 @@ export async function streamSearch(params: SearchParams, h: SearchHandlers): Pro
         } else if (ev === 'critique') {
           h.onCritique(String((data as { text: string }).text));
         } else if (ev === 'log') {
-          h.onLog(String((data as { node: string }).node));
+          h.onLog();
         } else if (ev === 'result') {
           h.onResult((data as { data: SearchResult }).data as unknown as SearchResult);
           return;
@@ -100,10 +100,4 @@ export async function streamSearch(params: SearchParams, h: SearchHandlers): Pro
       h.onError(err as Error);
     }
   }
-}
-
-export async function fetchHealth(): Promise<{ status: string; version: string; nodes: number }> {
-  const r = await fetch(`${API_BASE}/health`);
-  if (!r.ok) throw new Error('health failed');
-  return r.json();
 }

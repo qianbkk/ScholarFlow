@@ -1,6 +1,7 @@
-/* ScholarFlow v3 — design tokens.
-   Aesthetic: dark graphite control room. Mono + sans only. Electric cyan accent.
-   No serif (v1/v2 trap). No library red (v2 trap). No cream/sand/parchment.
+/* ScholarFlow v4 — design tokens.
+   v3's three-column layout was wrong. v4 is one column. The visual system
+   is the same: dark graphite, electric cyan, mono + sans only. The
+   difference is the layout, the spacing, and the emphasis.
 */
 
 :root,
@@ -13,15 +14,14 @@
   --ink-3: oklch(50% 0.005 240);
   --rule: oklch(28% 0.005 240);
   --rule-strong: oklch(38% 0.005 240);
-
   --accent: oklch(78% 0.16 200);
   --accent-soft: oklch(28% 0.10 200);
-
   --signal-ok: oklch(70% 0.13 145);
   --signal-warn: oklch(78% 0.13 75);
   --signal-err: oklch(68% 0.18 25);
-
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --read-max: 720px;
+  --prose-max: 65ch;
 }
 
 [data-theme='light'] {
@@ -36,10 +36,6 @@
   --accent: oklch(45% 0.16 200);
   --accent-soft: oklch(94% 0.04 200);
 }
-
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
 
 * {
   border-color: var(--rule);
@@ -57,7 +53,6 @@ body {
   color: var(--ink-1);
   font-family: 'Inter Tight', system-ui, sans-serif;
   font-feature-settings: 'cv11', 'ss01';
-  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -69,7 +64,7 @@ body {
 
 *:focus-visible {
   outline: 1px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
 }
 
 .mono {
@@ -79,7 +74,8 @@ body {
 
 .display {
   font-family: 'Space Grotesk', system-ui, sans-serif;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.015em;
+  font-weight: 500;
 }
 
 .tnum {
@@ -92,40 +88,6 @@ body {
 .hairline-t {
   border-top: 1px solid var(--rule);
 }
-.hairline-r {
-  border-right: 1px solid var(--rule);
-}
-.hairline-l {
-  border-left: 1px solid var(--rule);
-}
-
-/* Accent left bracket — used on selected rows. Never a side-stripe. */
-.bracket-l {
-  position: relative;
-}
-.bracket-l::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
-  width: 2px;
-  background: var(--accent);
-}
-
-.cite {
-  color: var(--accent);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.75em;
-  font-weight: 500;
-  text-decoration: none;
-  vertical-align: super;
-  padding: 0 1px;
-}
-.cite:hover {
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -136,49 +98,42 @@ body {
   }
 }
 
+/* Prose styles for the report. No serif, no eyebrow text, generous rhythm. */
 .sf-prose {
   font-family: 'Inter Tight', system-ui, sans-serif;
-  font-size: 14px;
-  line-height: 1.7;
+  font-size: 16px;
+  line-height: 1.75;
   color: var(--ink-1);
-}
-.sf-prose h1,
-.sf-prose h2,
-.sf-prose h3 {
-  font-family: 'Space Grotesk', system-ui, sans-serif;
-  font-weight: 500;
-  letter-spacing: -0.01em;
-  color: var(--ink-1);
-  margin-top: 1.6em;
-  margin-bottom: 0.5em;
-  text-wrap: balance;
 }
 .sf-prose h1 {
-  font-size: 1.6rem;
-  margin-top: 0.4em;
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  font-size: 1.75rem;
+  line-height: 1.25;
+  color: var(--ink-1);
+  margin: 0 0 0.5em;
 }
 .sf-prose h2 {
-  font-size: 1.15rem;
-  margin-top: 1.6em;
-  color: var(--ink-2);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 0.85rem;
-  font-weight: 600;
-}
-.sf-prose h3 {
-  font-size: 1rem;
+  letter-spacing: 0.18em;
+  color: var(--ink-3);
+  margin: 2.4em 0 0.6em;
 }
 .sf-prose p {
-  margin: 0 0 0.9em;
+  margin: 0 0 1.1em;
+  max-width: 65ch;
 }
 .sf-prose ul,
 .sf-prose ol {
-  margin: 0 0 0.9em;
-  padding-left: 1.3em;
+  margin: 0 0 1.1em;
+  padding-left: 1.4em;
 }
 .sf-prose li {
-  margin-bottom: 0.25em;
+  margin-bottom: 0.3em;
 }
 .sf-prose strong {
   color: var(--ink-1);
@@ -188,17 +143,32 @@ body {
   font-family: 'JetBrains Mono', monospace;
   font-size: 0.85em;
   background: var(--surface-2);
-  padding: 1px 5px;
-}
-.sf-prose pre {
-  font-family: 'JetBrains Mono', monospace;
-  background: var(--surface-1);
-  border: 1px solid var(--rule);
-  padding: 12px 14px;
-  overflow-x: auto;
+  padding: 1px 6px;
 }
 .sf-prose a {
   color: var(--accent);
   text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+}
+
+/* Citation sup */
+.cite {
+  color: var(--accent);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.72em;
+  font-weight: 500;
+  text-decoration: none;
+  vertical-align: super;
+  padding: 0 1px;
+  cursor: pointer;
+  line-height: 0;
+}
+.cite:hover {
+  text-decoration: underline;
   text-underline-offset: 2px;
+}
+.cite.active {
+  color: var(--ink-1);
+  background: var(--accent-soft);
 }

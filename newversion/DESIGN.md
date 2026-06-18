@@ -1,135 +1,186 @@
-# ScholarFlow v3 — Design
+# ScholarFlow v4 — Design
 
-> Different from v1/v2 by intent. Where v1 was a parchment-and-serif workbench,
-> v3 is a dark graphite control room. The aesthetic is "what a senior engineer
-> would build for themselves on a Friday night", not "what a design agency
-> thinks a research tool should look like."
+> v3 had a three-column "control-room" layout. The user said it was cluttered,
+> no hierarchy, no design feel. This v4 redesigns the layout entirely.
+>
+> **The principle**: focus-first. The screen shows ONE thing at a time.
+> Everything else is a drawer, a footnote, or a keystroke away.
 
 ## Theme
 
-**Dark default, light optional.** Dark mode isn't a theme — it's the canonical surface. The light theme is a thoughtful alternative, not the starting point.
+Dark by default. Light as an option. Cool chroma on the base, electric cyan
+as the only saturated color. Same palette as v3 — the visual system wasn't
+the problem, the layout was.
 
-Base surface: deep graphite (`oklch(15% 0.005 240)`) — not pure black, not warm gray. Slight cool chroma away from neutral to avoid the "after-hours surveillance" feel of `#0a0a0a`. Surface is layered: the page sits on a slightly lighter card, panels sit on the page.
+## The screen is one thing at a time
 
-The accent: **electric cyan** (`oklch(78% 0.16 200)`) — used as the only saturated color in the UI. Not a brand blue, not a SaaS purple. Functional, high-contrast, color-blind safe. Used for: focus, primary action, current node, citation marker.
+Not a workspace. Not a dashboard. A single page that asks: **what are you
+looking at right now?**
 
-## Color
+- **State 0 — empty.** A large centered input field, a single hint line, the
+  brand. Nothing else. This is the home.
+- **State 1 — running.** The input collapses to a thin progress line. The
+  8-node pipeline animates inline. No papers, no report yet.
+- **State 2 — done.** A reading-first Markdown report fills the page. Papers
+  are inline footnotes (you read them where the citation is). The citation
+  graph is a single-line summary; pressing `⌘G` opens it fullscreen.
+- **State 3 — compare.** Two papers side-by-side, fullscreen, dark stage.
+  Pressed from the paper footnote card.
 
-OKLCH throughout. No hex anywhere outside this file.
-
-### Dark (default)
-
-| Token | Value | Purpose |
-|---|---|---|
-| `--base` | `oklch(15% 0.005 240)` | Page background |
-| `--surface-1` | `oklch(19% 0.005 240)` | Panels, sidebars |
-| `--surface-2` | `oklch(23% 0.005 240)` | Hover, active row, paper card |
-| `--ink-1` | `oklch(94% 0.005 240)` | Primary text |
-| `--ink-2` | `oklch(70% 0.005 240)` | Secondary text, labels |
-| `--ink-3` | `oklch(50% 0.005 240)` | Muted text, hints |
-| `--rule` | `oklch(28% 0.005 240)` | Hairlines, dividers |
-| `--rule-strong` | `oklch(38% 0.005 240)` | Active borders, focus rings |
-| `--accent` | `oklch(78% 0.16 200)` | Electric cyan. The only saturated color. |
-| `--accent-soft` | `oklch(28% 0.10 200)` | Tinted background for active states |
-| `--signal-ok` | `oklch(70% 0.13 145)` | Done, healthy |
-| `--signal-warn` | `oklch(78% 0.13 75)` | Rate-limited, cost warning |
-| `--signal-err` | `oklch(68% 0.18 25)` | Failed, error |
-
-### Light (alternative)
-
-| Token | Value | Purpose |
-|---|---|---|
-| `--base` | `oklch(98% 0.002 240)` | Page |
-| `--surface-1` | `oklch(96% 0.002 240)` | Panels |
-| `--surface-2` | `oklch(92% 0.002 240)` | Hover, active |
-| `--ink-1` | `oklch(20% 0.005 240)` | Primary |
-| `--ink-2` | `oklch(40% 0.005 240)` | Secondary |
-| `--ink-3` | `oklch(55% 0.005 240)` | Muted |
-| `--rule` | `oklch(86% 0.002 240)` | Hairlines |
-| `--accent` | `oklch(45% 0.16 200)` | Deeper cyan for light bg |
-| `--accent-soft` | `oklch(94% 0.04 200)` | Active bg |
-
-### Forbidden
-
-- Cream / sand / paper / parchment body backgrounds (the v1 trap).
-- Library red, terracotta, oxblood, leather-bound colors (the v2 trap).
-- Purple-to-blue gradients. Glassmorphism. Identical card grids.
-- Side-stripe borders (the previous "selected" indicator). Use 1px top + bottom hairline + a 2px left bracket in `--accent` for active, never a decorative stripe.
-- Gradient text. Hero-metric tiles. Eyebrow text on every section. "01/02/03" scaffolding.
-
-## Typography
-
-- **Display / Headings**: `Space Grotesk` (variable weight). Geometric, technical, distinct from any prior v1/v2. Used sparingly: page title, panel headers, paper titles in the report.
-- **Body / UI**: `Inter Tight` (variable weight). Tight, dense, scannable. Used for everything else: controls, labels, paragraphs.
-- **Mono / Data**: `JetBrains Mono` (variable weight). Used for IDs, tokens, costs, latencies, code, BibTeX. Tabular figures on by default.
-- **NO serif**. v1/v2 used Source Serif 4 as a category reflex ("academic = serif"). v3 is mono + sans only.
-
-Sizes are denser than v1/v2: body 14px, label 12px, micro 11px. Heading scale stops at 28px — no hero text.
-
-## Motion
-
-- **Default easing**: `cubic-bezier(0.16, 1, 0.3, 1)` (ease-out-expo).
-- **Duration**: 120-180ms for micro (button press, hover), 240ms for panel transitions, 0ms for the citation graph (D3 handles its own physics).
-- **No bounce. No elastic. No spring overshoot.**
-- **No "stagger reveal" on every section.** One well-orchestrated entrance on the first load; subsequent updates are instant.
-- **Reduced motion**: crossfade only, or instant.
+The transition between states is animated but quiet — opacity + 4px translate,
+220ms ease-out-expo, no bounce.
 
 ## Layout
 
-Single-page workspace. No home, no project list, no settings drawer.
-
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│  ⌐ ScholarFlow                                  [P] [L] [·]      │ ← top: app + theme + status
-├──────────────────────────────────────────────────────────────────┤
-│  ▎  query_decomposer  →  query_refiner  →  …  →  synthesis       │ ← pipeline strip (always)
-├──────────────────────────────────────────────────────────────────┤
-│                                                                  │
-│  ▶ Run a query. . .  [⌘↵]                                       │ ← command bar (large)
-│                                                                  │
-├────────────────┬──────────────────────────────┬─────────────────┤
-│  RESULTS  12   │  REPORT                      │  GRAPH          │
-│                │                              │                 │
-│  [01] paper a  │  #  Report Title             │  (force layout) │
-│  [02] paper b  │  body body body. [1]         │                 │
-│  [03] paper c  │                              │                 │
-│  ...           │  References                  │  12 nodes · 18  │
-│                │  [1] paper a                 │  edges          │
-│                │  [2] paper b                 │                 │
-├────────────────┴──────────────────────────────┴─────────────────┤
-│  $0.0241  ·  4,231 tok  ·  00:42  ·  iter 1                     │ ← footer: live cost
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────┐
+│  ⌐ ScholarFlow                       [1]→[2]→[3]→[4]→[5]…  │ ← top: 36px, hairline bottom
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│                                                            │
+│                                                            │
+│                       ┌──────────────┐                     │  State 0: empty
+│                       │              │                     │  Center: 720px column
+│                       │   ▶ query    │                     │  96px tall input
+│                       │              │                     │
+│                       └──────────────┘                     │
+│                                                            │
+│                       ⌘↵ run  ·  8 nodes  ·  ~30s          │
+│                                                            │
+│                                                            │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│  $0.0024  ·  1,820 tok  ·  00:03  ·  iter 1          idle  │  bottom: 32px footer
+└────────────────────────────────────────────────────────────┘
 ```
 
-Three regions, but **denser than v1/v2**: panels are tightly packed, no internal padding bloat, panel headers are one row of small mono caps, panel content goes edge-to-edge.
+The whole page is **one centered column, max-width 720px, generous padding**.
+Nothing on the left, nothing on the right. Hairline rules at the top and
+bottom for navigation and telemetry.
 
-## Components
+## State 2 — report view (the heart of the product)
 
-- **TopBar**: app name + theme toggle + connection dot. ~36px tall.
-- **PipelineStrip**: always-visible row of 8 nodes. Active node is `--accent` text + a left bracket. Done node is a checkmark glyph in `--signal-ok`. Pending is `--ink-3` text. Connector arrows between nodes. This is the differentiator — the user always sees the system working.
-- **CommandBar**: the largest interactive element. Wide, with a single-line input, a "▶" submit affordance, and a `⌘↵` hint. On focus, expands 4px to show a thin `--rule-strong` underline.
-- **ResultsPanel**: dense list of papers. Each row: index `01-99` in mono, title in sans, authors in mono, year + venue + cites in mono. Hairline between rows. No card. Selected row: 2px left bracket in `--accent` + `--surface-2` bg.
-- **ReportPanel**: rendered Markdown. Body 14px. Headings in Space Grotesk (no serif). Inline citations as `<sup>` numbers in `--accent` linking to a references section at the bottom. References in mono, dense, no card padding.
-- **GraphPanel**: D3 force layout. Viridis ramp on year. Node hover highlights 1-hop neighborhood. ~320px wide.
-- **Footer**: live cost counter, token count, elapsed time, iteration. Tabular figures. 32px tall. Always visible.
-- **CompareBar**: when 2 papers are selected, a 240px-tall panel slides up from the footer (push, not overlay) showing side-by-side metadata + abstract. Esc or click outside closes.
+The report is the focus. The screen becomes reading-first:
 
-## Anti-patterns (hard bans, repeated from v2 with additions)
+- Page title (your query) at the top, in `display` (Space Grotesk), 28px.
+- Body text in `body` (Inter Tight), 15px, line-height 1.7, max-width 65ch.
+- Inline citations as `<sup>` numbers in `--accent`. Hover shows paper title.
+- A footnote at the bottom of the report (real `<sup>↩` back-link).
+- A `references` section at the end — same mono dense format as v3.
+- **The paper card lives inline in the report**, not in a side panel. Each
+  citation `[1]` is clickable; clicking expands a small card right there
+  in the flow, showing title / authors / abstract preview / open link.
+  One card open at a time. Click outside to collapse.
 
-- ❌ Side-stripe borders (`border-left: 4px solid`).
-- ❌ Gradient text.
-- ❌ Glassmorphism as a default card style.
-- ❌ Hero-metric tiles.
-- ❌ Identical card grids.
-- ❌ Eyebrow text on every section.
-- ❌ Numbered section markers (01/02/03) above sections.
-- ❌ `border: 1px solid X` + `box-shadow: 0 Npx 16px+` on the same element.
-- ❌ `border-radius: 24px+` on cards. Max 6px on panels.
-- ❌ Sketchy SVG illustrations.
-- ❌ `repeating-linear-gradient` stripe backgrounds.
-- ❌ Hover scale on images.
-- ❌ Cream / sand / paper / parchment body bg.
-- ❌ Serif display font (the v1/v2 trap).
-- ❌ Library red / terracotta / oxblood accent (the v2 trap).
-- ❌ Purple-to-blue gradients (the SaaS trap).
-- ❌ Gray text on a colored background.
+```
+┌────────────────────────────────────────────────────────────┐
+│  ⌐ ScholarFlow                       [1]✓[2]✓[3]✓[4]✓[5]…  │
+├────────────────────────────────────────────────────────────┤
+│                                                            │
+│                                                            │
+│   # Retrieval-Augmented Generation                         │
+│                                                            │
+│   body body body [¹] body body body body body              │
+│   body body body body body body body [²] body              │
+│                                                            │
+│   ┌─ [1] Lewis et al. 2020 ─────────────────────┐         │  inline paper card
+│   │  Retrieval-Augmented Generation for         │         │  click citation
+│   │  Knowledge-Intensive NLP Tasks              │         │  to expand
+│   │                                             │         │
+│   │  NeurIPS · 12,000 cites · final 0.88        │         │
+│   │  We develop a general-purpose fine-tuning   │         │
+│   │  recipe for RAG — models which combine a    │         │
+│   │  pre-trained parametric memory with a       │         │
+│   │  non-parametric memory accessed via a       │         │
+│   │  dense retriever.                          │         │
+│   │                                             │         │
+│   │  [open ↗]  [⌘G see in graph]               │         │
+│   └─────────────────────────────────────────────┘         │
+│                                                            │
+│   body body body body body body body body body             │
+│   body body body [³] body                                  │
+│                                                            │
+│   ── references ──                                         │
+│   [1] Lewis et al. ...                                     │
+│   [2] Schick et al. ...                                    │
+│   [3] Bommasani et al. ...                                 │
+│                                                            │
+│                                                            │
+├────────────────────────────────────────────────────────────┤
+│  ⌘G graph (12 nodes)  ·  ⌘P papers  ·  ⌘E export  ·  $0.0024  │
+└────────────────────────────────────────────────────────────┘
+```
+
+This is the **v1/v2/v3 mistake** corrected: papers aren't a side panel you
+look away from. They live where you read them.
+
+## State 3 — graph fullscreen
+
+Press `⌘G` (or click the footer link). The page fades out, the graph
+fades in, fullscreen. Same dark base, no panel chrome. Title at the
+top: the query, the paper count, the edge count. The graph centered.
+Press `Esc` to return to the report.
+
+This is **v3's "right rail" promoted to a fullscreen mode** — and made
+optional, so the report doesn't compete with it for visual attention.
+
+## State 2 alternative — papers drawer
+
+Press `⌘P`. A 360px right-edge drawer slides in over the report (not
+push, not overlay, but a thin underlay shadow), showing the full ranked
+list with paper metadata. Click a paper to scroll the report to that
+citation. Click outside or press `Esc` to close.
+
+## Empty state design
+
+The empty state is the home. It should feel like opening a beautiful
+notebook:
+
+- Centered, 720px column.
+- Logo / brand mark at the top (small, mono caps).
+- A 96px tall input field with no border, just a 1px bottom hairline.
+  Inset `▶` glyph in `--accent` at the left.
+- One hint line below: `⌘↵ run · 8 nodes · ~30s`.
+- That's it. No tagline, no "what is this", no marketing copy. The
+  tool is the product.
+
+## What v4 removes from v3
+
+- ✗ Three-column layout (left / center / right panels).
+- ✗ Always-visible 8-node pipeline strip.
+- ✗ Side-by-side compare as a 2-column bottom panel.
+- ✗ Tabular-figures-everywhere.
+
+## What v4 keeps from v3
+
+- ✓ Dark by default, electric cyan accent.
+- ✓ Mono + sans only (no serif).
+- ✓ Single module-scope reactive store.
+- ✓ The 8-node pipeline shape and the API contract.
+- ✓ The bottom telemetry footer (cost / tokens / elapsed / iter).
+
+## Anti-patterns (repeated for emphasis)
+
+- ❌ No three-column workspace. No left rail. No right rail.
+- ❌ No "show all the things" mode. One thing at a time.
+- ❌ No side-stripe borders, gradient text, glassmorphism, hero-metric tiles,
+  identical card grids, eyebrow text on every section, "01/02/03" scaffolding.
+- ❌ No `border: 1px solid X` + box-shadow ghost cards.
+- ❌ No `border-radius: 24px+`. Caps at 4px on inputs, 8px on cards.
+- ❌ No hover scale on images.
+- ❌ No cream / sand / paper / parchment body bg.
+- ❌ No serif display font.
+- ❌ No library red / terracotta / oxblood accent.
+- ❌ No purple-to-blue gradients.
+- ❌ No gray text on a colored background.
+
+## Accessibility
+
+- WCAG 2.1 AA. Body text ≥ 4.5:1.
+- Color-blind safe viridis on the citation graph.
+- Every status indicator pairs color with an icon or text label.
+- Keyboard navigable end-to-end: Tab through, Enter to expand, Esc to
+  close, `⌘K` to focus input, `⌘G` for graph, `⌘P` for papers, `⌘E` for
+  export.
+- `prefers-reduced-motion: reduce` honored.
+- Light theme available.

@@ -4,8 +4,6 @@ import { store, type StoreState } from '../state/store';
 
 export function useStore(): StoreState {
   const [s, setS] = useState<StoreState>(store.get());
-  useEffect(() => {
-    return store.subscribe(() => setS(store.get()));
-  }, []);
+  useEffect(() => store.subscribe(() => setS(store.get())), []);
   return s;
 }

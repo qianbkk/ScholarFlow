@@ -1,8 +1,8 @@
-// Theme hook — dark by default. Stored in localStorage as 'sfv3-theme'.
+// Theme hook — dark by default. Stored in localStorage.
 import { useEffect, useState } from 'react';
 
 type Theme = 'dark' | 'light';
-const KEY = 'sfv3-theme';
+const KEY = 'sfv4-theme';
 
 function read(): Theme {
   if (typeof localStorage === 'undefined') return 'dark';
