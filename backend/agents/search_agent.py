@@ -13,9 +13,10 @@ per-request 独立, 不再被其他请求阻塞. 同改 citation_expander._CITAT
 """
 import asyncio
 import logging
+import os
 from backend.models.state import SearchState
 from backend.models.paper import Paper
-from backend.api import semantic_scholar, openalex
+from backend.api import semantic_scholar, openalex, arxiv, crossref, pubmed
 from backend.utils.text_utils import deduplicate_papers, _safe_year
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 from backend.utils.async_helpers import bounded_gather  # VULN-004
@@ -24,6 +25,28 @@ logger = logging.getLogger(__name__)
 
 # 单批 gather 并发上限常量 (per-call, 不再是 module singleton)
 _SEARCH_BATCH_LIMIT = 4
+
+# R10.5.39 Phase 1.1: 多源检索. 默认启用 arXiv/Crossref/PubMed, 走环境变量
+# SCHOLARFLOW_SOURCES 关掉. 例如 SCHOLARFLOW_SOURCES=ss,oa 关 arXiv 等.
+# Google Scholar 不接 (scholarly 不稳且违反 ToS). 留个空位说明.
+_DEFAULT_SOURCES = "ss,oa,arxiv,crossref,pubmed"
+_SOURCES = [s.strip() for s in os.environ.get("SCHOLARFLOW_SOURCES", _DEFAULT_SOURCES).split(",") if s.strip()]
+
+
+def _get_search_coros(query: str, limit: int):
+    """Build the (source_name, coroutine) list based on _SOURCES."""
+    out = []
+    if "ss" in _SOURCES:
+        out.append(("ss", semantic_scholar.search_papers(query, limit=limit)))
+    if "oa" in _SOURCES:
+        out.append(("oa", openalex.search_papers(query, limit=limit)))
+    if "arxiv" in _SOURCES:
+        out.append(("arxiv", arxiv.search_papers(query, limit=limit)))
+    if "crossref" in _SOURCES:
+        out.append(("crossref", crossref.search_papers(query, limit=limit)))
+    if "pubmed" in _SOURCES:
+        out.append(("pubmed", pubmed.search_papers(query, limit=limit)))
+    return out
 
 
 async def _throttled_search(coro, semaphore: asyncio.Semaphore):
@@ -57,27 +80,36 @@ async def search_node(state: SearchState) -> SearchState:
     # Fix-F (R10.5): per-call semaphore, 每个 search_node 独立 4-slot 桶
     batch_semaphore = asyncio.Semaphore(_SEARCH_BATCH_LIMIT)
 
-    # 并发搜索：每个子查询同时查两个数据库
+    # R10.5.39 Phase 1.1: 多源检索. 每个子查询并发 5 个源 (默认全部启用).
+    # SS/OA 限流 15/10 (Round 6 S2), arXiv/Crossref/PubMed 各 10 (polite 间隔).
     # Round 2 PERF-004: 通过 _throttled_search 走 Semaphore(4) 限流，避免 429
-    # Round 6 S2: search_agent limit 30/20 → 15/10, 250→125 papers, 节省 50% SS/OA API 配额
-    # (单次 max_iter=3 不再占满 5min 配额)
-    tasks = []
-    for q in sub_queries:
-        tasks.append(_throttled_search(semantic_scholar.search_papers(q, limit=15), batch_semaphore))
-        tasks.append(_throttled_search(openalex.search_papers(q, limit=10), batch_semaphore))
-
-    # R10.5 Fix-Timeout: per-gather 60s 上限, 防 SS/OA 慢响应累计 timeout.
-    # 60s 截断: 部分 sub_queries 拿不到结果就用空 list, 不阻塞 pipeline.
     # R10.5 Fix-Audit-Bounded-Gather: 用共享 bounded_gather 助手, 消 3x 复制粘贴.
+    # R10.5.40 review: source_name was captured but unused. The lightweight fix
+    # is to log it at the gather site (debug level) — full per-source error
+    # attribution requires refactoring bounded_gather to accept (name, coro)
+    # pairs, which is out of scope here.
+    tasks_with_source: list[tuple[str, object]] = []
+    for q in sub_queries:
+        for source_name, coro in _get_search_coros(q, limit=10):
+            tasks_with_source.append((source_name, _throttled_search(coro, batch_semaphore)))
+    tasks = [t for _, t in tasks_with_source]
+    source_names = [n for n, _ in tasks_with_source]
+
+    # R10.5 Fix-Timeout: per-gather 60s 上限, 防慢响应累计 timeout.
+    # 60s 截断: 部分 sub_queries 拿不到结果就用空 list, 不阻塞 pipeline.
     results = await bounded_gather(
         tasks, label="search_node", timeout=60.0,
     )
 
     all_papers: list[Paper] = []
-    for result in results:
+    for i, result in enumerate(results):
         if isinstance(result, Exception):
             # BUG-002 修复：去掉裸 print，改用 logger
-            logger.warning(f"[search_node] task exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
+            # R10.5.40 review fix: attribute the failure to its source by
+            # position in the gather results. source_names is parallel to
+            # results by construction (we built them in the same loop).
+            src = source_names[i] if i < len(source_names) else "unknown"
+            logger.warning(f"[search_node] {src} task exception: {type(result).__name__}: {scrub_sensitive(str(result))}")
             continue
         if isinstance(result, list):
             all_papers.extend(result)

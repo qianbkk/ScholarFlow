@@ -29,6 +29,24 @@ jobs:
           API_MOCK: 'true'
         run: python -m pytest tests/ -q --tb=short
       # R10.5: 暂时不传 coverage (codecov 没 token 会 fail), 等团队设了 CODECOV_TOKEN 再加
+      # R10.5.40 (Agent 3): local coverage artifact — no Codecov upload (no token yet).
+      - name: Coverage report
+        env:
+          LLM_MOCK: 'true'
+          API_MOCK: 'true'
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            --cov=backend --cov-report=xml --cov-report=term-missing \
+            | tee coverage.txt
+        continue-on-error: true
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: |
+            coverage.xml
+            coverage.txt
 
   security:
     runs-on: ubuntu-latest

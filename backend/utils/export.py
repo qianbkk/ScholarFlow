@@ -1,18 +1,30 @@
-"""utils.export — 学术引文格式导出 (BibTeX / RIS / EndNote)
+"""utils.export — 学术引文格式导出 (BibTeX / RIS / EndNote XML)
 
 R10.5 P0 (用户反馈): 学术工具的"杀手锏" — 用户从搜索结果一键
 导入本地文献管理 (Zotero/Mendeley/EndNote/JabRef). 不需要 Zotero OAuth,
 纯字符串拼接,前端一个 Download 按钮即可.
 
+R10.5.40 Phase 5 (Agent 4): EndNote XML 导出. EndNote 桌面版原生
+支持 XML 导入 (RIS 是行式, XML 是树式 — schema 字段更全, 含
+contributors / titles / keywords 嵌套结构).
+
 格式说明:
   - BibTeX: Zotero / JabRef / BibTeX 工具直接导入
   - RIS: EndNote / Mendeley / RefMan 通用
-  - EndNote .enw: EndNote 专有
+  - EndNote XML: EndNote 桌面版原生支持 (R10.5.40)
 """
 from __future__ import annotations
 
 import re
 from typing import Iterable
+
+# R10.5.40 Phase 5 (Agent 4): EndNote XML — 单独模块, 这里再 re-export.
+# 避免 export.py 一次塞 3 个格式, 拆分职责; 同时保持 `from backend.utils.export
+# import to_endnote_xml` 的导入路径可用 (前端或 API 期望单 entry point).
+from backend.utils.endnote import (  # noqa: E402,F401
+    to_endnote_xml,
+    papers_to_endnote_xml,
+)
 
 
 # ===== BibTeX =====

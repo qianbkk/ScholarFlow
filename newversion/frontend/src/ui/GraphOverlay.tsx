@@ -137,8 +137,12 @@ export function GraphOverlay({ graph }: Props) {
     const neighbors = (id: string) => {
       const s = new Set<string>([id]);
       for (const l of links) {
-        if (l.source === id) s.add(l.target);
-        if (l.target === id) s.add(l.source);
+        // After forceLink initializes, l.source / l.target are SimNode objects,
+        // not strings. Compare on .id to handle both shapes safely.
+        const srcId: string = typeof l.source === 'string' ? l.source : (l.source as SimNode).id;
+        const tgtId: string = typeof l.target === 'string' ? l.target : (l.target as SimNode).id;
+        if (srcId === id) s.add(tgtId);
+        if (tgtId === id) s.add(srcId);
       }
       return s;
     };

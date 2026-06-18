@@ -73,15 +73,84 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   //   3) 工具栏显示 "N.Nx" 缩放指示
   const [zoomLevel, setZoomLevel] = useState<number>(1);
 
+  // R10.5.40 Phase 5 (Agent 4): 过滤器状态 — 年份范围 + 作者子串.
+  // 默认用 graph.metadata.year_range 全量展示, 用户输入后实时收紧.
+  const yearBounds = useMemo<[number, number]>(() => {
+    if (!graph || graph.nodes.length === 0) return [0, 0];
+    if (graph.metadata.year_range) return graph.metadata.year_range;
+    // 兜底: 从节点里扫一遍
+    let lo = Infinity, hi = -Infinity;
+    for (const n of graph.nodes) {
+      const y = n.year || 0;
+      if (y <= 0) continue;
+      if (y < lo) lo = y;
+      if (y > hi) hi = y;
+    }
+    if (!isFinite(lo) || !isFinite(hi)) return [0, 0];
+    return [lo, hi];
+  }, [graph]);
+
+  const [yearMin, setYearMin] = useState<number | null>(null);
+  const [yearMax, setYearMax] = useState<number | null>(null);
+  const [authorFilter, setAuthorFilter] = useState<string>('');
+  // 拿到数据 / 重置过滤范围时同步默认值. 用 ref 标记"是否已为本 graph 初始化",
+  // 避免每次 graph 引用变化都把用户已改的过滤值重置回全量.
+  const filterInitRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!graph) return;
+    if (filterInitRef.current === graph.metadata.query) return;
+    filterInitRef.current = graph.metadata.query;
+    setYearMin(yearBounds[0]);
+    setYearMax(yearBounds[1]);
+    setAuthorFilter('');
+  }, [graph, yearBounds]);
+
   const selected = selectedPaperId;
 
-  // R10.5.8 code-review 优化: 邻居集合 (1 跳) — 两个 effect 都依赖, 提到 useMemo
-  // 避免每次 selected/graph 变化重算 2 次 (旧实现: useEffect 算 count + useEffect
-  // 算 opacity, 各自独立遍历 graph.links 一遍). 50k links 大图节省 50%.
-  const neighborSet = useMemo(() => {
+  // R10.5.40 Phase 5 (Agent 4): 过滤后的节点 / 边 — 用于:
+  //   1) 模拟节点集合 (传递给 d3 force simulation)
+  //   2) 工具栏显示 "N / M 节点"
+  //   3) 邻居集合计算只考虑可见节点
+  // 注意: author / year 过滤是"硬过滤" — 不在范围内的节点不进 simulation,
+  // 不画边. 跟 2-hop 高亮无关, 独立计算.
+  const filteredNodes = useMemo<GraphNode[]>(() => {
+    if (!graph) return [];
+    const lo = yearMin ?? yearBounds[0];
+    const hi = yearMax ?? yearBounds[1];
+    const authorQ = authorFilter.trim().toLowerCase();
+    return graph.nodes.filter((n) => {
+      const y = n.year || 0;
+      if (y > 0 && (y < lo || y > hi)) return false;
+      if (authorQ) {
+        const hit = (n.authors || []).some((a) => a.toLowerCase().includes(authorQ));
+        if (!hit) return false;
+      }
+      return true;
+    });
+  }, [graph, yearMin, yearMax, authorFilter, yearBounds]);
+
+  const visibleIdSet = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes]);
+
+  const filteredLinks = useMemo(() => {
+    if (!graph) return [];
+    return graph.links.filter((l) => {
+      const sAny = l.source as unknown as string | { id: string };
+      const tAny = l.target as unknown as string | { id: string };
+      const sId = typeof sAny === 'string' ? sAny : sAny.id;
+      const tId = typeof tAny === 'string' ? tAny : tAny.id;
+      return visibleIdSet.has(sId) && visibleIdSet.has(tId);
+    });
+  }, [graph, visibleIdSet]);
+
+  // R10.5.40 Phase 5 (Agent 4): 2 跳邻居集合 (替换原 1 跳 neighborSet).
+  // 点击节点 → 高亮 自身 + 1 跳 + 2 跳, 其余 dim. 点击空白处 → 重置 (selected=null).
+  // 计算只走 filteredLinks (被过滤掉的节点不算邻居).
+  // 旧 neighborSet 1 跳保留为 neighborSet1 给 hover / zoom 边缘 dim 用,
+  // 兼容 "Keep the existing 1-hop hover behavior unchanged".
+  const neighborSet1 = useMemo(() => {
     if (!graph || !selected) return null;
     const ns = new Set<string>([selected]);
-    for (const l of graph.links) {
+    for (const l of filteredLinks) {
       const sAny = l.source as unknown as string | { id: string };
       const tAny = l.target as unknown as string | { id: string };
       const sId = typeof sAny === 'string' ? sAny : sAny.id;
@@ -90,12 +159,29 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       if (tId === selected) ns.add(sId);
     }
     return ns;
-  }, [graph, selected]);
+  }, [graph, selected, filteredLinks]);
 
-  // R10.5.5: 当前选中节点的 1 跳邻居数 (含自身) — 工具栏显示
+  const neighborSet2 = useMemo(() => {
+    if (!neighborSet1) return null;
+    const ns = new Set<string>(neighborSet1);
+    // 2 跳: 对每个 1 跳邻居再扫一遍它的 1 跳邻居
+    for (const l of filteredLinks) {
+      const sAny = l.source as unknown as string | { id: string };
+      const tAny = l.target as unknown as string | { id: string };
+      const sId = typeof sAny === 'string' ? sAny : sAny.id;
+      const tId = typeof tAny === 'string' ? tAny : tAny.id;
+      if (ns.has(sId) || ns.has(tId)) {
+        ns.add(sId);
+        ns.add(tId);
+      }
+    }
+    return ns;
+  }, [neighborSet1, filteredLinks]);
+
+  // R10.5.5: 当前选中节点的邻居数 (含自身) — 工具栏显示. R10.5.40 改为 2 跳数.
   useEffect(() => {
-    setNeighborCount(neighborSet ? neighborSet.size : null);
-  }, [neighborSet]);
+    setNeighborCount(neighborSet2 ? neighborSet2.size : null);
+  }, [neighborSet2]);
 
   // R10.5 Fix-P0-MemoryLeak: 追踪已绑定的事件处理器引用, 以便在 cleanup 中精确移除.
   const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
@@ -185,8 +271,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
 
     const width = svgRef.current.clientWidth || 400;
     const height = svgRef.current.clientHeight || 600;
-    const nodes: SimNode[] = graph.nodes.map((n) => ({ ...n }));
-    const links: { source: string; target: string; type: string }[] = graph.links.map((l) => ({ ...l }));
+    // R10.5.40 Phase 5 (Agent 4): 用 filteredNodes / filteredLinks 替代原始 graph
+    // 节点, 让年份 / 作者过滤生效. 过滤后 0 节点 → 显示 "暂无图谱数据".
+    const nodes: SimNode[] = filteredNodes.map((n) => ({ ...n }));
+    const links: { source: string; target: string; type: string }[] = filteredLinks.map((l) => ({ ...l }));
     // R10.5.9: 读 CSS 变量当前主题值 — 切换主题时图谱边色自动跟 (ThemeSwitcher 改 <html> class)
     const edgeColors = readEdgeColors();
 
@@ -198,7 +286,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         .attr('text-anchor', 'middle')
         .attr('fill', '#94a3b8')
         .attr('font-size', '13px')
-        .text('暂无图谱数据');
+        .text(
+          graph.nodes.length === 0
+            ? '暂无图谱数据'
+            : '当前过滤无匹配节点 · 调整年份 / 作者筛选'
+        );
       return;
     }
 
@@ -266,6 +358,19 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     // R10.5 Fix-P0-MemoryLeak: zoom 绑定到 svg, 需要在 cleanup 中精确移除.
     // 旧实现只清 simulation.stop(), zoom 事件处理器持续累积 → 内存泄漏.
     svg.call(zoom);
+    // R10.5.40 Phase 5 (Agent 4): 点击空白处重置 2 跳高亮.
+    // 用 rect 透明背景覆盖 svg 范围, 让点击空白跟点击节点可区分.
+    // target 是 background 时 → 重置 selected;  是 .node 时 → 节点 click 处理器负责.
+    const bgRect = svg
+      .insert('rect', ':first-child')  // 插到最底层 (节点 / 边在它之上)
+      .attr('class', 'graph-bg')
+      .attr('width', width)
+      .attr('height', height)
+      .attr('fill', 'transparent')
+      .attr('pointer-events', 'all');
+    bgRect.on('click', () => {
+      if (selected && onSelectPaper) onSelectPaper(null);
+    });
     // R10.5.5: 保存 zoom + root 引用, 工具栏 fit-to-view / 重置缩放 用
     zoomRef.current = zoom;
     rootRef.current = root;
@@ -530,17 +635,21 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     };
     // Fix-H (R10.5): deps 只 [graph], 删 [selected].  selected 触发的样式更新
     // 走下方独立 effect, 不再因点击节点重建 simulation (用户拖拽布局会丢失 + CPU 峰值).
-  }, [graph]);
+    // R10.5.40 Phase 5 (Agent 4): 加 filteredNodes / filteredLinks — 年份 / 作者过滤
+    // 变化时重建 simulation, 但 selected 变化仍走独立 effect.
+  }, [graph, filteredNodes, filteredLinks]);
 
   // Fix-H (R10.5): 独立 selected effect — 改透明度/边 opacity, 不重建 simulation.
   // 旧版: deps=[graph, selected], 用户点击节点 → effect 重跑 → svg.selectAll('*').remove()
   //   + 重建 force simulation + 节点位置重置 + 100+ tick 重新收敛, 视觉抖动.
   // 新版: simulation 走上面 [graph] effect, 此 effect 仅用 d3.select(svgRef.current) 改样式.
   // R10.5.8: 邻居集合用上面 useMemo 算的 neighborSet, 去掉 effect 内重复计算.
+  // R10.5.40 Phase 5 (Agent 4): 改为 2 跳 neighborSet2 — click 高亮 1+2 跳邻居.
   useEffect(() => {
     if (!svgRef.current || !graph) return;
     const svg = d3.select(svgRef.current);
-    const ns = neighborSet;
+    const ns = neighborSet2;
+    const ns1 = neighborSet1;
 
     // 节点 + 边 opacity 仅在 selected 存在时改; selected=null 时还原 baseline
     svg
@@ -552,18 +661,48 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         if (!ns) return null;
         const sId = typeof d.source === 'string' ? d.source : d.source.id;
         const tId = typeof d.target === 'string' ? d.target : d.target.id;
-        return sId === selected || tId === selected ? 0.9 : 0.05;
+        // 2 跳高亮: 边连接的 2 个节点都在 2 跳集合内 → 亮; 否则 dim.
+        return ns.has(sId) && ns.has(tId) ? 0.9 : 0.05;
       });
     // R10.5 Fix-Audit-Selected-Stroke: stroke 也在这里 apply, 不在 [graph] effect 闭包里.
     // 旧版 stroke 在 [graph] effect 里用 closure 捕获的 selected 算 (effect 跑一次就定死),
     // 用户点击节点时 [selected] effect 改 opacity 但 stroke 还是旧值, 红圈看不见.
     // 现在 stroke/stroke-width 也跟随 selected 实时更新.
+    // R10.5.40 Phase 5: 1 跳圈外环 (stroke=outer) + 2 跳内环 (stroke=inner) 双层描边.
+    // 旧版只有 1 跳红圈, 现在 1 跳红圈 + 2 跳橙色虚线 = 视觉区分两级范围.
     svg
       .selectAll<SVGGElement, SimNode>('g.node')
       .select('circle')
-      .attr('stroke', (d: any) => (d.id === selected ? '#c2410c' : '#1c1917'))
-      .attr('stroke-width', (d: any) => (d.id === selected ? 3 : 1.2));
-  }, [selected, graph, neighborSet]);
+      .attr('stroke', (d: any) => {
+        if (d.id === selected) return '#c2410c';   // 选中节点: 主橙色
+        if (ns1?.has(d.id)) return '#c2410c';       // 1 跳邻居: 同色 (让用户感知"主圈"边界)
+        return '#1c1917';                            // 其余: ink 黑
+      })
+      .attr('stroke-width', (d: any) => {
+        if (d.id === selected) return 3;
+        if (ns1?.has(d.id)) return 2.2;
+        return 1.2;
+      });
+    // R10.5.40 Phase 5: 2 跳邻居套一个外圈虚线 (在主 circle 之上画新 circle).
+    // 实现: 额外 append 一个 .ring-2 圈 (如果还没有), 2 跳节点 visible, 否则 hidden.
+    let ring2 = svg.selectAll<SVGCircleElement, SimNode>('g.node circle.ring-2');
+    if (ring2.empty()) {
+      ring2 = svg
+        .selectAll<SVGGElement, SimNode>('g.node')
+        .append('circle')
+        .attr('class', 'ring-2')
+        .attr('fill', 'none')
+        .attr('stroke', '#f59e0b')  // amber-500, 跟 1 跳橙红区分
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '2,2')
+        .attr('pointer-events', 'none');
+    }
+    ring2
+      .attr('r', (d: any) => d.size + 3)
+      .attr('visibility', (d: any) =>
+        ns && ns.has(d.id) && !ns1?.has(d.id) ? 'visible' : 'hidden'
+      );
+  }, [selected, graph, neighborSet1, neighborSet2]);
 
   return (
     // R10.5.10: 全屏模式 — fixed 覆盖 viewport, z-50 浮在所有组件之上.
@@ -701,6 +840,118 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           )}
         </div>
       </div>
+
+      {/* R10.5.40 Phase 5 (Agent 4): 图谱过滤条 — 年份范围 + 作者子串.
+          inline JSX, 不抽组件. mono 11px, hairline border, 紧凑一行.
+          - 年份 min/max: 默认 graph.metadata.year_range 全量; 收紧后实时过滤.
+          - 作者: 子串匹配 authors[] 任一项 (case-insensitive). 空 = 无过滤.
+          - 右边显示"过滤后节点 / 总节点" 提示当前过滤收紧了多少.
+      */}
+      {graph && graph.nodes.length > 0 && (
+        <div
+          className="px-4 py-1.5 flex items-center gap-2 border-b flex-wrap"
+          style={{ borderColor: 'var(--sf-border)' }}
+          data-testid="graph-filter-bar"
+        >
+          <span
+            className="font-mono text-[11px] uppercase tracking-[0.12em] shrink-0"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            年份
+          </span>
+          <input
+            type="number"
+            value={yearMin ?? ''}
+            placeholder={String(yearBounds[0])}
+            min={yearBounds[0]}
+            max={yearBounds[1]}
+            onChange={(e) => {
+              const v = e.target.value === '' ? null : Number(e.target.value);
+              setYearMin(v);
+            }}
+            className="font-mono text-[11px] px-1.5 py-0.5 w-16 outline-none"
+            style={{
+              backgroundColor: 'var(--sf-bg)',
+              color: 'var(--sf-text)',
+              border: '1px solid var(--sf-border)',
+            }}
+            aria-label="起始年份"
+            data-testid="graph-filter-year-min"
+          />
+          <span
+            className="font-mono text-[11px]"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            —
+          </span>
+          <input
+            type="number"
+            value={yearMax ?? ''}
+            placeholder={String(yearBounds[1])}
+            min={yearBounds[0]}
+            max={yearBounds[1]}
+            onChange={(e) => {
+              const v = e.target.value === '' ? null : Number(e.target.value);
+              setYearMax(v);
+            }}
+            className="font-mono text-[11px] px-1.5 py-0.5 w-16 outline-none"
+            style={{
+              backgroundColor: 'var(--sf-bg)',
+              color: 'var(--sf-text)',
+              border: '1px solid var(--sf-border)',
+            }}
+            aria-label="结束年份"
+            data-testid="graph-filter-year-max"
+          />
+          <span
+            className="font-mono text-[11px] uppercase tracking-[0.12em] shrink-0 ml-2"
+            style={{ color: 'var(--sf-muted)' }}
+          >
+            作者
+          </span>
+          <input
+            type="text"
+            value={authorFilter}
+            placeholder="子串过滤"
+            onChange={(e) => setAuthorFilter(e.target.value)}
+            className="font-mono text-[11px] px-1.5 py-0.5 flex-1 min-w-[80px] outline-none"
+            style={{
+              backgroundColor: 'var(--sf-bg)',
+              color: 'var(--sf-text)',
+              border: '1px solid var(--sf-border)',
+            }}
+            aria-label="按作者子串过滤"
+            data-testid="graph-filter-author"
+          />
+          {filteredNodes.length !== graph.nodes.length && (
+            <button
+              type="button"
+              onClick={() => {
+                setYearMin(yearBounds[0]);
+                setYearMax(yearBounds[1]);
+                setAuthorFilter('');
+              }}
+              className="font-mono text-[10px] uppercase tracking-[0.12em] px-1.5 py-0.5 border shrink-0 transition-colors"
+              style={{
+                color: 'var(--sf-accent)',
+                borderColor: 'var(--sf-accent)',
+              }}
+              title="清空过滤"
+              aria-label="清空过滤"
+            >
+              清空
+            </button>
+          )}
+          <span
+            className="font-mono text-[10px] uppercase tracking-[0.12em] shrink-0 tabular-nums"
+            style={{ color: 'var(--sf-muted)' }}
+            data-testid="graph-filter-count"
+          >
+            {filteredNodes.length} / {graph.nodes.length} 节点
+          </span>
+        </div>
+      )}
+
       <div className="flex-1 relative min-h-[400px] lg:min-h-0">
         <svg
           ref={svgRef}

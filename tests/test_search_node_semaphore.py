@@ -225,6 +225,17 @@ async def test_search_node_semaphore_does_not_deadlock(monkeypatch):
 
     monkeypatch.setattr(semantic_scholar, "search_papers", slow_ss)
     monkeypatch.setattr(openalex, "search_papers", slow_oa)
+    # R10.5.39: search_agent now also queries arxiv/crossref/pubmed by default.
+    # This test only fakes ss+oa; the other 3 sources would hit the network
+    # and hang. Restrict the source list to ss+oa for this test.
+    monkeypatch.setenv("SCHOLARFLOW_SOURCES", "ss,oa")
+    import importlib
+    from backend.agents import search_agent
+    importlib.reload(search_agent)
+    # Also reload the bound `search_node` reference in this test module.
+    import sys
+    this_module = sys.modules[__name__]
+    this_module.search_node = search_agent.search_node
 
     state = _build_state(num_sub_queries=6)
     # Should complete in ~6 * 0.05 / 4 (semaphore allows 4 concurrent) = 0.075s

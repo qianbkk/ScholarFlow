@@ -20,6 +20,12 @@ export const STORAGE_KEYS = {
   upgradeBannerDismissed: 'sf-r10_5_28-banner-dismissed',
   // R10.5.30 升级日志 modal 已阅
   changelogDismissed: 'sf-changelog-dismissed-30',
+  // R10.5.40 (Agent 1): binary dark/light mode toggle. 跟 4 套 Editorial 主题
+  // (theme) 正交 — 这是用户级别的"夜间模式"开关, 盖在 Editorial 主题之上.
+  darkMode: 'sf-dark-mode',
+  // R10.5.40 (Agent 1): 3-col / focus 单栏布局切换.
+  // 持久化到 localStorage, key = 'sf-layout-mode'.
+  layoutMode: 'sf-layout-mode',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

@@ -327,3 +327,67 @@ body {
   background-color: var(--sf-accent-soft) !important;
   box-shadow: inset 3px 0 0 var(--sf-accent);
 }
+
+/* === R10.5.40 (Agent 1): 暗黑模式 (data-theme="dark") ===
+ * 与 4 套 Editorial 主题 (theme-midnight / sage / kraft / parchment) 正交.
+ * 用户级别 opt-in 开关: 开启后, 4 套 Editorial 主题均渲染为暗底色.
+ * 复用了午夜主题 (#1c1a1a 深夜炭灰) 配色避免另起炉灶, 但保留 Editorial
+ * 变量名 (--sf-bg / --sf-text / --sf-accent / --sf-border) 让组件无需改动.
+ *
+ * 实现说明:
+ *   - App.tsx 启动时根据 useLocalStorage('sf-dark-mode') 设 data-theme.
+ *   - 数据结构: <html data-theme="dark"> 覆盖所有 theme-* 类下的 --sf-*.
+ *   - 与午夜 (theme-midnight) 的区别: 用户主动切换, 持久化在 localStorage;
+ *     midnight 是 4 套主题之一. data-theme="dark" 一键把当前 Editorial 主题
+ *     变成暗色.
+ *   - 边色 (--sf-edge-*) 用 midnight 主题的值, 暗底四色边色对比度好. */
+html[data-theme="dark"] {
+  --sf-bg: #0d0d0d;
+  --sf-bg-elev: #1c1a1a;
+  --sf-text: #f5efe4;
+  --sf-muted: #a8a29e;
+  --sf-border: #2e2c29;
+  --sf-accent: #fb923c;
+  --sf-accent-soft: #5a2e0f;
+  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.5),
+               0 4px 14px rgba(0, 0, 0, 0.6);
+  /* 暗底边色: 跟 4 套主题中 midnight 同套, 颜色饱和度高, 跟 #0d0d0d 拉开 */
+  --sf-edge-cites: #fb7185;
+  --sf-edge-co-cited: #60a5fa;
+  --sf-edge-same-venue: #86efac;
+  --sf-edge-author-overlap: #c4b5fd;
+}
+
+/* data-theme="dark" 时, body 背景去掉纸面纹理 (暗底纹理噪声太抢眼) */
+html[data-theme="dark"] body {
+  background-image: none;
+}
+
+/* === R10.5.40 (Agent 1): InlinePaperCard + PipelineStrip 样式 ===
+ * 复用现有 --sf-* 变量, 不引入新变量名 (除 --sf-pipeline-status 一组局部
+ * status 色, 仅在 PipelineStrip 内使用). */
+.sf-inline-paper-card {
+  /* 跟 Editorial 报告风格一致: 学术期刊脚注卡片 */
+  border-left: 3px solid var(--sf-accent);
+  background-color: var(--sf-bg-elev);
+  border-top: 1px solid var(--sf-border);
+  border-right: 1px solid var(--sf-border);
+  border-bottom: 1px solid var(--sf-border);
+}
+
+.sf-inline-paper-card .sf-abstract-preview {
+  /* 240 字符截断 + 渐变淡出 */
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* PipelineStrip: 8 节点状态指示色 (新引入 CSS 变量, Agent 3 文档化) */
+.sf-pipeline-strip {
+  --sf-pipeline-status-pending: var(--sf-border);
+  --sf-pipeline-status-running: var(--sf-accent);
+  --sf-pipeline-status-done: var(--sf-accent);
+  --sf-pipeline-status-error: #dc2626;
+}

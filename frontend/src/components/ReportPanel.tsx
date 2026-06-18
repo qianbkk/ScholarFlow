@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect, useRef } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import type { Paper } from '../types';
+import { InlinePaperCard } from './InlinePaperCard';
 
 // marked v14+：setOptions 已废弃，改用 marked.use()。
 // 多次调用 use() 会合并，所以这里只设一次。
@@ -82,6 +83,15 @@ export function ReportPanel({
         .forEach((el) => el.setAttribute('data-sf-selected', 'true'));
     }
   }, [selectedPaperId, report]);
+
+  // R10.5.40 (Agent 1): 选中论文对应的 InlinePaperCard 数据. 找不到 paper
+  // (e.g. selectedPaperId 已 stale) 时不渲染, 避免空卡.
+  const inlineCardPaper = useMemo(() => {
+    if (!selectedPaperId) return null;
+    const idx = papers.findIndex((p) => p.paper_id === selectedPaperId);
+    if (idx < 0) return null;
+    return { paper: papers[idx], index: idx + 1 };
+  }, [selectedPaperId, papers]);
 
   const [html, setHtml] = useState('');
 
@@ -456,6 +466,16 @@ export function ReportPanel({
             2. 前端删 "原始文献来源表" 提示 banner
             3. 来源一览不再截断 12, 全显 (ranker 评 25 篇, 不再藏)
             4. 提示信息移到标题 subline, 一行说清作用 */}
+        {/* R10.5.40 (Agent 1): InlinePaperCard — 用户点击引用 / 来源一览中某篇
+            论文时, 在报告流中展开内嵌卡片. 一次一张, Esc 或 × 关闭. 选中时
+            selectedPaperId === paper.paper_id, 用 onSelectPaper(null) 关闭. */}
+        {!loading && report && inlineCardPaper && onSelectPaper && (
+          <InlinePaperCard
+            paper={inlineCardPaper.paper}
+            index={inlineCardPaper.index}
+            onClose={() => onSelectPaper(null)}
+          />
+        )}
         {!loading && report && papers.length > 0 && onSelectPaper && (
           <div
             className="mt-8 pt-4 border-t"

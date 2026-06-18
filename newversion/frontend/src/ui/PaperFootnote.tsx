@@ -119,8 +119,13 @@ export function PaperFootnote({ paper, index, onCompare }: Props) {
         <button
           type="button"
           onClick={() => {
+            // Read selection BEFORE toggling, otherwise we mis-attribute the
+            // "is this paper already selected?" case. If already in, treat the
+            // click as a removal (toggle) and don't open compare. If new,
+            // toggle on, then check if we hit the 2-paper cap.
+            const wasSelected = store.get().selected.includes(paper.paper_id);
             store.toggleSelect(paper.paper_id);
-            if (store.get().selected.length === 2) {
+            if (!wasSelected && store.get().selected.length === 2) {
               onCompare();
             }
           }}

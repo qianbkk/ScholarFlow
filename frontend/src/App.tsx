@@ -4,6 +4,8 @@ import { QueryPanel } from './components/QueryPanel';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
+import { ThemeToggle } from './components/ThemeToggle';
+import { LayoutToggle, useLayoutMode } from './components/LayoutToggle';
 import { LoginDialog } from './components/LoginDialog';
 import { UserBadge } from './components/UserBadge';
 import { CockpitDashboard } from './components/CockpitDashboard';
@@ -64,6 +66,12 @@ function AppInner() {
     budgetExceeded, dismissBudgetExceeded,
     events, graphSnapshots,
   } = useSearch();
+
+  // R10.5.40 (Agent 1): 布局模式 — 3-col vs 焦点单栏.
+  // focus 模式隐藏 GraphPanel (App.tsx 不渲染它即可, 不影响 GraphPanel 内部状态).
+  // QueryPanel + ReportPanel 始终显示 (任务硬约束).
+  const [layoutMode] = useLayoutMode();
+  const showGraph = layoutMode === 'three-col';
 
   // R10.5.31 (F4): 13 个 useState → 4 个 Context. 只剩 2 个真正属于
   // search 业务域的 state 留本地: elapsed (跟 result 同步) + lastSearchOpts
@@ -387,6 +395,12 @@ function AppInner() {
               onLogout={handleLogout}
               loading={authState === 'loading'}
             />
+            {/* R10.5.40 (Agent 1): 二元暗黑模式开关 — 跟 4 套 Editorial 主题正交.
+                ThemeSwitcher 选色系 (parchment/kraft/midnight/sage),
+                ThemeToggle 开关"夜间模式" 把当前色系翻转到暗底. */}
+            <ThemeToggle />
+            {/* R10.5.40 (Agent 1): 3-col / 焦点单栏 布局切换. */}
+            <LayoutToggle />
             <ThemeSwitcher current={theme} onChange={handleThemeChange} />
           </div>
         </div>
@@ -516,6 +530,8 @@ function AppInner() {
             // R10.5.20: Runtime mode (mock/real) 切换
             runtimeMode={runtimeMode ?? undefined}
             onChangeRuntimeMode={handleChangeRuntimeMode}
+            // R10.5.40 (Agent 1): 8 节点流水线状态条 — 喂 PipelineStrip 用.
+            events={events}
           />
           {/* Round 6 M1: App.tsx 接 errorMsg + onRetry 到 ReportPanel,
               激活 R4 U4 死代码 (用户重试按钮生效).
@@ -539,12 +555,16 @@ function AppInner() {
             onSelectPaper={handleSelectPaper}
             papers={result?.ranked_papers ?? []}
           />
-          <GraphPanel
-            graph={result?.citation_graph ?? null}
-            // R10.5.5: 图谱节点 → 跨组件论文聚焦
-            selectedPaperId={selectedPaperId}
-            onSelectPaper={handleSelectPaper}
-          />
+          {/* R10.5.40 (Agent 1): focus 单栏模式隐藏 GraphPanel. 不卸载父容器,
+              只是不渲染 GraphPanel 子节点 — 切回三栏时 GraphPanel 内部状态保留. */}
+          {showGraph && (
+            <GraphPanel
+              graph={result?.citation_graph ?? null}
+              // R10.5.5: 图谱节点 → 跨组件论文聚焦
+              selectedPaperId={selectedPaperId}
+              onSelectPaper={handleSelectPaper}
+            />
+          )}
         </div>
       </div>
 

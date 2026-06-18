@@ -3,7 +3,8 @@ import type { Paper } from '../types';
 import { fetchProviders, type ProviderInfo, type RuntimeMode } from '../services/api';
 // R10.5.29 (simplify): 删 inline RecentEntry 类型, 改从 useSearch 导入. 避免
 // 3 文件 (useSearch / QueryPanel / App) 各自定义 'local'|'real'|'unknown' 联合.
-import type { RecentEntry } from '../hooks/useSearch';
+import type { RecentEntry, NodeEvent } from '../hooks/useSearch';
+import { PipelineStrip } from './PipelineStrip';
 
 interface PipelineStep {
   key: string;
@@ -40,6 +41,9 @@ interface Props {
   // 这里只接收 + emit.
   runtimeMode?: RuntimeMode;
   onChangeRuntimeMode?: (mode: RuntimeMode) => void;
+  // R10.5.40 (Agent 1): 8 节点流水线事件流 — 喂 PipelineStrip 用.
+  // App.tsx 从 useSearch.events 透传下来, QueryPanel 只 render 不加工.
+  events?: NodeEvent[];
 }
 
 const SUGGESTIONS = [
@@ -88,6 +92,7 @@ export function QueryPanel({
   // R10.5.30 (D5 P1-2): 多选 (Shift+click 凑 2 篇触发 CompareDrawer)
   selectedPaperIds = [], onTogglePaperSelection,
   recentSearches = [], onClearRecent,
+  events = [],
 }: Props) {
   // R10.5.5: 从 localStorage 恢复预算/迭代/provider 默认值
   const persisted = loadFormState();
@@ -201,6 +206,16 @@ export function QueryPanel({
         borderRight: '1px solid var(--sf-border)',
       }}
     >
+      {/* R10.5.40 (Agent 1): 8 节点流水线状态条 — 1 行, hairline bottom border,
+          放在表单上方. 即使不在 loading 也显示 (IDLE 状态), 让用户始终能看到
+          流水线结构. 跟 CockpitDashboard 不冲突 (后者只在 events.length>0 || loading 时显示
+          横向 8 舱室; PipelineStrip 是静态 IDLE 占位 + 动态状态切换). */}
+      <PipelineStrip
+        events={events}
+        currentStep={currentStep}
+        loading={loading}
+        hasError={!!recentSearches && false /* 错误状态由 CockpitDashboard 表达, 这里不重复 */}
+      />
       <div
         className="px-3 py-2 border-b shrink-0"
         style={{ borderColor: 'var(--sf-border)' }}
