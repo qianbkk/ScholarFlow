@@ -345,6 +345,32 @@ async def search_stream(
                         # 不是 "type" (老代码搜 'type' 永远 None, 节点事件全丢).
                         # 兼容两边: 'event' 优先, 'type' fallback.
                         event_type = event.get("event") or event.get("type")
+
+                        # R10.5.44 (P0 SSE robustness): 客户端断开检测.
+                        # 旧实现: 无 is_disconnected 检查, client 断开后 astream
+                        # 继续跑完整个 8 节点 (浪费 token + 时间). 每次循环开头
+                        # 检查一次, FastAPI Request.is_disconnected() 是非阻塞
+                        # 检测 (无网络 IO), 几乎无开销. 断开后立即 return,
+                        # 走 finally 返还 budget.
+                        if await request.is_disconnected():
+                            logger.info(
+                                f"[/search/stream] client disconnected mid-pipeline "
+                                f"step={step_count} "
+                                f"cost=${float(accumulated.get('total_cost_usd', 0.0)):.4f}"
+                            )
+                            accumulated_cost = float(
+                                accumulated.get("total_cost_usd", 0.0)
+                            )
+                            return_amount = max(0.0, budget - accumulated_cost)
+                            try:
+                                yield _sse_format({
+                                    "event": "error",
+                                    "code": "client_disconnected",
+                                    "message": "客户端已断开, 搜索已中止, budget 已返还",
+                                })
+                            except Exception:
+                                pass
+                            return
                         
                         # Phase 1: 态势感知 - 节点开始事件
                         if event_type == "on_chain_start" and event.get("name") in NODE_NAME_TO_STEP:
@@ -448,6 +474,33 @@ async def search_stream(
                 except Exception:
                     pass
                 return
+            except asyncio.CancelledError:
+                # R10.5.44 (P0 SSE robustness): 显式处理 CancelledError.
+                # 旧实现: except Exception 漏掉 CancelledError (Python 3.8+
+                # CancelledError 继承 BaseException 不是 Exception). 导致
+                # client 断开时 budget 没正确返还 + astream 残跑.
+                # 现在: 显式 except, 走 finally 返还 budget, 不依赖 Python
+                # 内部 garbage collect.
+                logger.info(
+                    f"[/search/stream] cancelled (likely client disconnect) "
+                    f"step={step_count} "
+                    f"cost=${float(accumulated.get('total_cost_usd', 0.0)):.4f}"
+                )
+                accumulated_cost = float(
+                    accumulated.get("total_cost_usd", 0.0)
+                )
+                return_amount = max(0.0, budget - accumulated_cost)
+                # 通知 client (best-effort, 连接可能已断)
+                try:
+                    yield _sse_format({
+                        "event": "error",
+                        "code": "cancelled",
+                        "message": "搜索被取消, budget 已返还",
+                    })
+                except Exception:
+                    pass
+                # 重新 raise 让上层 cleanup 知道 task 被取消
+                raise
             except Exception:
                 logger.error("[/search/stream] error", exc_info=True)
                 await _return_budget(budget)
