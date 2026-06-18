@@ -526,6 +526,29 @@ def _m_r10_5_43_runtime_mode_state(conn) -> None:
     )
 
 
+def _m_r10_5_48_null_cache(conn) -> None:
+    """R10.5.48 (P1 cache penetration 防御): 空结果集单独缓存表.
+
+    审计 #10: 冷门/乱码查询 (e.g. 用户输入 'xyzzy') 永远 0 结果, 5/min 限流
+    挡不住, 攻击者可以 spam 让 hourly API 配额耗尽. 把空结果集单独存 5min,
+    短时间内重复请求直接返 (defense + 性能).
+
+    TTL 5min 短, 防止过时 (e.g. 用户调高 max_iter / 加 method 后之前空
+    结果可能不再是空). 跟 search_cache 24h TTL 互补.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS null_cache (
+            query_hash TEXT PRIMARY KEY,
+            response_json TEXT NOT NULL,
+            cost_usd REAL NOT NULL,
+            tokens INTEGER NOT NULL,
+            created_at REAL NOT NULL
+        )
+        """
+    )
+
+
 def _run_registered_migrations() -> None:
     """在 _init_db_once() 末尾自动调, 把所有迁移走一遍 apply_migration 框架.
     新加 migration 只需要在这里 append 一行."""
@@ -534,6 +557,7 @@ def _run_registered_migrations() -> None:
     apply_migration("r10_5_28_stream_tokens", _m_r10_5_28_stream_tokens)
     apply_migration("r10_5_30_sessions_table", _m_r10_5_30_sessions_table)
     apply_migration("r10_5_43_runtime_mode_state", _m_r10_5_43_runtime_mode_state)
+    apply_migration("r10_5_48_null_cache", _m_r10_5_48_null_cache)
 
 
 def wal_checkpoint_all() -> dict[str, int]:
@@ -678,33 +702,74 @@ async def _retry_sqlite_op_async(sync_fn, *args, **kwargs):
     return None
 
 
+# ===== R10.5.48 (P1 cache penetration 防御): 空结果集判定 + 独立缓存 =====
+
+# 空结果集 TTL (5 min, 比 search_cache 24h 短很多, 防止过时)
+NULL_CACHE_TTL_SECONDS = 300
+
+
+def _is_null_result(response: dict) -> bool:
+    """R10.5.48: 判定响应是否"空结果集" (用于 cache penetration 防御).
+
+    空结果定义:
+    - ranked_papers 为空 OR 缺失
+    - citation_graph 没有节点 (空 dict / 空 nodes list)
+
+    这个定义覆盖最常见的"0 论文返回"场景: 冷门查询 / 乱码输入 / API 暂时挂掉.
+    """
+    if not isinstance(response, dict):
+        return False
+    ranked = response.get("ranked_papers") or []
+    graph = response.get("citation_graph") or {}
+    nodes = graph.get("nodes") if isinstance(graph, dict) else []
+    return (len(ranked) == 0) and (len(nodes or []) == 0)
+
+
 def _get_cached_sync(key: str, ttl_seconds: int):
-    """同步 SQLite cache 读。被 get_cached_async 通过 asyncio.to_thread 调用。"""
+    """同步 SQLite cache 读。被 get_cached_async 通过 asyncio.to_thread 调用.
+
+    R10.5.48: 2 段查找 — 先 search_cache (主缓存), miss 再查 null_cache (空结果).
+    """
     _init_db_once()
     conn = _connect_with_wal()
     try:
+        # 1) 主缓存查 (24h TTL, 业务默认)
         row = conn.execute(
             "SELECT response_json, cost_usd, tokens, created_at "
             "FROM search_cache WHERE query_hash=?",
+            (key,),
+        ).fetchone()
+        if row:
+            if time.time() - row[3] <= ttl_seconds:
+                conn.close()
+                return json.loads(row[0]), row[1], row[2]
+        # 2) 主缓存 miss 或过期, 查 null_cache (5min TTL)
+        row = conn.execute(
+            "SELECT response_json, cost_usd, tokens, created_at "
+            "FROM null_cache WHERE query_hash=?",
             (key,),
         ).fetchone()
     finally:
         conn.close()
     if not row:
         return None
-    if time.time() - row[3] > ttl_seconds:
+    if time.time() - row[3] > NULL_CACHE_TTL_SECONDS:
         return None
     return json.loads(row[0]), row[1], row[2]
 
 
 def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> None:
-    """同步 SQLite cache 写。被 set_cached_async 通过 asyncio.to_thread 调用。
+    """同步 SQLite cache 写。被 set_cached_async 通过 asyncio.to_thread 调用.
 
     H8 修复：不再接受 `query` 参数 — query 文本不落盘，cache 里只存 hash。
     M-D 修复：用命名列 INSERT 而不是 VALUES (?,?,?,?,?), 加新列(如 query_embedding)
     时无需改 SQL — 当前 INSERT 只写 5 个非 BLOB 列, query_embedding 留 NULL。
+
+    R10.5.48: 响应是空结果集时写 null_cache, 否则写 search_cache.
     """
     _init_db_once()
+    is_null = _is_null_result(response)
+    table = "null_cache" if is_null else "search_cache"
     payload = (
         key,
         json.dumps(response, ensure_ascii=False),
@@ -717,7 +782,7 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
         # 命名列 INSERT: 加新列时 (如 query_embedding) 不需要改这里,
         # 新列默认 NULL,semantic_cache.py 后续可以 UPDATE 补 BLOB
         conn.execute(
-            "INSERT OR REPLACE INTO search_cache "
+            f"INSERT OR REPLACE INTO {table} "
             "(query_hash, response_json, cost_usd, tokens, created_at) "
             "VALUES (?, ?, ?, ?, ?)",
             payload,

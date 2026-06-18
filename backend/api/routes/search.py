@@ -53,6 +53,9 @@ from backend.utils.runtime_mode import get_runtime_mode, is_runtime_mock  # R10.
 from backend.utils.sanitize import sanitize_query
 from backend.workflow.graph import search_graph
 from backend.api.services.budget import _check_and_reserve_budget, _return_budget
+# R10.5.48 (P1 LLM cost 防御): 预算前置检查. 在 _check_and_reserve_budget 之前,
+# 估算 8 节点流水线 cost, 明显超 user budget 时 fast-fail.
+from backend.utils.token_estimator import pre_check_budget
 from backend.api.services.providers import _resolve_provider
 from backend.api.routes.models import (
     SearchRequest,
@@ -172,6 +175,14 @@ async def search(
     provider = _resolve_provider(req.provider)
 
     # VULN-002: 全局每小时预算闸门
+    # R10.5.48: pre_check_budget 在 reserve 之前. 估算 cost > user budget 时
+    # 直接 402 拒绝, 不浪费 hourly cap 配额. prompt_size 用 user query 字符
+    # 数作为代理 (实际 agent prompt 模板更大, 估算偏保守).
+    pre_check_budget(
+        prompt_size_chars=len(safe_query),
+        user_budget=req.budget,
+        max_iter=req.max_iterations,
+    )
     await _check_and_reserve_budget(req.budget)
     budget_reserved = True  # try/finally 兜底标志
 
@@ -326,6 +337,13 @@ async def search_stream(
         raise HTTPException(status_code=400, detail="查询内容不能为空")
     resolved_provider = _resolve_provider(provider)
 
+    # R10.5.48: pre_check_budget 在 reserve 之前. 估算 cost > user budget 时
+    # 直接 402 拒绝, 不浪费 hourly cap 配额. (跟 /search 端一致)
+    pre_check_budget(
+        prompt_size_chars=len(safe_query),
+        user_budget=budget,
+        max_iter=max_iter,
+    )
     await _check_and_reserve_budget(budget)
 
     initial = _make_initial_state(
