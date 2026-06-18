@@ -505,6 +505,27 @@ def _m_r10_5_30_sessions_table(conn) -> None:
     )
 
 
+def _m_r10_5_43_runtime_mode_state(conn) -> None:
+    """R10.5.43: runtime mode 共享表 (P0 multi-worker drift 修复).
+
+    单行表 (id=1) 存当前 runtime mode (mock/real/auto) + updated_at.
+    之前 _runtime_mode_override 是 in-memory dict, 4 worker 部署下
+    切 mock 只有 1/N 走 mock (P0 致命).
+
+    进程内 1s 缓存 (在 runtime_mode.py) + SQLite WAL 共享, 切到 mock 后
+    ≤1s 全员生效. CREATE TABLE IF NOT EXISTS 跟其他 schema 一样幂等.
+    """
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS runtime_mode_state (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            mode TEXT NOT NULL,
+            updated_at REAL NOT NULL
+        )
+        """
+    )
+
+
 def _run_registered_migrations() -> None:
     """在 _init_db_once() 末尾自动调, 把所有迁移走一遍 apply_migration 框架.
     新加 migration 只需要在这里 append 一行."""
@@ -512,6 +533,7 @@ def _run_registered_migrations() -> None:
     apply_migration("r10_5_30_password_cols", _m_r10_5_30_password_cols)
     apply_migration("r10_5_28_stream_tokens", _m_r10_5_28_stream_tokens)
     apply_migration("r10_5_30_sessions_table", _m_r10_5_30_sessions_table)
+    apply_migration("r10_5_43_runtime_mode_state", _m_r10_5_43_runtime_mode_state)
 
 
 def wal_checkpoint_all() -> dict[str, int]:

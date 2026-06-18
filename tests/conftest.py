@@ -154,7 +154,11 @@ def _reset_global_state(request):
         # 降级 mock → 论文数 0 触发断言或 504 timeout. 强制 reset 到 CLOSED.
         try:
             from backend.utils import runtime_mode as _rt_reset
-            _rt_reset._runtime_mode_override = {"mode": "auto"}
+            # R10.5.43: 不能整体替换 _runtime_mode_override (会破坏 dict-subclass
+            # proxy, 后续 ["mode"] = ... 写不到 SQLite). 改用 proxy 的
+            # __setitem__ → set_runtime_mode("auto") → 写 SQLite.
+            _rt_reset.set_runtime_mode("auto")
+            _rt_reset._invalidate_cache()
         except (ImportError, AttributeError):
             pass
         try:
@@ -229,7 +233,9 @@ def _reset_global_state(request):
             pass
         try:
             from backend.utils import runtime_mode as _rt_teardown
-            _rt_teardown._runtime_mode_override = {"mode": "auto"}
+            # R10.5.43: 跟 setup 段同步, 用 proxy API 而不是替换 dict.
+            _rt_teardown.set_runtime_mode("auto")
+            _rt_teardown._invalidate_cache()
         except (ImportError, AttributeError):
             pass
         try:
