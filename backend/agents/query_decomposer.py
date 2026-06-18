@@ -8,6 +8,12 @@ from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
+# R10.5.47 (P1 LLM 输出韧性): Pydantic v2 schema 替换脆弱的 dict.get + isinstance
+from backend.agents._schemas import DecomposeOutput, ConstraintsModel, _strip_markdown_fence
+from pydantic import ValidationError
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM = (
@@ -185,18 +191,71 @@ Rules:
         timeout=30.0,
     )
 
+    # R10.5.47 (P1 LLM 输出韧性): Pydantic v2 校验 LLM 输出, 失败时 1 次重试.
+    # 旧实现: _extract_json_object + dict.get + isinstance 链 5+ 字段, 脆弱.
+    # 新实现: Pydantic v2 model_validate_json 一次性校验 schema, 失败加格式
+    # 提示重试 1 次, 再失败走 _fallback_decompose 兜底.
     sub_queries: list[str] = []
-    parsed = _extract_json_object(text)
-    # R10.5.15 (P1-D): 读 query_type 决定 sub_queries 数量上限
-    raw_type = (parsed or {}).get("query_type", "")
-    query_type = raw_type if raw_type in _QUERY_TYPE_LIMITS else "default"
-    max_subs = _QUERY_TYPE_LIMITS[query_type]
-    if parsed:
-        for q in parsed.get("sub_queries", []):
-            if isinstance(q, str):
-                q = q.strip()
-                if len(q) > 3:
-                    sub_queries.append(q)
+    parsed_obj: DecomposeOutput | None = None
+    raw_text = text or ""
+    cleaned = _strip_markdown_fence(raw_text)
+    try:
+        parsed_obj = DecomposeOutput.model_validate_json(cleaned)
+    except ValidationError as first_exc:
+        logger.warning(
+            f"[query_decompose] Pydantic 校验失败, 尝试 1 次重试. "
+            f"errors={first_exc.error_count()} first={first_exc.errors()[0] if first_exc.errors() else 'unknown'}"
+        )
+        # 1 次重试: 加格式提示, 严格 JSON 输出
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "⚠️ 上一轮输出 JSON 解析失败, 必须输出**严格符合 schema 的 JSON**, "
+            "不能含 markdown 围栏, 不能含额外说明文字. 仅输出 JSON 对象."
+        )
+        try:
+            retry_text, retry_usage = await asyncio.wait_for(
+                call_llm(
+                    retry_prompt,
+                    task_type="complex_reason",
+                    system=SYSTEM + isolation_system_suffix(),
+                    max_tokens=500,
+                    json_mode=True,
+                    provider=state.get("provider"),
+                ),
+                timeout=30.0,
+            )
+            # 累加 retry 的 cost / tokens
+            if retry_usage:
+                from backend.utils.llm_client import merge_usage_into_state as _merge
+                usage = _merge({"model_usage": usage or {}}, retry_usage) if isinstance(usage, dict) else usage
+            retry_cleaned = _strip_markdown_fence(retry_text or "")
+            parsed_obj = DecomposeOutput.model_validate_json(retry_cleaned)
+        except (ValidationError, Exception) as second_exc:
+            logger.warning(
+                f"[query_decompose] 重试后仍失败, 走 _fallback_decompose 兜底. "
+                f"err={type(second_exc).__name__}: {str(second_exc)[:200]}"
+            )
+            parsed_obj = None
+
+    # 解析成功 → 拿 query_type + sub_queries; 解析失败 → 全 None / 兜底
+    if parsed_obj is not None:
+        query_type = parsed_obj.query_type
+        if query_type not in _QUERY_TYPE_LIMITS:
+            query_type = "default"
+        max_subs = _QUERY_TYPE_LIMITS[query_type]
+        sub_queries = parsed_obj.sub_queries[:max_subs]
+        # 把 Pydantic 解析出的 constraints 字段转回 dict 格式 (下游代码用 dict 访问)
+        raw_constraints = (
+            parsed_obj.constraints.model_dump(exclude_none=True)
+            if parsed_obj.constraints is not None
+            else None
+        )
+    else:
+        # 兜底: query_type 默认, constraints 走 _fallback_constraints
+        query_type = "default"
+        max_subs = _QUERY_TYPE_LIMITS[query_type]
+        raw_constraints = None
+
     if not sub_queries:
         # 兜底：原始查询 + 派生变体
         sub_queries = _fallback_decompose(state["original_query"])
@@ -206,9 +265,6 @@ Rules:
         sub_queries = [state["original_query"]]
 
     # R10.5.14 (P0-A): 抽结构化约束. LLM 输出优先, 兜底走正则.
-    # R10.5.16 (/simplify): 删 if parsed else ternary — _sanitize_constraints 本身
-    # 已经处理非 dict 输入, ternary 是冗余.
-    raw_constraints = (parsed or {}).get("constraints")
     constraints = _sanitize_constraints(raw_constraints)
     fallback_c = _fallback_constraints(state["original_query"])
     # 兜底补 LLM 没抽到的字段 (e.g. LLM 没识别 venue 缩写, 但正则识别了)

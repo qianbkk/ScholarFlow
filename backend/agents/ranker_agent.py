@@ -142,24 +142,66 @@ Respond with JSON only, mapping paper index to BOTH scores:
         call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True, provider=provider),
         timeout=60.0,
     )
-    data = _extract_json_object(text)
+
+    # R10.5.47 (P1 LLM 输出韧性): Pydantic v2 校验 LLM 输出, 失败 1 次重试.
+    # 旧: _extract_json_object + dict.get(str(i), dict.get(i, {})) + float conversion
+    #      链 4+ 层, 字段缺失静默回 5.0/6.0 兜底, 难发现 schema 错位.
+    # 新: RankBatchOutput 一次性校验, 字段缺失/类型错立刻 ValidationError,
+    #    失败加格式提示重试 1 次, 再失败走 per-paper fallback (跟旧行为一致).
+    from backend.agents._schemas import RankBatchOutput, _strip_markdown_fence
+    from pydantic import ValidationError
+
+    parsed_obj = None
+    cleaned = _strip_markdown_fence(text or "")
+    try:
+        parsed_obj = RankBatchOutput.model_validate_json(cleaned)
+    except ValidationError as first_exc:
+        logger.warning(
+            f"[ranker_agent] Pydantic 校验失败, 尝试 1 次重试. "
+            f"errors={first_exc.error_count()}"
+        )
+        # 1 次重试: 加格式提示
+        retry_prompt = (
+            f"{prompt}\n\n"
+            "⚠️ 上一轮 JSON 解析失败. 必须输出**严格符合 schema 的 JSON 对象**, "
+            "key 是 1-based 论文编号 (字符串), value 是 {\"relevance\": <0-10>, "
+            "\"consistency\": <0-10>}. 不能含 markdown 围栏, 不能含额外说明."
+        )
+        try:
+            retry_text, retry_usage = await asyncio.wait_for(
+                call_llm(
+                    retry_prompt, task_type="fast_score",
+                    max_tokens=600, json_mode=True, provider=provider,
+                ),
+                timeout=60.0,
+            )
+            # 累加 retry 用量
+            if retry_usage and isinstance(usage, dict):
+                from backend.utils.llm_client import merge_usage_into_state as _merge
+                usage = _merge({"model_usage": usage.get("model_usage", usage)}, retry_usage) if retry_usage else usage
+            retry_cleaned = _strip_markdown_fence(retry_text or "")
+            parsed_obj = RankBatchOutput.model_validate_json(retry_cleaned)
+        except (ValidationError, Exception) as second_exc:
+            logger.warning(
+                f"[ranker_agent] 重试后仍失败, 走 per-paper fallback. "
+                f"err={type(second_exc).__name__}: {str(second_exc)[:200]}"
+            )
+            parsed_obj = None
+
     rel_scores: list[float] = []
     cons_scores: list[float] = []
-    if isinstance(data, dict):
+    if parsed_obj is not None and parsed_obj.root:
+        # Pydantic 解析成功 (RootModel, .root 是 dict), 从 scores dict 取 1..N 编号
         for i in range(1, len(papers) + 1):
-            entry = data.get(str(i), data.get(i, {}))
-            if not isinstance(entry, dict):
-                entry = {}
-            try:
-                r = float(entry.get("relevance", 5.0))
-                rel_scores.append(max(0.0, min(10.0, r)))
-            except (ValueError, TypeError):
+            entry = parsed_obj.root.get(str(i), parsed_obj.root.get(i, None))
+            if entry is None:
+                # 编号缺失: 兜底
                 rel_scores.append(5.0)
-            try:
-                c = float(entry.get("consistency", 6.0))
-                cons_scores.append(max(0.0, min(10.0, c)))
-            except (ValueError, TypeError):
                 cons_scores.append(6.0)
+            else:
+                # PaperScore 字段已经 Pydantic 校验过 (ge=0, le=10), 直接拿
+                rel_scores.append(max(0.0, min(10.0, entry.relevance)))
+                cons_scores.append(max(0.0, min(10.0, entry.consistency)))
     else:
         # 兜底：按 query-title 重叠度（与原 batch 行为一致）
         query_words = set(query.lower().split())
