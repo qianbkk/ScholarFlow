@@ -22,7 +22,10 @@ from __future__ import annotations
 
 from typing import Any, Optional, Literal
 
+import logging
 from pydantic import BaseModel, Field, RootModel, field_validator
+
+logger = logging.getLogger(__name__)
 
 
 # ===== query_decomposer 输出 schema =====
@@ -114,50 +117,10 @@ class RankBatchOutput(RootModel[dict[str, PaperScore]]):
     root: dict[str, PaperScore] = Field(default_factory=dict)
 
 
-# ===== 通用 Pydantic 解析器 =====
+# ===== R10.5.51 (/simplify): 共享 Pydantic 解析 + retry helper =====
 
-def try_parse_with_retry(
-    raw_text: str,
-    schema_cls: type[BaseModel],
-    retry_prompt_prefix: str = "",
-    llm_call_fn=None,
-    state: Optional[dict] = None,
-) -> tuple[Optional[BaseModel], Optional[object]]:
-    """R10.5.47: Pydantic v2 解析 LLM 输出, 失败时 1 次重试.
-
-    流程:
-    1. Pydantic v2 model_validate_json 尝试解析 raw_text
-    2. 失败 → 1 次 LLM 重试 (prompt 加 retry_prompt_prefix 提示格式)
-    3. 仍失败 → 返回 (None, last_exception) 让调用方走 fallback
-
-    Args:
-        raw_text: LLM 返回的原始文本 (可能含 markdown ```json 围栏)
-        schema_cls: Pydantic v2 BaseModel 子类
-        retry_prompt_prefix: 重试时附加到 prompt 的格式提示
-        llm_call_fn: 重试时调的 LLM 函数, 签名 (prompt, ...) → (text, usage)
-                      None = 不重试, 直接 fallback
-        state: 透传给 llm_call_fn 的状态 (e.g. provider)
-
-    Returns:
-        (parsed_model, None) 成功
-        (None, exception) 失败 (1 次重试后仍坏)
-    """
-    # 第一次解析 — 剥 markdown 围栏
-    cleaned = _strip_markdown_fence(raw_text)
-    try:
-        return schema_cls.model_validate_json(cleaned), None
-    except Exception as first_exc:
-        if llm_call_fn is None:
-            return None, first_exc
-        # 第二次重试 — 加格式提示
-        if retry_prompt_prefix:
-            try:
-                retry_text, _ = llm_call_fn(retry_prompt_prefix)
-                retry_cleaned = _strip_markdown_fence(retry_text)
-                return schema_cls.model_validate_json(retry_cleaned), None
-            except Exception as second_exc:
-                return None, second_exc
-        return None, first_exc
+import asyncio
+from backend.utils.llm_client import merge_usage_into_state as _merge_usage
 
 
 def _strip_markdown_fence(text: str) -> str:
@@ -172,3 +135,156 @@ def _strip_markdown_fence(text: str) -> str:
         if text.endswith("```"):
             text = text[:-3]
     return text.strip()
+
+
+async def parse_with_retry_async(
+    *,
+    call_llm,
+    prompt: str,
+    schema: type[BaseModel],
+    system: str,
+    max_tokens: int,
+    task_type: str,
+    provider=None,
+    timeout: float,
+    retry_suffix: str,
+    log_tag: str,
+    base_usage: dict | None = None,
+) -> tuple[Optional[BaseModel], Optional[dict]]:
+    """R10.5.51: 共享 Pydantic + 1 次 retry 解析 (替换 query_decomposer / ranker_agent 内联重复).
+
+    流程:
+    1. 调 call_llm 拿 (text, usage)
+    2. Pydantic v2 model_validate_json 尝试解析 (剥 markdown 围栏)
+    3. 失败 → 1 次 retry: prompt 加 retry_suffix 提示, 重新调 LLM
+    4. 仍失败 → 返 (None, last_usage) 让调用方走 fallback
+
+    用法 (替换 query_decomposer / ranker_agent 内联 ~45 行):
+        parsed_obj, usage = await parse_with_retry_async(
+            call_llm=call_llm, prompt=prompt, schema=DecomposeOutput,
+            system=SYSTEM + isolation_system_suffix(),
+            max_tokens=500, task_type="complex_reason",
+            provider=state.get("provider"), timeout=30.0,
+            retry_suffix="⚠️ 上一轮输出 JSON 解析失败, ...",
+            log_tag="query_decompose", base_usage=None,
+        )
+
+    Args:
+        call_llm: backend.utils.llm_client.call_llm
+        prompt: 完整 prompt (含 retry_suffix 由调用方拼)
+        schema: Pydantic v2 BaseModel 子类
+        system: system prompt
+        max_tokens: LLM 输出 token 上限
+        task_type: 任务类型 (影响模型选择)
+        provider: LLM provider (kimi/glm/...); None 用 env 兜底
+        timeout: LLM 调用超时 (秒)
+        retry_suffix: 追加到 prompt 末尾的格式提示
+        log_tag: 日志前缀 (e.g. "query_decompose")
+        base_usage: 累加基准 usage (None 或前次调用的 usage)
+
+    Returns:
+        (parsed_model, final_usage) 成功
+        (None, final_usage) 失败 (1 次重试后仍坏) — final_usage 含 base + retry 累加
+    """
+    # 1) 第一次调用
+    try:
+        text, usage = await asyncio.wait_for(
+            call_llm(
+                prompt,
+                task_type=task_type,
+                system=system,
+                max_tokens=max_tokens,
+                json_mode=True,
+                provider=provider,
+            ),
+            timeout=timeout,
+        )
+    except Exception as first_exc:
+        # R10.5.51: TimeoutError 必须向上传播 (Fix-P 节点级超时).
+        # 其他异常 (网络/认证) 才静默吞, 走 fallback.
+        if isinstance(first_exc, asyncio.TimeoutError):
+            logger.warning(f"[{log_tag}] call_llm 第一次超时 ({timeout}s): {type(first_exc).__name__}")
+            raise
+        logger.warning(f"[{log_tag}] call_llm 第一次失败: {type(first_exc).__name__}")
+        return None, base_usage
+
+    # 2) Pydantic 校验
+    cleaned = _strip_markdown_fence(text or "")
+    try:
+        return schema.model_validate_json(cleaned), usage
+    except Exception as first_exc:
+        err_count = getattr(first_exc, "error_count", lambda: 0)()
+        logger.warning(
+            f"[{log_tag}] Pydantic 校验失败, 尝试 1 次重试. "
+            f"errors={err_count} exc={type(first_exc).__name__}"
+        )
+
+    # 3) Retry: 拼 retry_suffix 重新调用
+    retry_prompt = prompt + "\n\n" + retry_suffix
+    try:
+        retry_text, retry_usage = await asyncio.wait_for(
+            call_llm(
+                retry_prompt,
+                task_type=task_type,
+                system=system,
+                max_tokens=max_tokens,
+                json_mode=True,
+                provider=provider,
+            ),
+            timeout=timeout,
+        )
+    except Exception as second_exc:
+        # R10.5.51: 同上, TimeoutError 必须向上传播.
+        if isinstance(second_exc, asyncio.TimeoutError):
+            logger.warning(f"[{log_tag}] retry 超时 ({timeout}s): {type(second_exc).__name__}")
+            raise
+        logger.warning(
+            f"[{log_tag}] retry 也失败: {type(second_exc).__name__}: {str(second_exc)[:200]}"
+        )
+        # 累加 retry cost (即使没拿到 retry_usage, 用 base_usage 兜底)
+        return None, _merge_usage({"model_usage": base_usage or {}}, {"model_usage": {}})
+
+    # 4) 第二次校验
+    retry_cleaned = _strip_markdown_fence(retry_text or "")
+    final_usage = _merge_usage(
+        {"model_usage": base_usage or {}},
+        {"model_usage": retry_usage.get("model_usage", retry_usage) if isinstance(retry_usage, dict) else {}},
+    )
+    try:
+        return schema.model_validate_json(retry_cleaned), final_usage
+    except Exception as second_exc:
+        logger.warning(
+            f"[{log_tag}] retry 仍失败, 走 fallback. err={type(second_exc).__name__}: {str(second_exc)[:200]}"
+        )
+        return None, final_usage
+
+
+# ===== Legacy (R10.5.47 早期 sync 版本, R10.5.51 替换为 async parse_with_retry_async) =====
+# 保留 try_parse_with_retry 名字作 fallback (测试 + 旧代码可能引用),
+# 但不推荐新代码使用 — 直接用 parse_with_retry_async.
+
+def try_parse_with_retry(
+    raw_text: str,
+    schema_cls: type[BaseModel],
+    retry_prompt_prefix: str = "",
+    llm_call_fn=None,
+    state: Optional[dict] = None,
+) -> tuple[Optional[BaseModel], Optional[object]]:
+    """R10.5.47: 同步版 Pydantic 解析 (R10.5.51 deprecated, 新代码用 parse_with_retry_async).
+
+    R10.5.51: 保留作为 sync fallback. 实际应用都用 parse_with_retry_async.
+    """
+    cleaned = _strip_markdown_fence(raw_text)
+    try:
+        return schema_cls.model_validate_json(cleaned), None
+    except Exception as first_exc:
+        if llm_call_fn is None:
+            return None, first_exc
+        if retry_prompt_prefix:
+            try:
+                retry_text, _ = llm_call_fn(retry_prompt_prefix)
+                retry_cleaned = _strip_markdown_fence(retry_text)
+                return schema_cls.model_validate_json(retry_cleaned), None
+            except Exception as second_exc:
+                return None, second_exc
+        return None, first_exc

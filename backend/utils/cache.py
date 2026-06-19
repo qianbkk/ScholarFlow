@@ -769,7 +769,10 @@ def _set_cached_sync(key: str, response: dict, cost_usd: float, tokens: int) -> 
     """
     _init_db_once()
     is_null = _is_null_result(response)
+    # R10.5.51 (/simplify): 白名单 table 名, 防止 f-string 注入风险
+    # (之前用 f"INSERT INTO {table}" 直接拼, 攻击者控制 is_null 就能注入 SQL).
     table = "null_cache" if is_null else "search_cache"
+    assert table in ("search_cache", "null_cache"), f"unexpected table: {table!r}"
     payload = (
         key,
         json.dumps(response, ensure_ascii=False),

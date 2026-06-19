@@ -125,6 +125,25 @@ NODE_NAME_TO_STEP = {
 }
 
 
+def _pre_check_request(safe_query: str, budget: float, max_iter: int) -> None:
+    """R10.5.51 (/simplify): /search + /search/stream 共享的预算前置检查.
+
+    抽出来避免两处 6 行重复, 改一处忘另一处 → 风险. 包含:
+    1. pre_check_budget: 估算 8 节点流水线 cost, 明显超 user budget 返 402
+    2. (后续可能加) sanitize_query 二次校验, provider 解析, 等
+
+    Args:
+        safe_query: 已通过 sanitize 的用户 query (search 端已 sanitize)
+        budget: 用户声明的单次预算上限 (req.budget)
+        max_iter: 最大迭代数
+    """
+    pre_check_budget(
+        prompt_size_chars=len(safe_query),
+        user_budget=budget,
+        max_iter=max_iter,
+    )
+
+
 def _sse_format(data: dict, event_id: Optional[int] = None) -> str:
     """格式化一个 SSE 事件.
 
@@ -174,15 +193,10 @@ async def search(
     # 校验 provider
     provider = _resolve_provider(req.provider)
 
-    # VULN-002: 全局每小时预算闸门
-    # R10.5.48: pre_check_budget 在 reserve 之前. 估算 cost > user budget 时
-    # 直接 402 拒绝, 不浪费 hourly cap 配额. prompt_size 用 user query 字符
-    # 数作为代理 (实际 agent prompt 模板更大, 估算偏保守).
-    pre_check_budget(
-        prompt_size_chars=len(safe_query),
-        user_budget=req.budget,
-        max_iter=req.max_iterations,
-    )
+    # R10.5.51 (/simplify): 抽 _pre_check_request 共享 /search + /search/stream
+    # 公共逻辑 (sanitize_query → pre_check_budget → _check_and_reserve_budget).
+    # 之前两处 6 行重复, 改一处忘另一处 → 风险.
+    _pre_check_request(safe_query, req.budget, req.max_iterations)
     await _check_and_reserve_budget(req.budget)
     budget_reserved = True  # try/finally 兜底标志
 
@@ -337,13 +351,9 @@ async def search_stream(
         raise HTTPException(status_code=400, detail="查询内容不能为空")
     resolved_provider = _resolve_provider(provider)
 
-    # R10.5.48: pre_check_budget 在 reserve 之前. 估算 cost > user budget 时
-    # 直接 402 拒绝, 不浪费 hourly cap 配额. (跟 /search 端一致)
-    pre_check_budget(
-        prompt_size_chars=len(safe_query),
-        user_budget=budget,
-        max_iter=max_iter,
-    )
+    # R10.5.51 (/simplify): 抽 _pre_check_request 共享 /search + /search/stream
+    # 公共逻辑. 跟 /search 端一致.
+    _pre_check_request(safe_query, budget, max_iter)
     await _check_and_reserve_budget(budget)
 
     initial = _make_initial_state(

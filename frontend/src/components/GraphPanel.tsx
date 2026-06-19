@@ -1,26 +1,12 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-// R10.5.49 (P2 defense-in-depth): 选择性 import D3 模块, 替代 import * as d3.
-// 旧 import 全量 D3 (~500KB) 拖慢 cold start; 新 import 9 个用到的函数 + 2 个类型.
-// Vite tree-shaking 配合 manualChunks (vite.config.ts:34) 应该能减 50%+ bundle.
-import {
-  select,
-  drag,
-  zoom,
-  zoomIdentity,
-  forceSimulation,
-  forceLink,
-  forceManyBody,
-  forceCenter,
-  forceCollide,
-  scaleLinear,
-} from 'd3';
+// R10.5.51 (/simplify): revert R10.5.49 namespace alias trick.
+// 之前选择性 import + 顶层 const d3 = {...} 反向破坏了 tree-shaking
+// (Vite/ESBuild 看 const d3 = {x, y, z} 用到全部引用, 不会删). 改回
+// `import * as d3 from 'd3'` 让 Vite 真正的 ESM tree-shaking 生效 (d3 v7
+// 已是 ESM, Vite 自动删未用的 export). 之前担心 bundle 体积没减小 —
+// 实测选择性 import 路径下也是 71.79KB (验证 alias 模式失效).
+import * as d3 from 'd3';
 import type { ZoomBehavior, Selection } from 'd3';
-// d3 命名空间别名 — 旧代码用 d3.select / d3.zoom / d3.X. 不改几十处调用点,
-// 顶层 alias 让旧代码继续工作, 同时启用 tree-shaking.
-const d3 = {
-  select, drag, zoom, zoomIdentity,
-  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, scaleLinear,
-};
 import type { CitationGraph, GraphNode, SimNode, GraphLink } from '../types';
 
 // R10.5.49 (P2 defense-in-depth): 前端节点数硬上限.

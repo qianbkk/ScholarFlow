@@ -21,6 +21,8 @@ from backend.models.state import SearchState
 from backend.models.paper import Paper
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.scrub import scrub_sensitive  # VULN-004
+# R10.5.51 (/simplify): 用 _schemas 共享 Pydantic + 1 retry helper
+from backend.agents._schemas import RankBatchOutput, parse_with_retry_async
 from backend.utils.text_utils import (
     extract_json_object as _extract_json_object,
     sanitize_paper_content,  # Fix-X6: 防 arXiv 论文摘要间接 prompt 注入
@@ -137,56 +139,25 @@ Respond with JSON only, mapping paper index to BOTH scores:
   ...
 }}"""
     # R10.5 Fix-P: 节点级 60s 上限, 防 LLM 评分 hang 住.
-    # fast_score 35 篇/批理论上 <10s, 60s 留 6x buffer.
-    text, usage = await asyncio.wait_for(
-        call_llm(prompt, task_type="fast_score", max_tokens=600, json_mode=True, provider=provider),
+    # R10.5.51 (/simplify): 抽到 _schemas.parse_with_retry_async, ~45 行 → ~10 行.
+    # 之前这里内联 Pydantic + 1 次 retry + merge_usage (死代码 bug, 修了).
+    parsed_obj, usage = await parse_with_retry_async(
+        call_llm=call_llm,
+        prompt=prompt,
+        schema=RankBatchOutput,
+        system="",  # ranker 无 system prompt
+        max_tokens=600,
+        task_type="fast_score",
+        provider=provider,
         timeout=60.0,
-    )
-
-    # R10.5.47 (P1 LLM 输出韧性): Pydantic v2 校验 LLM 输出, 失败 1 次重试.
-    # 旧: _extract_json_object + dict.get(str(i), dict.get(i, {})) + float conversion
-    #      链 4+ 层, 字段缺失静默回 5.0/6.0 兜底, 难发现 schema 错位.
-    # 新: RankBatchOutput 一次性校验, 字段缺失/类型错立刻 ValidationError,
-    #    失败加格式提示重试 1 次, 再失败走 per-paper fallback (跟旧行为一致).
-    from backend.agents._schemas import RankBatchOutput, _strip_markdown_fence
-    from pydantic import ValidationError
-
-    parsed_obj = None
-    cleaned = _strip_markdown_fence(text or "")
-    try:
-        parsed_obj = RankBatchOutput.model_validate_json(cleaned)
-    except ValidationError as first_exc:
-        logger.warning(
-            f"[ranker_agent] Pydantic 校验失败, 尝试 1 次重试. "
-            f"errors={first_exc.error_count()}"
-        )
-        # 1 次重试: 加格式提示
-        retry_prompt = (
-            f"{prompt}\n\n"
+        retry_suffix=(
             "⚠️ 上一轮 JSON 解析失败. 必须输出**严格符合 schema 的 JSON 对象**, "
             "key 是 1-based 论文编号 (字符串), value 是 {\"relevance\": <0-10>, "
             "\"consistency\": <0-10>}. 不能含 markdown 围栏, 不能含额外说明."
-        )
-        try:
-            retry_text, retry_usage = await asyncio.wait_for(
-                call_llm(
-                    retry_prompt, task_type="fast_score",
-                    max_tokens=600, json_mode=True, provider=provider,
-                ),
-                timeout=60.0,
-            )
-            # 累加 retry 用量
-            if retry_usage and isinstance(usage, dict):
-                from backend.utils.llm_client import merge_usage_into_state as _merge
-                usage = _merge({"model_usage": usage.get("model_usage", usage)}, retry_usage) if retry_usage else usage
-            retry_cleaned = _strip_markdown_fence(retry_text or "")
-            parsed_obj = RankBatchOutput.model_validate_json(retry_cleaned)
-        except (ValidationError, Exception) as second_exc:
-            logger.warning(
-                f"[ranker_agent] 重试后仍失败, 走 per-paper fallback. "
-                f"err={type(second_exc).__name__}: {str(second_exc)[:200]}"
-            )
-            parsed_obj = None
+        ),
+        log_tag="ranker_agent",
+        base_usage=None,
+    )
 
     rel_scores: list[float] = []
     cons_scores: list[float] = []

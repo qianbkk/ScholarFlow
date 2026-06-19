@@ -9,8 +9,7 @@ from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # VULN-001 Layer 1
 from backend.utils.text_utils import extract_json_object as _extract_json_object
 # R10.5.47 (P1 LLM 输出韧性): Pydantic v2 schema 替换脆弱的 dict.get + isinstance
-from backend.agents._schemas import DecomposeOutput, ConstraintsModel, _strip_markdown_fence
-from pydantic import ValidationError
+from backend.agents._schemas import DecomposeOutput, ConstraintsModel, parse_with_retry_async
 import logging
 
 logger = logging.getLogger(__name__)
@@ -177,65 +176,26 @@ Rules:
     * datasets: named datasets, e.g. "ImageNet", "GLUE", "MIMIC-III"
 - If a constraint is not explicitly mentioned, set that field to null (do not guess)"""
 
-    # R10.5 Fix-P: 节点级 30s 上限, 防 query_decompose hang 住整个 pipeline.
-    # max_tokens=500 + 简单 prompt 实测 5-10s, 30s 留 3x buffer.
-    text, usage = await asyncio.wait_for(
-        call_llm(
-            prompt,
-            task_type="complex_reason",
-            system=SYSTEM + isolation_system_suffix(),
-            max_tokens=500,
-            json_mode=True,
-            provider=state.get("provider"),
-        ),
-        timeout=30.0,
-    )
-
-    # R10.5.47 (P1 LLM 输出韧性): Pydantic v2 校验 LLM 输出, 失败时 1 次重试.
-    # 旧实现: _extract_json_object + dict.get + isinstance 链 5+ 字段, 脆弱.
-    # 新实现: Pydantic v2 model_validate_json 一次性校验 schema, 失败加格式
-    # 提示重试 1 次, 再失败走 _fallback_decompose 兜底.
+    # R10.5.51 (/simplify): 抽到 _schemas.parse_with_retry_async, ~45 行 → ~10 行.
+    # 之前这里内联 Pydantic 校验 + 1 次 retry + merge_usage (ranker 一样,
+    # 两份 ~70 行重复, 且 ranker 的 merge_usage 是死代码 bug).
     sub_queries: list[str] = []
-    parsed_obj: DecomposeOutput | None = None
-    raw_text = text or ""
-    cleaned = _strip_markdown_fence(raw_text)
-    try:
-        parsed_obj = DecomposeOutput.model_validate_json(cleaned)
-    except ValidationError as first_exc:
-        logger.warning(
-            f"[query_decompose] Pydantic 校验失败, 尝试 1 次重试. "
-            f"errors={first_exc.error_count()} first={first_exc.errors()[0] if first_exc.errors() else 'unknown'}"
-        )
-        # 1 次重试: 加格式提示, 严格 JSON 输出
-        retry_prompt = (
-            f"{prompt}\n\n"
+    parsed_obj, usage = await parse_with_retry_async(
+        call_llm=call_llm,
+        prompt=prompt,
+        schema=DecomposeOutput,
+        system=SYSTEM + isolation_system_suffix(),
+        max_tokens=500,
+        task_type="complex_reason",
+        provider=state.get("provider"),
+        timeout=30.0,
+        retry_suffix=(
             "⚠️ 上一轮输出 JSON 解析失败, 必须输出**严格符合 schema 的 JSON**, "
             "不能含 markdown 围栏, 不能含额外说明文字. 仅输出 JSON 对象."
-        )
-        try:
-            retry_text, retry_usage = await asyncio.wait_for(
-                call_llm(
-                    retry_prompt,
-                    task_type="complex_reason",
-                    system=SYSTEM + isolation_system_suffix(),
-                    max_tokens=500,
-                    json_mode=True,
-                    provider=state.get("provider"),
-                ),
-                timeout=30.0,
-            )
-            # 累加 retry 的 cost / tokens
-            if retry_usage:
-                from backend.utils.llm_client import merge_usage_into_state as _merge
-                usage = _merge({"model_usage": usage or {}}, retry_usage) if isinstance(usage, dict) else usage
-            retry_cleaned = _strip_markdown_fence(retry_text or "")
-            parsed_obj = DecomposeOutput.model_validate_json(retry_cleaned)
-        except (ValidationError, Exception) as second_exc:
-            logger.warning(
-                f"[query_decompose] 重试后仍失败, 走 _fallback_decompose 兜底. "
-                f"err={type(second_exc).__name__}: {str(second_exc)[:200]}"
-            )
-            parsed_obj = None
+        ),
+        log_tag="query_decompose",
+        base_usage=None,
+    )
 
     # 解析成功 → 拿 query_type + sub_queries; 解析失败 → 全 None / 兜底
     if parsed_obj is not None:
@@ -275,7 +235,7 @@ Rules:
     # 现有约束 schema, 下游 search/synth 节点可读)
     constraints["query_type"] = query_type
 
-    cost_update = merge_usage_into_state(state, usage)
+    cost_update = merge_usage_into_state(state, usage or {})
 
     return {
         **state,

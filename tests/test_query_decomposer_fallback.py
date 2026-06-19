@@ -85,21 +85,25 @@ class TestQueryDecomposeNodeFallback:
 
         注: 节点本身不 catch TimeoutError, 让上层 (graph.ainvoke / endpoint)
         走兜底路径. 这里只验证 wait_for 包装生效 — 超时确实抛出.
+
+        R10.5.51: parse_with_retry_async 在 _schemas.py 调用 asyncio.wait_for,
+        不在 query_decomposer. 测试 patch 路径也调到 _schemas.
         """
         async def _run():
             from backend.agents import query_decomposer as qd
+            from backend.agents import _schemas
 
             async def slow_call_llm(*args, **kwargs):
                 await asyncio.sleep(60)
                 return "{}", {}
 
-            # 缩 wait_for 超时到 0.05s
+            # 缩 wait_for 超时到 0.05s — patch _schemas 的引用 (parse_with_retry_async 在那)
             original_wait_for = asyncio.wait_for
 
             async def fast_wait_for(awaitable, timeout=None, **kw):
                 return await original_wait_for(awaitable, timeout=0.05)
 
-            monkeypatch.setattr(qd.asyncio, "wait_for", fast_wait_for)
+            monkeypatch.setattr(_schemas.asyncio, "wait_for", fast_wait_for)
             monkeypatch.setattr(qd, "call_llm", slow_call_llm)
 
             state = {

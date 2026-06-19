@@ -29,6 +29,9 @@ def _isolate(monkeypatch, tmp_path):
     """每个测试前:
     - 把 cache _DB 切到 tmp_path (避免污染 dev/prod 数据)
     - reset 进程内 cache + 删 SQLite 单行
+
+    R10.5.51: _ensure_table() 已删 (cache migration 负责建表). 改用
+    cache._init_db_once() 触发 migration, 然后 DELETE 清残留 row.
     """
     from backend.utils import cache as cache_mod
     from backend.utils import runtime_mode as rm
@@ -37,12 +40,13 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_mod, "_DB", db_path)
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED", False)
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED_PATH", None)
-    # 删掉旧表, 让 _ensure_table() 重新建 (清残留 row)
+    # 删掉旧表, 让 migration 重新建 (清残留 row)
     db_path.unlink(missing_ok=True)
-    # 立即建表 + 清行
+    # 触发 migration 建表 + 清行
     try:
-        rm._ensure_table()
-        from backend.utils.cache import _connect_with_wal
+        rm._invalidate_cache()  # 防止旧 cache 命中
+        from backend.utils.cache import _init_db_once, _connect_with_wal
+        _init_db_once()  # 触发 _m_r10_5_43_runtime_mode_state migration
         conn = _connect_with_wal()
         try:
             conn.execute("DELETE FROM runtime_mode_state WHERE id=1")

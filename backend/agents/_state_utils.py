@@ -63,27 +63,30 @@ def prune_state(state: SearchState) -> SearchState:
 
     不修改 iteration / status / cost, 只把 3 个 paper list 截到上限,
     减少下游 LLM 拼接 + SSE 序列化成本.
+
+    R10.5.51 (/simplify): fast-path 跳过 dict copy. 3 个 list 都不超 cap 时
+    直接返原 state, 省一次 dict() 深拷贝 + 3 个 list 检查.
     """
     raw = state.get("raw_papers") or []
     expanded = state.get("expanded_papers") or []
     ranked = state.get("ranked_papers") or []
+    # Fast-path: 3 个 list 都没超 cap, 无需拷贝 state
+    if (len(raw) <= RAW_PAPERS_CAP
+            and len(expanded) <= EXPANDED_PAPERS_CAP
+            and len(ranked) <= RANKED_PAPERS_CAP):
+        return state
     new_state = dict(state)
-    changed = False
     if len(raw) > RAW_PAPERS_CAP:
         new_state["raw_papers"] = _prune_papers_by_score(raw, RAW_PAPERS_CAP)
-        changed = True
     if len(expanded) > EXPANDED_PAPERS_CAP:
         new_state["expanded_papers"] = _prune_papers_by_score(expanded, EXPANDED_PAPERS_CAP)
-        changed = True
     if len(ranked) > RANKED_PAPERS_CAP:
         new_state["ranked_papers"] = _prune_papers_by_score(ranked, RANKED_PAPERS_CAP)
-        changed = True
-    if changed:
-        # 用 get + 兜底原 list, 兼容 test 传部分字段 (e.g. 只有 raw_papers, 没 expanded/ranked)
-        logger.debug(
-            f"[_state_utils.prune_state] capped: "
-            f"raw={len(raw)}->{len(new_state.get('raw_papers', raw))}, "
-            f"expanded={len(expanded)}->{len(new_state.get('expanded_papers', expanded))}, "
-            f"ranked={len(ranked)}->{len(new_state.get('ranked_papers', ranked))}"
-        )
+    # R10.5.51 (/simplify): 用 .get 兜底 — test 可能只传部分字段 (e.g. 只有 ranked)
+    logger.debug(
+        f"[_state_utils.prune_state] capped: "
+        f"raw={len(raw)}->{len(new_state.get('raw_papers', raw))}, "
+        f"expanded={len(expanded)}->{len(new_state.get('expanded_papers', expanded))}, "
+        f"ranked={len(ranked)}->{len(new_state.get('ranked_papers', ranked))}"
+    )
     return new_state  # type: ignore[return-value]

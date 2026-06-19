@@ -108,33 +108,16 @@ _runtime_mode_cache: dict = {
 _RUNTIME_MODE_LOCK = threading.Lock()  # 保护 cache 读写 + 防御 DB 写竞争
 
 
-def _ensure_table() -> None:
-    """确保 runtime_mode_state 表存在. 防御性: cache.py 的 migration 已建表,
-    这里再 CREATE IF NOT EXISTS 一次保证万无一失 (test fixture 切 DB path 时
-    尤其需要). CREATE IF NOT EXISTS 是幂等的, 开销 <1ms.
-    """
-    from backend.utils.cache import _connect_with_wal
-    conn = _connect_with_wal()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS runtime_mode_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                mode TEXT NOT NULL,
-                updated_at REAL NOT NULL
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
 def _read_from_db() -> str:
-    """从 SQLite 读 runtime mode. 表无行时返 'auto' (默认 env 行为)."""
+    """从 SQLite 读 runtime mode. 表无行时返 'auto' (默认 env 行为).
+
+    R10.5.51 (/simplify): 删 _ensure_table(). cache.py _m_r10_5_43_runtime_mode_state
+    migration 已在 _init_db_once() 跑过, runtime_mode_state 表已存在. 之前每
+    次 cache 读写额外 CREATE IF NOT EXISTS 多花 2 个 DB round-trip (跟
+    Plan 中 Reuse #3 + Efficiency #2 一致).
+    """
     from backend.utils.cache import _init_db_once
     _init_db_once()
-    _ensure_table()
     from backend.utils.cache import _connect_with_wal
     conn = _connect_with_wal()
     try:
@@ -155,10 +138,12 @@ def _read_from_db() -> str:
 
 
 def _write_to_db(mode: str) -> None:
-    """写 runtime mode 到 SQLite. UPSERT 单行 (id=1)."""
+    """写 runtime mode 到 SQLite. UPSERT 单行 (id=1).
+
+    R10.5.51 (/simplify): 删 _ensure_table() 调 (migration 已建表).
+    """
     from backend.utils.cache import _init_db_once
     _init_db_once()
-    _ensure_table()
     from backend.utils.cache import _connect_with_wal
     conn = _connect_with_wal()
     try:
@@ -182,12 +167,19 @@ def get_runtime_mode() -> Literal["mock", "real", "auto"]:
     """返回当前生效的 runtime 模式. 1s 进程内缓存 + SQLite 共享.
 
     跨 worker 一致性: 切换后 ≤1s 全员生效 (cache TTL 1s).
+
+    R10.5.51 (/simplify): fast-path 无锁读 — 99% 调用在 1s TTL 内, 不需要
+    拿 _RUNTIME_MODE_LOCK (Efficiency #1). 只在 stale 时拿锁串行化 DB 读.
     """
+    # Fast-path: 99% 调用在 TTL 内, 无锁返回 (CPython GIL 保证 dict 读原子)
+    if time.monotonic() - _runtime_mode_cache["fetched_at"] < _CACHE_TTL_SECONDS:
+        return _runtime_mode_cache["value"]  # type: ignore[return-value]
+    # Slow-path: stale, 拿锁串行化 DB 读
     with _RUNTIME_MODE_LOCK:
         now = time.monotonic()
+        # Double-check: 可能在拿锁期间其他线程已经刷新
         if now - _runtime_mode_cache["fetched_at"] < _CACHE_TTL_SECONDS:
             return _runtime_mode_cache["value"]  # type: ignore[return-value]
-        # Cache miss / stale: 读 DB
         mode = _read_from_db()
         _runtime_mode_cache["value"] = mode
         _runtime_mode_cache["fetched_at"] = now

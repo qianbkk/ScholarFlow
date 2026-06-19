@@ -488,17 +488,23 @@ export function useSearch() {
           buffer = events.pop() ?? '';
           for (const ev of events) {
             if (myGen !== genRef.current) break;
-            // R10.5.45: 解析 SSE 标准 id: 字段. 用于断线重连的 Last-Event-ID 续传.
-            // 浏览器 fetch 不允许设置 Last-Event-ID header, 走 query param,
-            // 这里解析的 id 喂给 next retry 的 URL search param.
-            const idLine = ev.split('\n').find((l) => l.startsWith('id: '));
+            // R10.5.51 (/simplify): ev.split('\n') 只调一次 (Efficiency #11).
+            // 旧: 2 次 (一次找 id: 行, 一次找 data: 行) → N 事件 = 2N 次 split.
+            // 新: 1 次 split + 2 个变量. 顺手只在 id 实际前进时更新 ref.
+            const lines = ev.split('\n');
+            let idLine: string | undefined;
+            let dataLine: string | undefined;
+            for (const l of lines) {
+              if (!idLine && l.startsWith('id: ')) idLine = l;
+              else if (!dataLine && l.startsWith('data: ')) dataLine = l;
+              if (idLine && dataLine) break;  // 早退
+            }
             if (idLine) {
               const id = parseInt(idLine.slice(4).trim(), 10);
-              if (!isNaN(id) && id >= 0) {
-                lastEventIdRef.current = id;
+              if (!isNaN(id) && id >= 0 && id > (lastEventIdRef.current ?? -1)) {
+                lastEventIdRef.current = id;  // 单调递增, 不更新就跳过
               }
             }
-            const dataLine = ev.split('\n').find((l) => l.startsWith('data: '));
             if (!dataLine) continue;
             try {
               const payload = JSON.parse(dataLine.slice(6)) as SSEEvent;
