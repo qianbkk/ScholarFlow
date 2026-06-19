@@ -1,6 +1,34 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-import * as d3 from 'd3';
+// R10.5.49 (P2 defense-in-depth): 选择性 import D3 模块, 替代 import * as d3.
+// 旧 import 全量 D3 (~500KB) 拖慢 cold start; 新 import 9 个用到的函数 + 2 个类型.
+// Vite tree-shaking 配合 manualChunks (vite.config.ts:34) 应该能减 50%+ bundle.
+import {
+  select,
+  drag,
+  zoom,
+  zoomIdentity,
+  forceSimulation,
+  forceLink,
+  forceManyBody,
+  forceCenter,
+  forceCollide,
+  scaleLinear,
+} from 'd3';
+import type { ZoomBehavior, Selection } from 'd3';
+// d3 命名空间别名 — 旧代码用 d3.select / d3.zoom / d3.X. 不改几十处调用点,
+// 顶层 alias 让旧代码继续工作, 同时启用 tree-shaking.
+const d3 = {
+  select, drag, zoom, zoomIdentity,
+  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, scaleLinear,
+};
 import type { CitationGraph, GraphNode, SimNode, GraphLink } from '../types';
+
+// R10.5.49 (P2 defense-in-depth): 前端节点数硬上限.
+// 后端 graph_builder.py MAX_GRAPH_NODES=100, 但前端不能假设后端永远正确.
+// 这里加 MAX_FRONTEND_NODES=200 防御性硬上限, 即使后端 cap 失效 (e.g. R11+
+// 改 cap, 或者新加端点忘加 cap), 浏览器也不会因为 SVG 节点数爆涨卡死.
+// 200 = 100 (当前 cap) 的 2x 缓冲, 任何 cap 失效也能撑住.
+const MAX_FRONTEND_NODES = 200;
 
 interface Props {
   graph: CitationGraph | null;
@@ -54,8 +82,8 @@ const COMMUNITY_COLORS = [
 
 export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Props) {
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const zoomRef = useRef<d3.ZoomBehavior<SVGSVGElement, unknown> | null>(null);
-  const rootRef = useRef<d3.Selection<SVGGElement, unknown, null, undefined> | null>(null);
+  const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
+  const rootRef = useRef<Selection<SVGGElement, unknown, null, undefined> | null>(null);
   const [hovered, setHovered] = useState<GraphNode | null>(null);
   // R10.5.5: 内部 selected 让位给外部 controlled selectedPaperId (受控优先)
   // 点击节点 → 通知 App.tsx, App 通过 prop 回流. 保持单一数据源.
@@ -118,7 +146,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     const lo = yearMin ?? yearBounds[0];
     const hi = yearMax ?? yearBounds[1];
     const authorQ = authorFilter.trim().toLowerCase();
-    return graph.nodes.filter((n) => {
+    const filtered = graph.nodes.filter((n) => {
       const y = n.year || 0;
       if (y > 0 && (y < lo || y > hi)) return false;
       if (authorQ) {
@@ -127,6 +155,13 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       }
       return true;
     });
+    // R10.5.49 (P2 defense-in-depth): 前端硬上限, 后端 cap 失效也不让浏览器卡死.
+    // 200 = 后端 MAX_GRAPH_NODES=100 的 2x 缓冲, 任何后端 cap 调整都能撑住.
+    // 只取前 N 节点, 按 relevance_score 降序 (后端 pruner 已经按 score 排序过, 前面是高相关).
+    if (filtered.length > MAX_FRONTEND_NODES) {
+      return filtered.slice(0, MAX_FRONTEND_NODES);
+    }
+    return filtered;
   }, [graph, yearMin, yearMax, authorFilter, yearBounds]);
 
   const visibleIdSet = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes]);

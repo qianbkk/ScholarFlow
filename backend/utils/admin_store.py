@@ -19,11 +19,18 @@ SQLite 表 schema:
   );
 
 存储位置: backend/.cache/admin.sqlite (跟 auth/budget/cache 表分文件避免争锁).
+
+R10.5.49 (P2 defense-in-depth): 加 _WRITE_LOCK 保护多线程 commit.
+旧版 check_same_thread=False 共享 connection, 多线程同时 add_admin
+导致 'cannot commit - no transaction is active' 错 (connection.transaction
+state 跨线程污染). 修: threading.Lock 串行化所有写操作. 读操作不锁
+(SQLite WAL 支持并发读).
 """
 from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -33,6 +40,7 @@ _DB_DIR.mkdir(parents=True, exist_ok=True)
 _DB_PATH = _DB_DIR / "admin.sqlite"
 
 _conn: sqlite3.Connection | None = None
+_WRITE_LOCK = threading.Lock()  # 保护所有 add / remove 写
 
 
 def _get_conn() -> sqlite3.Connection:
@@ -40,6 +48,12 @@ def _get_conn() -> sqlite3.Connection:
     if _conn is None:
         _conn = sqlite3.connect(str(_DB_PATH), check_same_thread=False)
         _conn.execute("PRAGMA journal_mode=WAL")
+        # R10.5.49 (P2 defense-in-depth): 加 busy_timeout, 跟 cache.py 对齐.
+        # 旧版只设 journal_mode=WAL, 缺 busy_timeout → 4 worker 部署下
+        # 同时调 add/remove_admin 撞写锁立即 OperationalError("database is locked"),
+        # CLI /admin add 命令偶发失败. 5s busy_timeout 跟 cache.py 一致,
+        # 写锁等待 < 5s 内通常能拿到, 体验一致.
+        _conn.execute("PRAGMA busy_timeout=5000")
         _conn.execute(
             """
             CREATE TABLE IF NOT EXISTS admins (
@@ -64,38 +78,48 @@ def list_admin_user_ids() -> frozenset[str]:
 
 
 def add_admin(user_id: str, note: str = "") -> bool:
-    """CLI 入口: 加 user_id 进 admin 白名单. 返 True=新加, False=已存在."""
+    """CLI 入口: 加 user_id 进 admin 白名单. 返 True=新加, False=已存在.
+
+    R10.5.49 (P2): _WRITE_LOCK 保护 commit. 多线程同时 add 串行化,
+    避免 'cannot commit - no transaction is active' 错.
+    """
     import time
-    conn = _get_conn()
-    try:
-        conn.execute(
-            "INSERT OR IGNORE INTO admins (user_id, created_at, note) VALUES (?, ?, ?)",
-            (user_id, time.time(), note),
-        )
-        conn.commit()
-        return True
-    except Exception as e:
-        logger.error(f"[admin_store] add_admin failed: {e}")
-        return False
+    with _WRITE_LOCK:
+        conn = _get_conn()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO admins (user_id, created_at, note) VALUES (?, ?, ?)",
+                (user_id, time.time(), note),
+            )
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[admin_store] add_admin failed: {e}")
+            return False
 
 
 def remove_admin(user_id: str) -> bool:
-    """CLI 入口: 移 user_id 出 admin 白名单."""
-    conn = _get_conn()
-    try:
-        cur = conn.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
-        conn.commit()
-        return cur.rowcount > 0
-    except Exception as e:
-        logger.error(f"[admin_store] remove_admin failed: {e}")
-        return False
+    """CLI 入口: 移 user_id 出 admin 白名单.
+
+    R10.5.49 (P2): _WRITE_LOCK 保护 commit. 跟 add_admin 共享同一把锁.
+    """
+    with _WRITE_LOCK:
+        conn = _get_conn()
+        try:
+            cur = conn.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return cur.rowcount > 0
+        except Exception as e:
+            logger.error(f"[admin_store] remove_admin failed: {e}")
+            return False
 
 
 def clear_runtime_admin_users() -> None:
     """测试用: 清空 admins 表."""
-    conn = _get_conn()
-    try:
-        conn.execute("DELETE FROM admins")
-        conn.commit()
-    except Exception as e:
-        logger.warning(f"[admin_store] clear failed: {e}")
+    with _WRITE_LOCK:
+        conn = _get_conn()
+        try:
+            conn.execute("DELETE FROM admins")
+            conn.commit()
+        except Exception as e:
+            logger.warning(f"[admin_store] clear failed: {e}")
