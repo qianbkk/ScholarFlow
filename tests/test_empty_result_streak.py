@@ -25,12 +25,15 @@ sys.path.insert(0, str(ROOT))
 # ===== 1. search_node 入口调 prune_state =====
 
 @pytest.mark.asyncio
-async def test_search_node_entry_calls_prune_state():
+@pytest.mark.asyncio
+async def test_search_node_entry_calls_prune_state(monkeypatch):
     """[R10.5.46] search_node 入口必须调 prune_state, 第一次 pass 也有 state cap.
 
     旧实现 (R10.5.22) 只在 query_refine_node 调, iter 1 (没经过 refine) 没保护.
     R10.5.46 修复: search_node 入口也调一次, 防长 query 用户在第一次 pass 撞
     state 膨胀.
+
+    R10.5.50 修复: 加 monkeypatch fixture, 避免直接赋值污染 state.
     """
     from backend.agents import search_agent
 
@@ -80,9 +83,8 @@ async def test_search_node_entry_calls_prune_state():
 
     # Patch 所有 5 个源的 search_papers 返空
     for mod in [semantic_scholar, openalex, arxiv, crossref, pubmed]:
-        monkeypatch_obj = getattr(mod, "search_papers", None)
-        if monkeypatch_obj is not None:
-            mod.search_papers = _empty  # type: ignore
+        if hasattr(mod, "search_papers"):
+            monkeypatch.setattr(mod, "search_papers", _empty)
 
     try:
         result = await search_agent.search_node(inflated_state)
@@ -105,8 +107,11 @@ async def test_search_node_entry_calls_prune_state():
 # ===== 2. 连续 0 结果: streak +1 =====
 
 @pytest.mark.asyncio
-async def test_empty_results_increment_streak():
-    """[R10.5.46] 5 个源都返 0 → unique=0 → empty_result_streak +1."""
+async def test_empty_results_increment_streak(monkeypatch):
+    """[R10.5.46] 5 个源都返 0 → unique=0 → empty_result_streak +1.
+
+    R10.5.50 修复: 加 monkeypatch fixture, 避免状态污染.
+    """
     from backend.agents import search_agent
     from backend.api import semantic_scholar, openalex, arxiv, crossref, pubmed
 
@@ -115,7 +120,7 @@ async def test_empty_results_increment_streak():
 
     for mod in [semantic_scholar, openalex, arxiv, crossref, pubmed]:
         if hasattr(mod, "search_papers"):
-            mod.search_papers = _empty  # type: ignore
+            monkeypatch.setattr(mod, "search_papers", _empty)
 
     state = {
         "original_query": "test",
@@ -145,8 +150,11 @@ async def test_empty_results_increment_streak():
 
 
 @pytest.mark.asyncio
-async def test_consecutive_empty_results_increment_streak():
-    """[R10.5.46] 连续 2 次 empty_result → streak=2 → router 强制收口."""
+async def test_consecutive_empty_results_increment_streak(monkeypatch):
+    """[R10.5.46] 连续 2 次 empty_result → streak=2 → router 强制收口.
+
+    R10.5.50 修复: 加 monkeypatch fixture, 避免状态污染.
+    """
     from backend.agents import search_agent
     from backend.api import semantic_scholar, openalex, arxiv, crossref, pubmed
 
@@ -155,7 +163,7 @@ async def test_consecutive_empty_results_increment_streak():
 
     for mod in [semantic_scholar, openalex, arxiv, crossref, pubmed]:
         if hasattr(mod, "search_papers"):
-            mod.search_papers = _empty  # type: ignore
+            monkeypatch.setattr(mod, "search_papers", _empty)
 
     # 第二次进入 search_node 时, streak 已经是 1
     state = {
@@ -187,8 +195,15 @@ async def test_consecutive_empty_results_increment_streak():
 # ===== 3. 有结果: streak = 0 (reset) =====
 
 @pytest.mark.asyncio
-async def test_non_empty_results_reset_streak():
-    """[R10.5.46] 有结果时 streak 重置为 0 (防止误判)."""
+@pytest.mark.asyncio
+async def test_non_empty_results_reset_streak(monkeypatch):
+    """[R10.5.46] 有结果时 streak 重置为 0 (防止误判).
+
+    R10.5.50 修复: 加 monkeypatch fixture, 避免直接赋值污染模块状态.
+    之前直接 mod.search_papers = _one_paper 跨测试残留, 导致 CI 偶发
+    'coroutine was never awaited' warning (其他测试拿到我们的 mock,
+    把它当 coroutine 加进 gather 但没 await).
+    """
     from backend.agents import search_agent
     from backend.api import semantic_scholar, openalex, arxiv, crossref, pubmed
     from backend.models.paper import Paper
@@ -220,10 +235,11 @@ async def test_non_empty_results_reset_streak():
     # Patch 所有 5 个源, ss 返 1 paper, 其他 4 返 0.
     # (之前 test_consecutive_empty_results_increment_streak 把 5 个都 patch 成 _empty,
     # 这里 ss 覆盖成 _one_paper, 其他 4 保持 _empty.)
-    semantic_scholar.search_papers = _one_paper  # type: ignore
+    # R10.5.50 修复: 用 monkeypatch 代替直接赋值, 防止跨测试 state 残留.
+    monkeypatch.setattr(semantic_scholar, "search_papers", _one_paper)
     for mod in [openalex, arxiv, crossref, pubmed]:
         if hasattr(mod, "search_papers"):
-            mod.search_papers = _empty  # type: ignore
+            monkeypatch.setattr(mod, "search_papers", _empty)
 
     state = {
         "original_query": "test",
