@@ -1,9 +1,0 @@
-# ScholarFlow v3 backend — fresh dependencies.
-# No langgraph, no real LLM in this version. The v3 backend is a working
-# mock-pipeline implementation that the v3 frontend can run against.
-# Replace with real LLM providers when ready.
-# Versions pinned to match what's installed in this environment.
-
-fastapi>=0.115.0
-uvicorn[standard]>=0.32.0
-pydantic>=2.10.0
