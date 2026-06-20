@@ -1,10 +1,10 @@
 /**
  * LayoutToggle — 3 列 / 焦点单列 布局切换 (R10.5.40 Agent 1, Phase 2)
  *
- * 从 v4 prototype (newversion/frontend/) 吸收的"阅读优先" 设计:
+ * 从 R10.5.38 prototype (R10.5.52 已删) 吸收的"阅读优先" 设计:
  *   - 三栏布局 (3-col): 现有 v1 — QueryPanel / ReportPanel / GraphPanel 并排
- *   - 单栏焦点 (focus):  吸收 v4 — GraphPanel 默认收起, 报告区独占中栏
- *     (GraphPanel 不被删, 而是根据 toggle 状态 show/hide; v4 是用 modal
+ *   - 单栏焦点 (focus):  吸收 prototype — GraphPanel 默认收起, 报告区独占中栏
+ *     (GraphPanel 不被删, 而是根据 toggle 状态 show/hide; prototype 是用 modal
  *      overlay, v1 简化成直接显隐, 因为 GraphPanel 没暴露 ref 切 overlay)
  *
  * 持久化: useLocalStorage('sf-layout-mode'), 默认 'three-col' 跟现有 v1 一致.

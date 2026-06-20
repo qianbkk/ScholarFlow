@@ -1,15 +1,14 @@
-"""Pipeline state — minimal common shape shared between v1 + v3 backends.
+"""Pipeline state — minimal common shape shared across v1 backend modules.
 
-Both implementations agree on these 4 fields. v1 extends via
-backend.models.state.SearchState; v3 extends via newversion's local
-State dataclass. Future agents can extend this TypedDict as the two
-backends converge.
+v1 extends via backend.models.state.SearchState. (R10.5.52 cleanup: v3/v4
+experimental backend in newversion/ has been deleted, so the "shared between
+v1 + v3 backends" framing no longer applies — this TypedDict is now used
+only by v1.)
 """
 from typing import Literal, TypedDict
 
 
-# The 8 pipeline nodes executed in order by the v3 mock backend and
-# (under slightly different names) by v1's LangGraph state machine.
+# The 8 pipeline nodes executed in order by v1's LangGraph state machine.
 NodeId = Literal[
     "query_decomposer",
     "query_refiner",

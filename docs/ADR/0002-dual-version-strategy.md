@@ -1,7 +1,7 @@
 # ADR 0002: Dual-version strategy — v1 production, v4 experimental, side by side
 
-- **Status**: Accepted (R10.5.37)
-- **Date**: 2026-06-18
+- **Status**: Superseded by R10.5.52 (2026-06-20) — v4 removed, v1 is the only version. ADR retained as historical record of the dual-version decision.
+- **Originally Accepted**: R10.5.37 (2026-06-18)
 - **Deciders**: Product / architecture track
 
 ## Context

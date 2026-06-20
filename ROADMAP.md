@@ -17,6 +17,7 @@
 - ~~`eval/` / `test_run.py` / `scholarflow.bat` / 根目录 `scholarflow.py`~~ (R10.5.40 之前的过时脚本, R10.5.41 删)
 - ~~`frontend/src-v2/`~~ (R10.5.36 尝试 v2 时建, R10.5.37 删后又留空目录, R10.5.41 清)
 - ~~`TODO.md`~~ (R10.5.51 cleanup: 全部 34 项并入 [`BACKLOG.md`](BACKLOG.md) 的 E/F/G/H/I 节)
+- ~~`newversion/` (v4 experimental)~~ (R10.5.37-51, 2026-06-20 删除:R10.5.52 决策:删 v4, v1 是唯一版本)
 
 **唯一保留的跟踪文件**: `BACKLOG.md` (清理/重构/漂移 + 跳过的 P0/P1 + 中/低优先级 + 延期 + 不做 + R11+ 战略) + `ROADMAP.md` (本文件, 战略 + 历史) + `docs/ARCHITECTURE.md` + `docs/DEPLOYMENT.md` + `docs/ADR/0001-0003.md`.
 

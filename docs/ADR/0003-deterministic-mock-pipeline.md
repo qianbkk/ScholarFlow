@@ -1,7 +1,7 @@
 # ADR 0003: Deterministic hash-seeded mock pipeline for v4
 
-- **Status**: Accepted (R10.5.37)
-- **Date**: 2026-06-18
+- **Status**: Superseded by R10.5.52 (2026-06-20) — v4 removed, the deterministic mock pipeline it described is no longer part of the codebase. ADR retained as historical record of the v4 design rationale.
+- **Originally Accepted**: R10.5.37 (2026-06-18)
 - **Deciders**: v4 architecture track
 
 ## Context

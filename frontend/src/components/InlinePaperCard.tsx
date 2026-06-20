@@ -1,7 +1,7 @@
 /**
  * InlinePaperCard — 报告内嵌论文卡片 (R10.5.40 Agent 1, Phase 2)
  *
- * 从 v4 prototype (newversion/frontend/src/ui/PaperFootnote.tsx) 吸收的设计:
+ * 从 R10.5.38 prototype (R10.5.52 已删) 吸收的设计:
  *   - 论文卡片在用户点击引用时, 直接出现在引用下方 (inline)
  *   - 不是侧栏, 不是 modal — 保持阅读流
  *   - 一次只显示一个, 点击外部 / × 关闭
@@ -38,7 +38,7 @@ interface Props {
 }
 
 export function InlinePaperCard({ paper, index, onClose, onCompare }: Props) {
-  // R10.5.40 (Agent 1): Esc 关闭 — 跟 v4 ReportView 行为一致.
+  // R10.5.40 (Agent 1): Esc 关闭 — 跟 R10.5.38 prototype ReportView 行为一致.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {

@@ -168,29 +168,20 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 - **工作量**: 半天
 - **风险**: 中 (新外部 API 依赖)
 
-### E-004. v4 `is_degraded` UI badge 恢复 (R10.5.40 review #3)
+### E-004. ~~v4 `is_degraded` UI badge 恢复~~ (R10.5.40 review #3)
 
 - **来源**: R10.5.40 5-agent review + TODO.md #4
-- **现状**: `newversion/frontend/src/types/index.ts` 的 `SearchStatus` 声明了 `is_degraded?: boolean`,但 v4 UI 没读它显示 badge。真实 bug trace — 降级模式用户看不到。
-- **目标**: 在 v4 header 加 degradation badge (红色/黄色),从 `is_degraded` 字段取状态。
-- **工作量**: 30 行
-- **风险**: 低
+- **状态**: ✅ 已废弃 (2026-06-20, v4 删除后随目录清空;v1 的 `is_degraded_response` 独立存在)
 
-### E-005. 删 `ReportView.tsx` 死代码 (R10.5.40 review #5)
+### E-005. ~~删 `ReportView.tsx` 死代码~~ (R10.5.40 review #5)
 
 - **来源**: R10.5.40 5-agent review + TODO.md #5
-- **现状**: `ReportView.tsx` 有 useEffect + 空 div,跟主 render path 重复 marked.parse,2× markdown parse perf。
-- **目标**: 删死 useEffect + 验证主 path 渲染。
-- **工作量**: 1 行删 + 测试
-- **风险**: 极低
+- **状态**: ✅ 已废弃 (2026-06-20, v4 删除后随目录清空)
 
-### E-006. ⚙️ 3 个 v4 SSE 回调接 UI (R10.5.40 review)
+### E-006. ~~v4 SSE 回调接 UI~~ (R10.5.40 review)
 
 - **来源**: R10.5.40 5-agent review + TODO.md #7
-- **现状**: R10.5.51 cleanup 把 v4 `EmptyState.tsx` 的 4 个 SSE 回调改成 `console.debug`(原本是 `() => undefined` 占位)。等于 live log / paper stream 没接 UI。
-- **目标**: 在 v4 加 `LiveLogPanel` + `PaperStreamChip` 组件,onLog/onPapers/onRanked/onCritique 真正渲染。
-- **工作量**: 1h
-- **风险**: 低
+- **状态**: ✅ 已废弃 (2026-06-20, v4 删除后随目录清空)
 
 ---
 
@@ -309,7 +300,7 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 | 编号 | 标题 | 阻塞条件 | 恢复条件 |
 |---|---|---|---|
 | H-001 | COVERAGE.md 真实 baseline 数字 | `pip install pytest-cov` blocked (offline env) | 在线环境跑 `pytest --cov=backend` |
-| H-002 | v4 (`newversion/`) → v1 迁移评估 | v4 留作 design exploration, 不强制迁移 | 等用户决定哪边胜出 |
+| ~~H-002~~ | ~~v4 (`newversion/`) → v1 迁移评估~~ | ✅ **已决策 (R10.5.52, 2026-06-20): 删 v4, v1 是唯一版本**. 详见 ROADMAP.md §1 `newversion/` 删除归档. | — |
 
 ---
 
@@ -318,7 +309,7 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 | 编号 | 标题 | 原因 |
 |---|---|---|
 | I-001 | Google Scholar integration (`scholarly` lib) | Violates Google ToS; Agent 1 deliberately skipped |
-| I-002 | Restore v3 design (R10.5.37) | Superseded by v4 (R10.5.38); v3 frontend deleted in R10.5.38 |
+| I-002 | ~~Restore v3 design (R10.5.37)~~ | ✅ 已废弃 (2026-06-20, v4 → v3 → 全部删); Superseded by v4 (R10.5.38) which is now also deleted |
 | I-003 | Restore v2 design (R10.5.36) | User said v2 too similar to v1, deleted in R10.5.37 |
 | I-004 | Re-add `eval/`, `test_run.py` | Old R10.5.16 eval scripts; user said "test scripts don't push" |
 
@@ -408,7 +399,7 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 | `backend/__init__.py:2` | P3-11 fix | F-011 |
 | `frontend/src/components/ChangelogModal.tsx:95` | D4 P1-1 changelog tag | (历史记录) |
 | `frontend/src/hooks/useSearch.ts:568` | P1-11 假进度计时器 | (R10.5 已修,历史注释) |
-| `newversion/frontend/src/ui/EmptyState.tsx:50` | C-006 SSE 回调占位 | E-006 |
+| `newversion/frontend/src/ui/EmptyState.tsx:50` | C-006 SSE 回调占位 | E-006 (R10.5.52 随 v4 删除) |
 
 ---
 

@@ -7,7 +7,7 @@
 - Node.js 20+ and npm
 - Git
 
-### v1 (production)
+### Local development
 
 ```bash
 # Backend (port 8000)
@@ -23,22 +23,7 @@ npm run dev
 # open http://127.0.0.1:5173/
 ```
 
-### v4 (experimental)
-
-```bash
-# Backend (port 9000)
-cd newversion/backend
-pip install -r requirements.txt
-python -m uvicorn scholarflow_v3.app:create_app --factory --host 127.0.0.1 --port 9000
-
-# Frontend (port 6173)
-cd newversion/frontend
-npm install
-npm run dev
-# open http://127.0.0.1:6173/
-```
-
-Or use `python scripts/scholarflow.py start [--v4]` for both at once.
+Or use `python scripts/scholarflow.py start` (cross-platform launcher) to wrap v1 start / stop / logs / install in a single command.
 
 ## Code style
 
@@ -51,7 +36,7 @@ Or use `python scripts/scholarflow.py start [--v4]` for both at once.
 - Backend: `python -m pytest -q tests/` from the repo root.
 - Add new tests under `tests/test_<module>.py` matching `<module>`'s path.
 - E2E / Playwright scripts live in `tests/manual/` and are run directly, not via pytest.
-- Coverage: `python -m pytest --cov=backend --cov-report=term-missing -q tests/` (see `COVERAGE.md` for the baseline).
+- Coverage: `python -m pytest --cov=backend --cov-report=term-missing -q tests/` (requires `pytest-cov`; not in CI baseline since `H-001` is pending online env).
 
 ## PR process
 
@@ -61,13 +46,8 @@ Or use `python scripts/scholarflow.py start [--v4]` for both at once.
 4. Push the branch and open a PR against `master`. CI must be green (test / security / frontend / docker).
 5. One approval + green CI = merge.
 
-## Two-version policy
+## Single-version policy
 
-This repo ships **two parallel implementations** that coexist on different ports:
+This repo ships **one implementation**: `backend/` + `frontend/`. v1 is the only version.
 
-- **v1** in `backend/` + `frontend/src/` — production-style, real LangGraph + LLM calls, ports 8000/5173.
-- **v4** in `newversion/` — experimental design exploration with a deterministic mock pipeline, ports 9000/6173.
-
-They share **no code, no ports, no database**. v1 is the stable production version; v4 is a design experiment to validate a reading-first UI. Neither supersedes the other — both are maintained side by side. Pick whichever fits your use case, or run both to compare.
-
-When contributing, decide which version your change targets and keep the boundary clean. Cross-version refactors require an ADR in `docs/ADR/`.
+When contributing, target v1. New architectural decisions require an ADR in `docs/ADR/`.

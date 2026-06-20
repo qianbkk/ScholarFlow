@@ -1,7 +1,7 @@
 /**
  * PipelineStrip — 8 节点流水线状态条 (R10.5.40 Agent 1, Phase 2)
  *
- * 从 v4 prototype (newversion/frontend/src/ui/Header.tsx) 吸收的设计:
+ * 从 R10.5.38 prototype (R10.5.52 已删) 吸收的设计:
  *   - 横向一行, 8 个节点, 单色 mono 小字
  *   - 每个节点有状态指示 (pending / running / done / error)
  *   - 放在 QueryPanel 顶部 (查询输入框上方), 1 行, hairline bottom border, 不是 card
@@ -101,7 +101,7 @@ export function computeStatuses(
 }
 
 function Glyph({ status }: { status: PipelineStatus }) {
-  // R10.5.40 (Agent 1): 极简 glyph, 跟 v4 Header 一致
+  // R10.5.40 (Agent 1): 极简 glyph, 跟 R10.5.38 prototype Header 一致
   const colorVar = `var(--sf-pipeline-status-${status})`;
   if (status === 'done') return <span style={{ color: colorVar, fontFamily: 'JetBrains Mono, monospace', fontSize: '10px' }}>●</span>;
   if (status === 'running') return <span style={{ color: colorVar, fontFamily: 'JetBrains Mono, monospace', fontSize: '10px', animation: 'sf-fade 1s ease infinite alternate' }}>●</span>;
@@ -161,7 +161,7 @@ export function PipelineStrip({ events, currentStep, loading, hasError = false, 
         ))}
       </ol>
 
-      {/* 右侧: 状态文字 (极简, 跟 v4 Header 一致) */}
+      {/* 右侧: 状态文字 (极简, 跟 R10.5.38 prototype Header 一致) */}
       <span
         className="text-[10px] uppercase tracking-[0.18em] shrink-0 tabular-nums"
         style={{
