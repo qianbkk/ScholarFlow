@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CostDashboard } from './components/CostDashboard';
 import { QueryPanel } from './components/QueryPanel';
+import { STORAGE_KEYS } from './lib/storageKeys';
 import { ReportPanel } from './components/ReportPanel';
 import { GraphPanel } from './components/GraphPanel';
 import { ThemeSwitcher, type ThemeId } from './components/ThemeSwitcher';
@@ -38,11 +39,10 @@ interface LastSearchOpts {
   provider?: string;
 }
 
-const THEME_STORAGE_KEY = 'sf-theme';
-const VALID_THEMES: ThemeId[] = ['parchment', 'kraft', 'midnight', 'sage'];
-
-// R10.5.31 (F4): theme 加载逻辑搬到 AppContext, App.tsx 不再需要.
-// THEME_STORAGE_KEY + VALID_THEMES 留作历史参考, 真值在 AppContext.
+// R10.5.31 (F4): theme 加载逻辑搬到 AppContext, App.tsx 不再需要
+// THEME_STORAGE_KEY + VALID_THEMES. 真值在 AppContext.tsx (useApp hook).
+// R10.5.51 cleanup (BACKLOG B-008): THEME_STORAGE_KEY 也走 STORAGE_KEYS 中央化
+// (AppContext.tsx 已用).
 export default function App() {
   // R10.5.31 (F4): 外层只做 Provider 包装, 业务逻辑挪到 AppInner.
   // 这样 4 个 Context 的副作用 (fetchMe / healthCheck / fetchRuntimeMode) 在
@@ -746,7 +746,8 @@ function ShortcutsOverlay({ onClose }: { onClose: () => void }) {
 // CD.txt 反馈 "完全没看到前端重构了什么东西", 这一版我们用 sessionStorage
 // 记录"已阅", 顶部显眼位置列出 4 项核心升级, 让用户一眼看出 ScholarFlow
 // 在 R10.5.28 做了什么. 关闭后再点 footer 链接 (见 ? 帮助对话框) 重新展开.
-const R10_5_28_DISMISSED_KEY = 'sf-r10_5_28-banner-dismissed';
+// R10.5.51 cleanup (BACKLOG B-008): key 走 STORAGE_KEYS 中央化.
+const R10_5_28_DISMISSED_KEY = STORAGE_KEYS.upgradeBannerDismissed;
 const R10_5_28_NOTES: Array<{
   key: string;
   emoji: string;

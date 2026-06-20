@@ -7,12 +7,10 @@ Global per-hour USD budget gate (H1+H2+TOCTOU fixed).
 Extracted from backend/main.py in the god-object refactor so the FastAPI
 entrypoint no longer carries the SQL transactions inline.
 
-Module-level mutable state (GLOBAL_HOURLY_BUDGET, _budget_reset_ts) is
-exposed as functions so callers (notably `backend.main`) can host those
-names in their own namespace while still delegating reads/writes to
-this single source of truth. The host module can then define matching
-property accessors and the legacy `main_mod._budget_reset_ts = 0.0`
-test idiom continues to work.
+R10.5.51 cleanup (BACKLOG D-006): 删 main_mod proxy 类 (50 行) 后,
+本模块只暴露函数 API. 老的 `main_mod.GLOBAL_HOURLY_BUDGET = 1.0` /
+`main_mod._budget_reset_ts = 0.0` 测试写法已迁到 `set_global_hourly_budget(1.0)`
+显式 API. budget 状态权威源就在这里, main.py 不再需要 proxy.
 
 Surface (kept stable for tests):
   * get_global_hourly_budget() / set_global_hourly_budget(v)
@@ -49,22 +47,17 @@ _budget_lock = asyncio.Lock()
 _budget_reset_ts: float = _time.time()
 
 
-# Backward-compat module-level names: re-bound to the dicts above so
-# `from backend.api.services.budget import GLOBAL_HOURLY_BUDGET` still
-# works for legacy code paths (the test suite never uses these names,
-# but other modules might).
-GLOBAL_HOURLY_BUDGET = _GLOBAL_HOURLY_BUDGET  # legacy read-only snapshot
-
-
 def get_global_hourly_budget() -> float:
     """Return current per-hour budget cap (USD)."""
     return _GLOBAL_HOURLY_BUDGET
 
 
 def set_global_hourly_budget(value: float) -> None:
-    """Override the per-hour budget cap at runtime (used by tests via
-    `main_mod.GLOBAL_HOURLY_BUDGET = ...` — the host module's property
-    setter forwards to this setter)."""
+    """Override the per-hour budget cap at runtime (R10.5.51: 唯一公开 setter).
+
+    测试通过 `budget_svc.set_global_hourly_budget(50.0)` 显式调用 (替代
+    老的 `main_mod.GLOBAL_HOURLY_BUDGET = 50.0` 写法).
+    """
     global _GLOBAL_HOURLY_BUDGET
     _GLOBAL_HOURLY_BUDGET = float(value)
 

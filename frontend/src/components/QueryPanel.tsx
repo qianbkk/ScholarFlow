@@ -5,6 +5,8 @@ import { fetchProviders, type ProviderInfo, type RuntimeMode } from '../services
 // 3 文件 (useSearch / QueryPanel / App) 各自定义 'local'|'real'|'unknown' 联合.
 import type { RecentEntry, NodeEvent } from '../hooks/useSearch';
 import { PipelineStrip } from './PipelineStrip';
+// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+import { STORAGE_KEYS } from '../lib/storageKeys';
 
 interface PipelineStep {
   key: string;
@@ -56,7 +58,8 @@ const SUGGESTIONS = [
 
 // R10.5.5: 表单状态 (budget / maxIter / provider) 跨刷新持久化
 // 用户不需要每次都重新设预算 / 迭代次数 / provider, 提升"重复检索同一领域"的体验.
-const FORM_STORAGE_KEY = 'sf-form-state';
+// R10.5.51 cleanup (BACKLOG B-008): key 走 STORAGE_KEYS 中央化.
+const FORM_STORAGE_KEY = STORAGE_KEYS.formState;
 
 interface PersistedForm {
   budget: number;

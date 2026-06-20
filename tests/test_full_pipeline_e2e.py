@@ -15,8 +15,8 @@ R10.5 审计 (P0-13) 提的"端到端测试缺失"在这里落地 — 跑完整 
 走 FastAPI TestClient + 纯 mock (LLM_MOCK=true, API_MOCK=true), 全部 in-process
 不需要启动 uvicorn / vite, CI 上 0 依赖. 总时长 5-15s 取决于 mock 论文数.
 
-不验证 (跟 e2e_test_404_fix 互补):
-  - playwright 浏览器交互 — e2e_test_404_fix 覆盖
+不验证 (跟历史 e2e_test_404_fix 互补, 后者已在 R10.5.51 删):
+  - playwright 浏览器交互 — 已删, 历史由 tests/manual/ 脚本覆盖
   - 真实 LLM 网络调用 — 那是 R10.5.9 e2e (用 minimax 实跑) 的范围
   - SSE 流式 — 单独测 test_sse_disconnect_budget
 """
@@ -56,8 +56,8 @@ def _post_search(client_tuple, query: str, budget: float = 0.5):
 
     D1 (P0-4): 旧实现 POST /search 同步端点, 60s timeout 跟 8 节点 mock 流水线
     (10-50s 实际耗时) 临界, 偶发 504. 改用 /api/v1/search/stream (480s SSE)
-    拿 done 事件当结果 — 跟 e2e_test_404_fix 测的同步端点互补. mock 模式下
-    实际 <10s, 不会再撞 timeout.
+    拿 done 事件当结果 — 跟历史 e2e_test_404_fix 测的同步端点互补
+    (后者已在 R10.5.51 删). mock 模式下实际 <10s, 不会再撞 timeout.
 
     client_tuple = (TestClient, unique_suffix) — unique suffix 拼到 query
     末尾防跨 test 缓存命中 (SQLite + 语义 LRU).
@@ -236,7 +236,7 @@ class TestFullPipelineE2E:
 
 # ==================== CLI entry for manual run ====================
 def main() -> int:
-    """手动跑: python -m tests.e2e_test_full_pipeline (需 ENVIRONMENT=test)."""
+    """手动跑: pytest tests/test_full_pipeline_e2e.py (需 ENVIRONMENT=test)."""
     print("[e2e] starting full pipeline E2E (mock mode)")
     client = TestClient(main_mod.app)
     test_queries = [

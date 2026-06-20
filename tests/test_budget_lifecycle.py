@@ -39,7 +39,8 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED_PATH", None)
     main_mod._init_budget_table()
     main_mod._save_budget_to_db(0.0, _time.time())
-    monkeypatch.setattr(main_mod, "GLOBAL_HOURLY_BUDGET", 50.0)
+    # R10.5.51 cleanup (BACKLOG D-006): 改用 budget_svc 显式 setter
+    budget_svc.set_global_hourly_budget(50.0)
     # Reset slowapi rate limiter (otherwise tests after 5 hit 429).
     try:
         main_mod.limiter.reset()
@@ -97,7 +98,8 @@ def _parse_sse_events(raw: str) -> list[dict]:
 
 def test_return_reduces_reserve_to_actual_cost():
     """[from budget_return] reserve(2.0) → 实际 cost=0.3 → return(1.7) → total=0.3."""
-    main_mod.GLOBAL_HOURLY_BUDGET = 5.0
+    # R10.5.51 cleanup (BACKLOG D-006): 改用显式 setter API (删了 main_mod proxy 类)
+    budget_svc.set_global_hourly_budget(5.0)
 
     async def run():
         await main_mod._check_and_reserve_budget(2.0)
@@ -149,7 +151,8 @@ def test_return_sequential_returns_accumulate():
 
 def test_concurrent_reserve_return_within_budget():
     """[from budget_return] 并发 reserve+return: budget 池始终不超 GLOBAL_HOURLY_BUDGET。"""
-    main_mod.GLOBAL_HOURLY_BUDGET = 1.0
+    # R10.5.51 cleanup (BACKLOG D-006): 改用显式 setter API
+    budget_svc.set_global_hourly_budget(1.0)
 
     async def fake_request():
         await main_mod._check_and_reserve_budget(0.2)

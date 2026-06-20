@@ -1,8 +1,9 @@
 """
-backend.auth.admin — R10.5.28 CLI 入口 alias.
+backend.auth.admin — CLI 入口 (R10.5.51 cleanup: 单一来源指向 __main__).
 
-让 `python -m backend.auth.admin ...` 跟 `python -m backend.auth.__main__ ...`
-都能跑. 前者是更直观的子命令命名.
+支持 `python -m backend.auth.admin {add,remove,list} <user_id>`.
+实际实现仍在 `backend.auth.__main__:main()` (跟 `python -m backend.auth`
+共享同一入口, 避免双份 CLI 维护).
 """
 from backend.auth.__main__ import main
 

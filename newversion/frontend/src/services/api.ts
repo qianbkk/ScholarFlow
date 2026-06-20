@@ -18,7 +18,10 @@ export interface SearchHandlers {
   onPapers: (papers: unknown[]) => void;
   onRanked: (papers: unknown[]) => void;
   onCritique: (text: string) => void;
-  onLog: () => void;
+  // R10.5.51 cleanup: onLog 改为 (line: string) 类型, 跟 backend SSE 'log' 事件
+  // (data.line) 对齐. 之前是 () => void, EmptyState.tsx 写 (line) => console.debug(...)
+  // 类型不匹配 (TS 不严检, v4 无 typecheck script).
+  onLog: (line: string) => void;
   onResult: (result: SearchResult) => void;
   onError: (err: Error) => void;
   signal?: AbortSignal;
@@ -83,7 +86,7 @@ export async function streamSearch(params: SearchParams, h: SearchHandlers): Pro
         } else if (ev === 'critique') {
           h.onCritique(String((data as { text: string }).text));
         } else if (ev === 'log') {
-          h.onLog();
+          h.onLog(String((data as { line: string }).line ?? ''));
         } else if (ev === 'result') {
           h.onResult((data as { data: SearchResult }).data as unknown as SearchResult);
           return;

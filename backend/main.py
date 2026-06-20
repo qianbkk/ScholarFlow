@@ -72,11 +72,9 @@ from backend.utils.audit_log import (  # R10.5.15 P1-C: 结构化审计
     audit_search_completed,
     audit_search_anomaly,
 )
-from backend.utils.semantic_cache import (  # R10.5.7 P0-1: 真实实现
-    semantic_cache_stub_marker,
-    get_semantic_cached,
-    set_semantic_cached,
-)
+# R10.5.51 cleanup: 删 backend.utils.semantic_cache (R10.5.7 占位桩,
+# 实际永远 return None). 语义缓存整体作废, 走精确 SQLite cache 已够用.
+# 见 BACKLOG.md (C-XXX 真实语义缓存留 R11+).
 from backend.utils.observability import (
     new_request_id,
     set_request_id,
@@ -98,7 +96,6 @@ import backend.config as _config  # R10.5.12: 限流按 ENVIRONMENT 分档
 from backend.middleware import install_security  # Round 5 M-3
 
 # ===== Submodule wiring (slim entrypoint) =====
-import types
 import backend.api.services.budget as _budget_svc
 from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router  # R10.5 Fix-P0-B
@@ -141,12 +138,14 @@ from backend.api.routes.models import (
 logger = logging.getLogger(__name__)
 
 
-# ===== R10.5.9 落地: 双缓存写路径去重 =====
-# /search 和 /search/stream 末尾都要写"精确缓存 + 语义缓存".
-# 旧实现: response.model_dump() 调 3 次 (set_cached_async + set_semantic_cached
+# ===== R10.5.9 落地: 精确缓存写 =====
+# /search 和 /search/stream 末尾都要写精确缓存 (SQLite).
+# 旧实现 (R10.5.7 ~ R10.5.50): 双缓存写 (精确 SQLite + 语义 in-memory LRU),
+# response.model_dump() 调 3 次 (set_cached_async + set_semantic_cached
 # + 返 SSE/done event), 每次都重新过 pydantic validation + 递归 dict 复制.
 # 实测在 25 篇论文报告 (200KB JSON) 浪费 ~3-5ms CPU + ~600KB 内存峰值.
-# 新实现: model_dump() 调 1 次, 共享 dict, asyncio.gather 并发写两 cache.
+# R10.5.51 cleanup: 语义缓存作废 (BACKLOG D-008), 改为单次精确缓存写.
+# 共享 dict, 一次 model_dump 调用, asyncio.to_thread 异步落盘.
 
 async def _write_search_caches(
     safe_query: str,
@@ -160,89 +159,20 @@ async def _write_search_caches(
     runtime_mode: str = "unknown",  # R10.5.28: cache key 拼 runtime_mode, mock↔real 独立
     endpoint: str,  # "/search" 或 "/search/stream" — 日志用
 ) -> None:
-    """并发写精确缓存 (SQLite) + 语义缓存 (in-memory LRU).
-
-    失败各自 warning, 互不影响. 整体 best-effort.
-    """
-    async def _write_precise() -> None:
-        try:
-            await set_cached_async(
-                safe_query, max_iter, budget, response_dict,
-                cost_usd, tokens, provider=provider, runtime_mode=runtime_mode,
-            )
-        except Exception as e:
-            logger.warning(f"[{endpoint}] cache write failed (non-fatal): {e}")
-
-    async def _write_semantic() -> None:
-        try:
-            await set_semantic_cached(
-                safe_query, max_iter, budget, response_dict,
-                cost_usd, tokens, provider=provider,
-                # R10.5.29 (simplify): 拼 LRU key, 跟精确缓存 runtime_mode 隔离
-                # 行为保持一致. 旧版缺这个 kwarg, semantic LRU 只按 query 匹配,
-                # mock↔real 跨模式命中导致 history 标签错.
-                runtime_mode=runtime_mode,
-            )
-        except Exception as e:
-            logger.warning(f"[{endpoint}] semantic cache write failed (non-fatal): {e}")
-
-    # 并发: 精确缓存走 SQLite (asyncio.to_thread, 不阻塞), 语义缓存纯内存
-    # 两路都是 best-effort, 各自 try/except, gather 不抛
-    await asyncio.gather(_write_precise(), _write_semantic(), return_exceptions=True)
+    """写精确缓存 (SQLite). 失败 warning, 不影响主流程."""
+    try:
+        await set_cached_async(
+            safe_query, max_iter, budget, response_dict,
+            cost_usd, tokens, provider=provider, runtime_mode=runtime_mode,
+        )
+    except Exception as e:
+        logger.warning(f"[{endpoint}] cache write failed (non-fatal): {e}")
 
 
-# ===== Module-level budget state proxy =====
-# Tests (e.g. test_budget_atomicity) assign to `main_mod._budget_reset_ts`
-# and `main_mod.GLOBAL_HOURLY_BUDGET`. Since these were module-level globals
-# in the original main.py, the property-based proxy below preserves the
-# legacy API on this module while the actual storage lives in
-# `backend.api.services.budget`.
-def _get_budget_reset_ts() -> float:
-    return get_budget_reset_ts()
-
-
-def _set_budget_reset_ts(value: float) -> None:
-    set_budget_reset_ts(value)
-
-
-def _get_global_hourly_budget() -> float:
-    return get_global_hourly_budget()
-
-
-def _set_global_hourly_budget(value: float) -> None:
-    set_global_hourly_budget(value)
-
-
-class _ScholarFlowMainModule(types.ModuleType):
-    """Custom module class that exposes the legacy budget state names
-    (GLOBAL_HOURLY_BUDGET, _budget_reset_ts) as properties proxying to
-    the canonical service-module storage.
-
-    This lets the test suite keep using the historical
-    `main_mod.GLOBAL_HOURLY_BUDGET = 1.0` / `main_mod._budget_reset_ts = 0.0`
-    idiom without re-binding the names at import time (which would
-    create stale snapshots that don't see updates from the service).
-    """
-
-    @property
-    def GLOBAL_HOURLY_BUDGET(self) -> float:  # noqa: N802 — legacy name
-        return _get_global_hourly_budget()
-
-    @GLOBAL_HOURLY_BUDGET.setter
-    def GLOBAL_HOURLY_BUDGET(self, value: float) -> None:  # noqa: N802
-        _set_global_hourly_budget(value)
-
-    @property
-    def _budget_reset_ts(self) -> float:
-        return _get_budget_reset_ts()
-
-    @_budget_reset_ts.setter
-    def _budget_reset_ts(self, value: float) -> None:
-        _set_budget_reset_ts(value)
-
-
-# Activate the proxy class on this module.
-sys.modules[__name__].__class__ = _ScholarFlowMainModule
+# R10.5.51 cleanup (BACKLOG D-006): 删 _ScholarFlowMainModule 模块 proxy 类
+# (50 行) + sys.modules[__name__].__class__ = ... hack. 老的 `main_mod.GLOBAL_HOURLY_BUDGET = 1.0`
+# 测试写法已迁到 `set_global_hourly_budget(1.0)` 显式 API. budget 状态权威源
+# 已在 `backend.api.services.budget`, main.py 不再需要 proxy.
 
 
 # Round 6 M2: in-flight search task table — 让 /search/cancel 真能停 in-flight pipeline

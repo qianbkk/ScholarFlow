@@ -13,6 +13,8 @@
  *    升级到 R10.5.31 时改 key 重置
  */
 import { useEffect } from 'react';
+// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+import { STORAGE_KEYS } from '../lib/storageKeys';
 
 interface ChangelogNote {
   emoji: string;
@@ -137,7 +139,7 @@ const CHANGELOG_NOTES: ChangelogNote[] = [
   },
 ];
 
-const DISMISSED_KEY = 'sf-changelog-dismissed-30';
+const DISMISSED_KEY = STORAGE_KEYS.changelogDismissed;
 
 export function ChangelogModal({
   isOpen,

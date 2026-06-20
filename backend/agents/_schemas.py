@@ -259,32 +259,8 @@ async def parse_with_retry_async(
         return None, final_usage
 
 
-# ===== Legacy (R10.5.47 早期 sync 版本, R10.5.51 替换为 async parse_with_retry_async) =====
-# 保留 try_parse_with_retry 名字作 fallback (测试 + 旧代码可能引用),
-# 但不推荐新代码使用 — 直接用 parse_with_retry_async.
-
-def try_parse_with_retry(
-    raw_text: str,
-    schema_cls: type[BaseModel],
-    retry_prompt_prefix: str = "",
-    llm_call_fn=None,
-    state: Optional[dict] = None,
-) -> tuple[Optional[BaseModel], Optional[object]]:
-    """R10.5.47: 同步版 Pydantic 解析 (R10.5.51 deprecated, 新代码用 parse_with_retry_async).
-
-    R10.5.51: 保留作为 sync fallback. 实际应用都用 parse_with_retry_async.
-    """
-    cleaned = _strip_markdown_fence(raw_text)
-    try:
-        return schema_cls.model_validate_json(cleaned), None
-    except Exception as first_exc:
-        if llm_call_fn is None:
-            return None, first_exc
-        if retry_prompt_prefix:
-            try:
-                retry_text, _ = llm_call_fn(retry_prompt_prefix)
-                retry_cleaned = _strip_markdown_fence(retry_text)
-                return schema_cls.model_validate_json(retry_cleaned), None
-            except Exception as second_exc:
-                return None, second_exc
-        return None, first_exc
+# ===== R10.5.51 cleanup: 删 sync try_parse_with_retry (25 行) =====
+# 旧版同步版, R10.5.47 早期同步版, 已被 async parse_with_retry_async 取代.
+# 留过 fallback 但实际项目没用到 (生产都走 parse_with_retry_async).
+# 旧 tests/test_agent_pydantic.py:198 等 4 处调用也迁到 async 路径 (见测试 commit).
+# 历史 commit (R10.5.47): 引入; (R10.5.51): 标记 deprecated; (本清理): 删.

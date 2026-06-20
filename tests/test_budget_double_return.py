@@ -19,6 +19,7 @@ import pytest
 
 import backend.main as main_mod
 from backend.api.routes import auth as auth_routes
+from backend.api.services import budget as budget_svc
 from backend.utils import cache as cache_mod
 
 
@@ -31,7 +32,8 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED_PATH", None)
     main_mod._init_budget_table()
     main_mod._save_budget_to_db(0.0, _time.time())
-    monkeypatch.setattr(main_mod, "GLOBAL_HOURLY_BUDGET", 50.0)
+    # R10.5.51 cleanup (BACKLOG D-006): 改用 budget_svc 显式 setter API
+    budget_svc.set_global_hourly_budget(50.0)
     auth_routes._RATE_HISTORY.clear()
     yield
 

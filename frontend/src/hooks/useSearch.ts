@@ -5,6 +5,8 @@ import {
   readLocalStorage,
   writeLocalStorage,
 } from '../lib/useLocalStorage';
+// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+import { STORAGE_KEYS } from '../lib/storageKeys';
 
 // 8 节点流水线步骤（用于进度反馈）
 // key 与后端 NODE_NAME_TO_STEP 映射保持一致（前端展示用）
@@ -111,7 +113,8 @@ export interface GraphSnapshot {
 //   - 旧 schema: string[] (只有 query)
 //   - 新 schema: {query, source: 'local'|'real', ts}[] (CD.txt 修复: 区分 mock 演示 vs 真 API)
 //   - 一次性迁移: 旧 string[] 自动转 {query: s, source: 'unknown', ts: 0}
-const RECENT_KEY = 'sf-recent-searches';
+// R10.5.51 cleanup (BACKLOG B-008): key 走 STORAGE_KEYS 中央化.
+const RECENT_KEY = STORAGE_KEYS.recentSearches;
 const RECENT_MAX = 5;
 export type RecentSource = 'local' | 'real' | 'unknown';
 export interface RecentEntry {

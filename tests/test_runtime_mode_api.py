@@ -23,9 +23,9 @@ from backend.utils import cache as cache_mod
 def _isolate(monkeypatch, tmp_path):
     """每个测试前重置 runtime_mode + cache DB + auth rate-limit.
 
-    R10.5.20: rm._runtime_mode_override 是 backend.utils.runtime_mode 模块级 dict,
-    跨测试不能依赖 autouse (本测试跑过 set_runtime_mode 之后, 后续测试需要 reset).
-    改用显式 save/restore + 列表拷贝以保持状态隔离.
+    R10.5.51 cleanup (BACKLOG D-007): 删 _runtime_mode_override dict-subclass 代理,
+    改用显式 set_runtime_mode("auto") + _invalidate_cache() 重置.
+    跨测试隔离: tmp_path 切 cache DB + reset SQLite 单行.
     """
     db_path = tmp_path / "test_runtime_mode.sqlite"
     monkeypatch.setattr(cache_mod, "_DB", db_path)
@@ -33,7 +33,8 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(cache_mod, "_DB_INITIALIZED_PATH", None)
     auth_routes._RATE_HISTORY.clear()
     # 强制 reset runtime_mode (覆盖前面 test 残留)
-    rm._runtime_mode_override["mode"] = "auto"
+    rm.set_runtime_mode("auto")
+    rm._invalidate_cache()
     yield
 
 
@@ -48,8 +49,9 @@ def _client():
 
 def test_get_runtime_mode_default_env():
     """GET /admin/runtime-mode 默认 (auto) 时从 env 读, source=env."""
-    # 强制模块级 dict 回到 auto (覆盖前面测试残留)
-    rm._runtime_mode_override["mode"] = "auto"
+    # R10.5.51 cleanup: 改用显式 set_runtime_mode API
+    rm.set_runtime_mode("auto")
+    rm._invalidate_cache()
     # TestClient 在前面 test 用过, context manager 退出可能清理时撞状态.
     # 改用直接构造 + 手动 close 避免 ExitStack 问题.
     c = TestClient(main_mod.app)

@@ -100,19 +100,15 @@ def _reset_global_state(request):
                 log_throttle._THROTTLES.clear()
         except (ImportError, AttributeError):
             pass
-        # R10.5.7 P0-1: 语义缓存 LRU 是 module-level OrderedDict.
-        # 跨 test 残留会导致后续 test 的"未命中"假设被打破 (实际命中 LRU).
-        try:
-            from backend.utils import semantic_cache
-            semantic_cache.clear_semantic_cache()
-        except (ImportError, AttributeError):
-            pass
-        # R10.5.20: runtime_mode._runtime_mode_override 是 module-level dict,
-        # 跨 test 残留会导致"auto" 起始假设被打破. 重置回 "auto" 走 env 兜底.
+        # R10.5.51 cleanup: 删 backend.utils.semantic_cache 占位桩 (BACKLOG D-008),
+        # 语义缓存不再需要清空. 精确 cache SQLite 已走 gc_cache 自动清理.
+        # R10.5.20: runtime_mode 旧版是 in-memory dict, 跨 test 残留会导致
+        # "auto" 起始假设被打破. R10.5.51 cleanup (BACKLOG D-007): 删 dict-subclass
+        # proxy, 改为显式 set_runtime_mode("auto") 重置 (走 SQLite 共享, 跨 worker 一致).
         try:
             from backend.utils import runtime_mode
-            if hasattr(runtime_mode, "_runtime_mode_override"):
-                runtime_mode._runtime_mode_override["mode"] = "auto"
+            runtime_mode.set_runtime_mode("auto")
+            runtime_mode._invalidate_cache()
         except (ImportError, AttributeError):
             pass
         # R10.5.21: admin 鉴权白名单测试默认含 dev-user, 让 R10.5.20 的
@@ -154,9 +150,8 @@ def _reset_global_state(request):
         # 降级 mock → 论文数 0 触发断言或 504 timeout. 强制 reset 到 CLOSED.
         try:
             from backend.utils import runtime_mode as _rt_reset
-            # R10.5.43: 不能整体替换 _runtime_mode_override (会破坏 dict-subclass
-            # proxy, 后续 ["mode"] = ... 写不到 SQLite). 改用 proxy 的
-            # __setitem__ → set_runtime_mode("auto") → 写 SQLite.
+            # R10.5.51 cleanup (BACKLOG D-007): 删 _runtime_mode_override dict-subclass
+            # proxy, 直接调 set_runtime_mode("auto") + _invalidate_cache() 重置.
             _rt_reset.set_runtime_mode("auto")
             _rt_reset._invalidate_cache()
         except (ImportError, AttributeError):
@@ -296,9 +291,9 @@ def force_mock_api(monkeypatch):
     a developer happens to have API keys configured locally.
 
     R10.5.31 (F2): 旧版只 patch 4 个模块级常量, 但 is_runtime_mock() 还
-    读 _runtime_mode_override dict + env. 之前 test 调过
+    读 SQLite runtime_mode_state + env. 之前 test 调过
     set_runtime_mode("real") 把 override 改 real → 当前 test 走真 API
-    → e2e 170s + perf 504. 强 reset override + patch is_runtime_mock
+    → e2e 170s + perf 504. 强 reset SQLite override + patch is_runtime_mock
     函数返 True, 双保险.
     """
     import backend.api.semantic_scholar as ss_mod
@@ -311,9 +306,11 @@ def force_mock_api(monkeypatch):
     monkeypatch.setattr(oa_mod, "API_MOCK", True)
     monkeypatch.setattr(cfg_mod, "LLM_MOCK", True)
     monkeypatch.setattr(llm_mod, "LLM_MOCK", True)
-    # R10.5.31 (F2): 双保险 — 重置 override dict 让 is_runtime_mock() 返 True.
+    # R10.5.31 (F2): 双保险 — 设 runtime_mode 让 is_runtime_mock() 返 True.
     # 注: ss_mod / oa_mod 顶部 `from backend.utils.runtime_mode import
     # is_runtime_mock` 拿的是函数引用, monkeypatch rt_mod.is_runtime_mock
-    # 不会同步过去. 改 dict 是唯一对所有 caller 都生效的方式.
-    rt_mod._runtime_mode_override["mode"] = "mock"
+    # 不会同步过去. 改 SQLite-backed mode 是唯一对所有 caller 都生效的方式.
+    # R10.5.51 cleanup (BACKLOG D-007): 删 dict-subclass proxy, 改显式 set_runtime_mode.
+    rt_mod.set_runtime_mode("mock")
+    rt_mod._invalidate_cache()
     return monkeypatch

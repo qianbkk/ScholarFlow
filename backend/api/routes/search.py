@@ -70,9 +70,8 @@ from backend.api.routes.models import (
 from backend.utils.network import get_real_ip
 from fastapi import Depends  # R10.5.30 D2: Depends 注入鉴权
 # R10.5.30 (D2): router 加鉴权时, conftest.py 的 OPEN_MODE=true 必须在 backend.auth.dependencies
-# 模块导入前设置, 否则模块级 OPEN_MODE=False. 改用一个 get_open_mode() 每次调用时
-# 重新读 env, 跟 conftest 的 setdefault 行为一致.
-import os as _os_for_openmode
+# R10.5.51 cleanup: 删 `import os as _os_for_openmode` (只剩 _get_current_user_search
+# helper 用过, helper 已删). 普通 `import os` 也无其他用处, 整行删.
 if TYPE_CHECKING:
     from backend.auth.dependencies import User  # noqa: F401 — type hint 专用
 
@@ -89,14 +88,10 @@ logger = logging.getLogger(__name__)
 # (e.g. /search/stream) 可能签名不同, 这里先在 search() / cancel_search()
 # 显式注入, 跟 main.py 旧 inline 行为完全一致.
 from backend.auth.dependencies import get_current_user
-# R10.5.30 (D2): get_current_user 用模块级 OPEN_MODE, conftest 在 import 后 setenv
-# 不生效. 改写 search_router 用的鉴权 helper, 每次调用时读 env.
-def _get_current_user_search():
-    """同 get_current_user, 但每次重读 OPEN_MODE. 跟 conftest setdefault 兼容."""
-    if _os_for_openmode.getenv("OPEN_MODE", "").lower() in ("1", "true", "yes"):
-        from backend.auth.dependencies import User as _U
-        return _U(user_id="dev-user", display_name="Open Mode Dev", created_at=0.0, is_dev_user=True)
-    return get_current_user
+# R10.5.51 cleanup (BACKLOG 中待补 B-XXX): 删 _get_current_user_search helper (6 行).
+# 旧实现为绕 conftest 模块级 OPEN_MODE 不刷新问题设了环境变量重读包装.
+# 实际 conftest 已通过 monkeypatch.setenv + autouse fixture 在 import 前
+# 设好 OPEN_MODE, get_current_user 读到的就是当前值, 不需要包装.
 
 router = APIRouter(tags=["search"])
 # FastAPI 0.115+ compatibility (跟 routes/admin.py 一致)

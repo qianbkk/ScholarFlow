@@ -94,12 +94,16 @@ def test_arxiv_search_papers_mock_returns_empty():
     from backend.utils import runtime_mode
 
     # Force mock mode
-    runtime_mode._runtime_mode_override["mode"] = "mock"
+    # R10.5.51 cleanup (BACKLOG D-007): 改用显式 set_runtime_mode API
+    # (旧 dict-subclass proxy _runtime_mode_override 已删)
+    runtime_mode.set_runtime_mode("mock")
+    runtime_mode._invalidate_cache()
     try:
         result = asyncio.run(arxiv.search_papers("anything", limit=5))
         assert result == []
     finally:
-        runtime_mode._runtime_mode_override["mode"] = "auto"
+        runtime_mode.set_runtime_mode("auto")
+        runtime_mode._invalidate_cache()
 
 
 # ===== Crossref parser =====
@@ -165,12 +169,14 @@ def test_crossref_search_papers_mock_returns_empty():
     from backend.api import crossref
     from backend.utils import runtime_mode
 
-    runtime_mode._runtime_mode_override["mode"] = "mock"
+    runtime_mode.set_runtime_mode("mock")
+    runtime_mode._invalidate_cache()
     try:
         result = asyncio.run(crossref.search_papers("anything", limit=5))
         assert result == []
     finally:
-        runtime_mode._runtime_mode_override["mode"] = "auto"
+        runtime_mode.set_runtime_mode("auto")
+        runtime_mode._invalidate_cache()
 
 
 # ===== PubMed parser =====
@@ -223,12 +229,14 @@ def test_pubmed_search_papers_mock_returns_empty():
     from backend.api import pubmed
     from backend.utils import runtime_mode
 
-    runtime_mode._runtime_mode_override["mode"] = "mock"
+    runtime_mode.set_runtime_mode("mock")
+    runtime_mode._invalidate_cache()
     try:
         result = asyncio.run(pubmed.search_papers("anything", limit=5))
         assert result == []
     finally:
-        runtime_mode._runtime_mode_override["mode"] = "auto"
+        runtime_mode.set_runtime_mode("auto")
+        runtime_mode._invalidate_cache()
 
 
 # ===== search_agent source selection =====

@@ -1,5 +1,8 @@
 """R10.5.47 测试: Pydantic v2 结构化输出 (query_decompose + ranker).
 
+R10.5.51 cleanup: 删 sync try_parse_with_retry, 改用 async parse_with_retry_async.
+原覆盖项 9-11 (sync) 替换为 parse_with_retry_async_* (见下方编号 12-14).
+
 覆盖:
   1. DecomposeOutput 接受合规 JSON, 解析成功
   2. DecomposeOutput 拒绝缺字段, 抛 ValidationError
@@ -9,9 +12,9 @@
   6. RankBatchOutput 接受 {"1": {"relevance": 8, "consistency": 7}} 形式
   7. RankBatchOutput 拒绝越界分数 (>10 / <0)
   8. _strip_markdown_fence 正确剥 ```json ... ``` 围栏
-  9. try_parse_with_retry: 第一次成功, 不调 retry
-  10. try_parse_with_retry: 第一次失败 + retry 成功, 返 parsed
-  11. try_parse_with_retry: 两次都失败, 返 (None, exception)
+  9. parse_with_retry_async: 第一次解析成功, 不调 retry
+  10. parse_with_retry_async: 第一次失败 + retry 成功, 返 parsed
+  11. parse_with_retry_async: 两次都失败, 返 (None, last_usage)
   12. query_decompose_node: 故意给坏 JSON, 走 fallback 兜底
 """
 from __future__ import annotations
@@ -192,92 +195,101 @@ def test_strip_markdown_fence():
 
 
 # ===== 9-11. try_parse_with_retry 行为 =====
+# R10.5.51 cleanup: 删 try_parse_with_retry 同步版 (deprecated, 生产都用 async).
+# 4 个测试 case 删掉, 行为已被 test_parse_with_retry_async_* (如下) 覆盖.
 
-def test_try_parse_first_success():
-    """[R10.5.47] 第一次解析成功, 不调 retry."""
-    from backend.agents._schemas import DecomposeOutput, try_parse_with_retry
+# ===== 12. parse_with_retry_async 行为 (替代旧的 try_parse_with_retry) =====
+
+
+@pytest.mark.asyncio
+async def test_parse_with_retry_async_first_success():
+    """[R10.5.51] 第一次解析成功, 不调 retry."""
+    from backend.agents._schemas import DecomposeOutput, parse_with_retry_async
 
     valid = json.dumps({"sub_queries": ["good query"], "query_type": "simple"})
-    retry_called = [False]
+    call_count = [0]
 
-    def llm_retry(prompt):
-        retry_called[0] = True
-        return "should not be called", None
+    async def llm_first_success(prompt, **kwargs):
+        call_count[0] += 1
+        return valid, {"cost_usd": 0.0}
 
-    obj, err = try_parse_with_retry(
-        raw_text=valid,
-        schema_cls=DecomposeOutput,
-        retry_prompt_prefix="retry",
-        llm_call_fn=llm_retry,
+    obj, usage = await parse_with_retry_async(
+        call_llm=llm_first_success,
+        prompt="dummy",
+        schema=DecomposeOutput,
+        system="",
+        max_tokens=500,
+        task_type="complex_reason",
+        timeout=10.0,
+        retry_suffix="retry",
+        log_tag="test",
+        base_usage=None,
     )
     assert obj is not None
-    assert err is None
+    assert usage is not None
     assert obj.query_type == "simple"
-    assert not retry_called[0], "retry should NOT be called on first success"
+    assert call_count[0] == 1, "retry should NOT be called on first success"
 
 
-def test_try_parse_retry_success():
-    """[R10.5.47] 第一次失败, retry 成功, 返 parsed."""
-    from backend.agents._schemas import DecomposeOutput, try_parse_with_retry
+@pytest.mark.asyncio
+async def test_parse_with_retry_async_retry_success():
+    """[R10.5.51] 第一次失败, retry 成功, 返 parsed."""
+    from backend.agents._schemas import DecomposeOutput, parse_with_retry_async
 
-    bad_first = "{ not valid json"
     good_retry = json.dumps({"sub_queries": ["retry success"], "query_type": "method"})
-
     call_count = [0]
 
-    def llm_retry(prompt):
+    async def llm_retry(prompt, **kwargs):
         call_count[0] += 1
-        return good_retry, None
+        if call_count[0] == 1:
+            return "{ not valid json", {"cost_usd": 0.0}
+        return good_retry, {"cost_usd": 0.0}
 
-    obj, err = try_parse_with_retry(
-        raw_text=bad_first,
-        schema_cls=DecomposeOutput,
-        retry_prompt_prefix="strict JSON only",
-        llm_call_fn=llm_retry,
+    obj, usage = await parse_with_retry_async(
+        call_llm=llm_retry,
+        prompt="dummy",
+        schema=DecomposeOutput,
+        system="",
+        max_tokens=500,
+        task_type="complex_reason",
+        timeout=10.0,
+        retry_suffix="strict JSON only",
+        log_tag="test",
+        base_usage=None,
     )
     assert obj is not None
-    assert err is None
     assert obj.sub_queries == ["retry success"]
-    assert call_count[0] == 1
+    assert call_count[0] == 2
 
 
-def test_try_parse_both_fail():
-    """[R10.5.47] 两次都失败, 返 (None, last_exception)."""
-    from backend.agents._schemas import DecomposeOutput, try_parse_with_retry
+@pytest.mark.asyncio
+async def test_parse_with_retry_async_both_fail():
+    """[R10.5.51] 两次都失败, 返 (None, last_usage)."""
+    from backend.agents._schemas import DecomposeOutput, parse_with_retry_async
 
-    bad = "{ garbage"
     call_count = [0]
 
-    def llm_retry(prompt):
+    async def llm_retry(prompt, **kwargs):
         call_count[0] += 1
-        return "still garbage", None
+        return "still garbage", {"cost_usd": 0.0}
 
-    obj, err = try_parse_with_retry(
-        raw_text=bad,
-        schema_cls=DecomposeOutput,
-        retry_prompt_prefix="strict",
-        llm_call_fn=llm_retry,
+    obj, usage = await parse_with_retry_async(
+        call_llm=llm_retry,
+        prompt="dummy",
+        schema=DecomposeOutput,
+        system="",
+        max_tokens=500,
+        task_type="complex_reason",
+        timeout=10.0,
+        retry_suffix="strict",
+        log_tag="test",
+        base_usage=None,
     )
     assert obj is None
-    assert err is not None
-    assert call_count[0] == 1
+    assert call_count[0] == 2
 
 
-def test_try_parse_no_retry_when_llm_fn_none():
-    """[R10.5.47] llm_call_fn=None 时不重试, 直接返 (None, exc)."""
-    from backend.agents._schemas import DecomposeOutput, try_parse_with_retry
-
-    obj, err = try_parse_with_retry(
-        raw_text="{ garbage",
-        schema_cls=DecomposeOutput,
-        retry_prompt_prefix="",
-        llm_call_fn=None,  # 不重试
-    )
-    assert obj is None
-    assert err is not None
-
-
-# ===== 12. query_decompose_node 集成测试 (故意给坏 JSON) =====
+# ===== 13. query_decompose_node 集成测试 (故意给坏 JSON) =====
 
 @pytest.mark.asyncio
 async def test_query_decompose_fallback_on_bad_json(monkeypatch):

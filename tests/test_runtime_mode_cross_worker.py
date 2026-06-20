@@ -1,12 +1,15 @@
 """R10.5.43 测试: Cross-worker runtime mode 一致性 (P0 multi-worker drift 修复).
 
+R10.5.51 cleanup (BACKLOG D-007): 删 _RuntimeModeProxy dict-subclass 后向兼容 shim.
+原覆盖项 4-5 改成 set_runtime_mode() / get_runtime_mode() 显式 API.
+
 覆盖:
   1. set_runtime_mode("mock") 写 SQLite → 新 "worker" (invalidate cache) 立即看到
   2. 1s 进程内缓存: 连续 get 在 TTL 内走缓存
   3. _invalidate_cache() 强制下次 get 立即从 DB 重读
-  4. 向后兼容: _runtime_mode_override["mode"] = ... 透明写到 SQLite
-  5. _runtime_mode_override.get("mode", ...) 透明从 SQLite 读
-  6. is_runtime_mock() 优先级不受 proxy 干扰 (mock/real/auto)
+  4. (原) _runtime_mode_override proxy 写 → (现) set_runtime_mode() 写 SQLite
+  5. (原) _runtime_mode_override.get 读 → (现) get_runtime_mode() 读 SQLite
+  6. is_runtime_mock() 优先级不受 set_runtime_mode 影响 (mock/real/auto)
   7. 持久性: set 后 SQLite 表行可见 (跨进程共享证据)
   8. 非法 mode 防御: DB 写入会校验, 读出非法值兜底 'auto'
 """
@@ -192,19 +195,13 @@ def test_invalidate_cache_forces_immediate_refresh():
     assert rm.get_runtime_mode() == "real"
 
 
-# ===== 4. 向后兼容: _runtime_mode_override["mode"] = ... 写 SQLite =====
+# ===== 4. 向后兼容: set_runtime_mode() 写 SQLite (替代 _runtime_mode_override["mode"] = ...) =====
 
-def test_legacy_dict_write_proxies_to_sqlite():
-    """_runtime_mode_override["mode"] = "mock" 必须实际写 SQLite, 不是写本地 dict."""
+def test_set_runtime_mode_writes_to_sqlite():
+    """R10.5.51 cleanup: set_runtime_mode("mock") 替代旧 proxy["mode"] = "mock", 行为一致 (写 SQLite)."""
     from backend.utils import runtime_mode as rm
 
-    proxy = rm._runtime_mode_override
-    # proxy 是 dict-subclass
-    assert isinstance(proxy, dict)
-
-    # 通过 proxy 写
-    proxy["mode"] = "mock"
-
+    rm.set_runtime_mode("mock")
     # 新 worker 视角: invalidate 后必须看到 mock
     rm._invalidate_cache()
     assert rm.get_runtime_mode() == "mock"
@@ -222,42 +219,15 @@ def test_legacy_dict_write_proxies_to_sqlite():
     assert row[0] == "mock"
 
 
-def test_legacy_dict_read_proxies_to_sqlite():
-    """_runtime_mode_override["mode"] 读必须经过 SQLite 共享, 不是本地 dict."""
+def test_get_runtime_mode_reads_from_sqlite():
+    """R10.5.51 cleanup: get_runtime_mode() 替代旧 proxy["mode"] 读, 行为一致 (从 SQLite 读)."""
     from backend.utils import runtime_mode as rm
 
     # 先用 set_runtime_mode 写 SQLite
     rm.set_runtime_mode("real")
     rm._invalidate_cache()
 
-    # proxy 读 → 应该看到 "real" (从 SQLite 来的)
-    proxy = rm._runtime_mode_override
-    assert proxy["mode"] == "real"
-
-    # proxy.get() 也走 SQLite
-    assert proxy.get("mode") == "real"
-    assert proxy.get("mode", "fallback") == "real"
-
-
-def test_legacy_dict_contains_always_true_for_mode():
-    """'mode' in proxy 永远 True (永远有 mode, 至少 'auto')."""
-    from backend.utils import runtime_mode as rm
-
-    proxy = rm._runtime_mode_override
-    assert "mode" in proxy
-
-    rm.set_runtime_mode("mock")
-    assert "mode" in proxy
-
-
-def test_legacy_dict_update_with_mode():
-    """proxy.update({"mode": "real"}) 透明写 SQLite."""
-    from backend.utils import runtime_mode as rm
-
-    proxy = rm._runtime_mode_override
-    proxy.update({"mode": "real"})
-
-    rm._invalidate_cache()
+    # 直接读 → 应该看到 "real" (从 SQLite 来的)
     assert rm.get_runtime_mode() == "real"
 
 

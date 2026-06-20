@@ -9,9 +9,9 @@ R10.5.43: Runtime mode 共享化 (P0 multi-worker drift 修复).
   → 4-worker Gunicorn 部署下切 mock 只有 1/N 走 mock (P0 致命).
 - R10.5.43: SQLite 共享表 + 进程内 1s 缓存
   → 跨 worker 一致, 切换后 ≤1s 全员生效
-  → DB I/O 几乎不增加 (每 worker 每秒最多 1 次 read)
-  → 旧 API 表面 (["mode"] = ..., get(...)) 通过 _RuntimeModeProxy dict-subclass
-     100% 向后兼容, 不需要批量改测试代码.
+  → DB I/O 几乎不增加 (每 worker 每秒最多 1 次 read).
+- R10.5.51 cleanup: 删 _RuntimeModeProxy dict-subclass 后向兼容 shim (76 行),
+  所有调用点迁到显式 set_runtime_mode() / get_runtime_mode() (见 BACKLOG.md D-007).
 
 API:
 - GET /api/v1/admin/runtime-mode → {mode: 'mock'|'real', source: 'env'|'runtime'}
@@ -92,13 +92,12 @@ def detect_runtime_profile() -> RuntimeProfile:
 
 # ===== R10.5.43: SQLite-backed shared state with 1s in-process cache =====
 # Storage: SQLite table "runtime_mode_state" with single row (id=1)
-# Why SQLite: 已有 WAL+busy_timeout+retry (cache.py:638-656), 零新依赖.
+# Why SQLite: 已有 WAL+busy_timeout+retry (cache.py), 零新依赖.
 # Why 1s cache: multi-worker 部署下每 worker 每秒最多 1 次 DB read,
 #              切换后 ≤1s 全员生效 (P0 致命漂移修复).
 #              不需要进程间失效通知 — 1s 容忍窗已经够小.
-# Why dict-subclass proxy: 向后兼容旧 `_runtime_mode_override["mode"] = ...`
-#                          写法 (test_r10_5_39_multisource_search.py 等 7 处).
-#                          proxy 拦截 mode 键, 透明转发到 SQLite.
+# R10.5.51 cleanup (BACKLOG D-007): 删 dict-subclass proxy, 唯一公开 API:
+#                          set_runtime_mode(mode) + get_runtime_mode().
 
 _CACHE_TTL_SECONDS = 1.0
 _runtime_mode_cache: dict = {
@@ -216,91 +215,7 @@ def is_runtime_mock() -> bool:
     return llm_mock or api_mock
 
 
-# ===== R10.5.43: 向后兼容 _runtime_mode_override dict API =====
-# 旧 API: rt._runtime_mode_override["mode"] = "mock"
-# 旧 API: rt._runtime_mode_override.get("mode", "auto")
-# 旧 API: if "mode" in rt._runtime_mode_override
-# 新行为: 透明转发到 get_runtime_mode() / set_runtime_mode().
-# 设计: dict subclass 拦截 'mode' 键, 其他键维持普通 dict 行为 (向后兼容).
-#
-# 重要: 这个 proxy 不允许被整个替换 — conftest 的
-# `_runtime_mode_override = {"mode": "auto"}` 会破坏后续对 SQLite 的同步.
-# 如果测试想"重置回 auto", 应该调 set_runtime_mode("auto"), 或者用
-# proxy["mode"] = "auto" 透明写入 SQLite.
-
-class _RuntimeModeProxy(dict):
-    """dict-subclass proxy: 'mode' 键透明同步到 SQLite + 1s 缓存.
-
-    R10.5.43: 保留旧 dict API 表面, 但状态权威源是 SQLite. 这样:
-      - conftest / 老测试 写 `proxy["mode"] = "mock"` → 实际写 SQLite
-      - is_runtime_mock() 通过 get_runtime_mode() 读 SQLite, 看到 mock
-      - 跨 worker 一致性由 SQLite 保证, 不再是进程内 dict
-    """
-
-    def __init__(self) -> None:
-        super().__init__()  # 内部 dict 不持有 mode (避免缓存不一致)
-        # 注意: 不要 super().__setitem__("mode", "auto") — 走 set_runtime_mode
-
-    def __getitem__(self, key: str) -> Any:
-        if key == "mode":
-            return get_runtime_mode()
-        return super().__getitem__(key)
-
-    def __setitem__(self, key: str, value: Any) -> None:
-        if key == "mode":
-            set_runtime_mode(value)  # type: ignore[arg-type]
-            return
-        super().__setitem__(key, value)
-
-    def __delitem__(self, key: str) -> None:
-        if key == "mode":
-            set_runtime_mode("auto")
-            return
-        super().__delitem__(key)
-
-    def __contains__(self, key: object) -> bool:
-        if key == "mode":
-            return True  # 永远有 'mode' 键 (默认 'auto')
-        return super().__contains__(key)
-
-    def get(self, key: str, default: Any = None) -> Any:
-        if key == "mode":
-            return get_runtime_mode()
-        return super().get(key, default)
-
-    def pop(self, key: str, *args: Any) -> Any:
-        if key == "mode":
-            old = get_runtime_mode()
-            set_runtime_mode("auto")
-            return old
-        return super().pop(key, *args)
-
-    def update(self, *args: Any, **kwargs: Any) -> None:
-        # 拦截 'mode' 键, 转发到 set_runtime_mode
-        for d in args:
-            if isinstance(d, dict) and "mode" in d:
-                set_runtime_mode(d["mode"])  # type: ignore[arg-type]
-        if "mode" in kwargs:
-            set_runtime_mode(kwargs["mode"])  # type: ignore[arg-type]
-        # 其他键走普通 dict.update
-        clean_args = tuple(
-            {k: v for k, v in d.items() if k != "mode"}
-            for d in args if isinstance(d, dict)
-        )
-        clean_kwargs = {k: v for k, v in kwargs.items() if k != "mode"}
-        if clean_args or clean_kwargs:
-            super().update(*clean_args, **clean_kwargs)
-
-    def clear(self) -> None:
-        set_runtime_mode("auto")
-        # 清掉其他键 (如果有)
-        keys_to_remove = [k for k in self if k != "mode"]
-        for k in keys_to_remove:
-            super().__delitem__(k)
-
-    def __repr__(self) -> str:
-        return f"_RuntimeModeProxy(mode={get_runtime_mode()!r})"
-
-
-# 模块级 proxy 实例 — 旧代码引用 _runtime_mode_override 自动走 proxy.
-_runtime_mode_override = _RuntimeModeProxy()
+# R10.5.51 cleanup (BACKLOG D-007): 删 _RuntimeModeProxy dict-subclass 后向兼容 shim.
+# R10.5.43 立的, 当时为了不破坏老 conftest / 老测试代码用 `_runtime_mode_override["mode"] = "..."`
+# 这种 dict 写法. 现在所有调用点 (3 处测试) 都迁到 set_runtime_mode() 显式 API.
+# 删 76 行 shim + 模块级 _runtime_mode_override 实例.

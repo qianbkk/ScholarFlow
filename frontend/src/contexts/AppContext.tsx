@@ -22,8 +22,10 @@ import {
   type RuntimeMode,
 } from '../services/api';
 import type { ThemeId } from '../components/ThemeSwitcher';
+// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+import { STORAGE_KEYS } from '../lib/storageKeys';
 
-const THEME_STORAGE_KEY = 'sf-theme';
+const THEME_STORAGE_KEY = STORAGE_KEYS.theme;
 const VALID_THEMES: ThemeId[] = ['parchment', 'kraft', 'midnight', 'sage'];
 const LEGACY_THEME_MAP: Record<string, ThemeId> = {
   light: 'parchment',
