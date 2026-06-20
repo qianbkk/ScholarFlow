@@ -22,7 +22,7 @@ const API_BASE = '/api/v1';
 // (3) /auth/revoke 端点用户可一键轮换 key (R10.5.28); (4) 自动闲置超时
 // 30 分钟 (setTimeout-based, 关浏览器后失效).
 // R11+ 计划: 改用 HttpOnly+SameSite=Strict cookie + CSRF token.
-// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化. 详见 BACKLOG.md D 节.
 import { STORAGE_KEYS } from '../lib/storageKeys';
 const STORED_KEY = STORAGE_KEYS.apiKey;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;  // 30 分钟无活动自动清 key

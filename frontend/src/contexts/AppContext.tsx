@@ -22,7 +22,7 @@ import {
   type RuntimeMode,
 } from '../services/api';
 import type { ThemeId } from '../components/ThemeSwitcher';
-// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化. 详见 BACKLOG.md D 节.
 import { STORAGE_KEYS } from '../lib/storageKeys';
 
 const THEME_STORAGE_KEY = STORAGE_KEYS.theme;

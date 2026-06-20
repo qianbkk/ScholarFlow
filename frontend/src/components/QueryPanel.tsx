@@ -5,7 +5,7 @@ import { fetchProviders, type ProviderInfo, type RuntimeMode } from '../services
 // 3 文件 (useSearch / QueryPanel / App) 各自定义 'local'|'real'|'unknown' 联合.
 import type { RecentEntry, NodeEvent } from '../hooks/useSearch';
 import { PipelineStrip } from './PipelineStrip';
-// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化. 详见 BACKLOG.md D 节.
 import { STORAGE_KEYS } from '../lib/storageKeys';
 
 interface PipelineStep {

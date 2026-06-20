@@ -47,7 +47,7 @@ export function EmptyState() {
           onNodeEnd: (id, _label, ok) =>
             store.updateNode(id, { status: ok ? 'done' : 'error', finished_at: Date.now() }),
           onCost: (cost, tokens) => store.setCost(cost, tokens),
-          // R10.5.51 cleanup (BACKLOG C-006): 4 SSE 回调占位, 暂未接 UI
+          // R10.5.51 cleanup (BACKLOG.md E-006): 4 SSE 回调占位, 暂未接 UI
           // (live log 没接), 改 console.debug 防 silent drop, 接口保留
           // 给将来 live log / papers-drawer 接入用.
           onPapers: (papers) => console.debug('[v4/stream] papers:', papers.length),

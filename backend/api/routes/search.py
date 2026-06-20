@@ -88,7 +88,7 @@ logger = logging.getLogger(__name__)
 # (e.g. /search/stream) 可能签名不同, 这里先在 search() / cancel_search()
 # 显式注入, 跟 main.py 旧 inline 行为完全一致.
 from backend.auth.dependencies import get_current_user
-# R10.5.51 cleanup (BACKLOG 中待补 B-XXX): 删 _get_current_user_search helper (6 行).
+# R10.5.51 cleanup (BACKLOG.md D 隐式条目, 跟整体清理同批): 删 _get_current_user_search helper (6 行).
 # 旧实现为绕 conftest 模块级 OPEN_MODE 不刷新问题设了环境变量重读包装.
 # 实际 conftest 已通过 monkeypatch.setenv + autouse fixture 在 import 前
 # 设好 OPEN_MODE, get_current_user 读到的就是当前值, 不需要包装.

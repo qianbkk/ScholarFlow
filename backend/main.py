@@ -48,7 +48,7 @@ import ipaddress
 
 # R10.5 Fix-P0-Audit-1.2: get_real_ip 已迁移到 backend.utils.network
 # (health.py / search.py 反向 import main 会形成循环依赖).
-# 这里保留向后兼容 alias, 内部委托给新实现, 后续 R11+ 可直接删除.
+# 这里保留向后兼容 alias, 内部委托给新实现, 后续 BACKLOG.md R-011 (R11) 可直接删除.
 from backend.utils.network import get_real_ip as _get_real_ip_impl
 
 
@@ -74,7 +74,7 @@ from backend.utils.audit_log import (  # R10.5.15 P1-C: 结构化审计
 )
 # R10.5.51 cleanup: 删 backend.utils.semantic_cache (R10.5.7 占位桩,
 # 实际永远 return None). 语义缓存整体作废, 走精确 SQLite cache 已够用.
-# 见 BACKLOG.md (C-XXX 真实语义缓存留 R11+).
+# 真实 embedding-based 语义缓存留 BACKLOG.md R-011 (R11 LangGraph 1.0 升级) + R-012 (Memory Layer).
 from backend.utils.observability import (
     new_request_id,
     set_request_id,

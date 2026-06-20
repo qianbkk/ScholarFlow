@@ -41,8 +41,8 @@ interface LastSearchOpts {
 
 // R10.5.31 (F4): theme 加载逻辑搬到 AppContext, App.tsx 不再需要
 // THEME_STORAGE_KEY + VALID_THEMES. 真值在 AppContext.tsx (useApp hook).
-// R10.5.51 cleanup (BACKLOG B-008): THEME_STORAGE_KEY 也走 STORAGE_KEYS 中央化
-// (AppContext.tsx 已用).
+// R10.5.51 cleanup: THEME_STORAGE_KEY 也走 STORAGE_KEYS 中央化
+// (AppContext.tsx 已用). 详见 BACKLOG.md D 节 (R10.5.51 cleanup 整体记录).
 export default function App() {
   // R10.5.31 (F4): 外层只做 Provider 包装, 业务逻辑挪到 AppInner.
   // 这样 4 个 Context 的副作用 (fetchMe / healthCheck / fetchRuntimeMode) 在

@@ -13,7 +13,7 @@
  *    升级到 R10.5.31 时改 key 重置
  */
 import { useEffect } from 'react';
-// R10.5.51 cleanup (BACKLOG B-008): 改用 STORAGE_KEYS 中央化.
+// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化. 详见 BACKLOG.md D 节.
 import { STORAGE_KEYS } from '../lib/storageKeys';
 
 interface ChangelogNote {
