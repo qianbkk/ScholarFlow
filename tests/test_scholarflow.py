@@ -31,11 +31,16 @@ def test_help_lists_all_subcommands():
         assert sub in out, f"subcommand {sub!r} missing from --help output"
 
 
-def test_v4_flag_accepted():
+def test_no_v4_flag_in_help():
+    """R10.5.52: v4 experimental removed. Ensure --v4 is no longer accepted.
+
+    argparse should reject unknown flags with non-zero exit + error message.
+    """
     result = subprocess.run(
-        [sys.executable, str(SCRIPT), "start", "--help"],
+        [sys.executable, str(SCRIPT), "start", "--v4"],
         capture_output=True, text=True, timeout=15,
     )
-    # argparse does not propagate --v4 into subcommand help, but the script
-    # must not crash. Just assert clean exit.
-    assert result.returncode == 0, f"start --help crashed: {result.stderr}"
+    assert result.returncode != 0, "start --v4 should be rejected (v4 removed in R10.5.52)"
+    assert "unrecognized arguments" in (result.stderr or "") or \
+           "unrecognized" in (result.stderr or ""), \
+        f"expected argparse rejection, got: {result.stderr[:200]}"

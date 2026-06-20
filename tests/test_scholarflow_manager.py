@@ -4,7 +4,10 @@ Replaces the R10.5.23-era tests that targeted the old root-level scholarflow.py
 (which used start_local / stop_local / BACKEND_PORT constants). R10.5.41
 deleted the old launcher; the replacement is scripts/scholarflow.py with a
 completely different subcommand-driven API (start/stop/restart/status/logs/
-install/clean/open + --v4 flag).
+install/clean/open).
+
+R10.5.52 cleanup: --v4 flag and newversion/ path were removed (v4 experimental
+deleted). Test 4 now asserts v4 absence to prevent regression.
 
 These tests are static: read the file, assert presence + shape of public API.
 They do NOT import or exec the script (which would risk subprocess side-effects
@@ -80,17 +83,28 @@ def test_launcher_exposes_all_eight_subcommands():
         )
 
 
-# ===== Test 4: --v4 flag toggles v1 vs v4 launcher mode =====
-def test_launcher_supports_v4_flag():
-    """`--v4` flag swaps the launcher to newversion/ (ports 9000/6173)."""
-    assert '"--v4"' in SCHOLARFLOW_PY or "'--v4'" in SCHOLARFLOW_PY, (
-        "missing --v4 flag definition"
+# ===== Test 4: --v4 flag was removed in R10.5.52 (v4 experimental) =====
+def test_v4_flag_removed():
+    """R10.5.52 cleanup: v4 experimental removed; --v4 flag must NOT be present.
+
+    Regression guard: if someone re-introduces the --v4 flag pointing at
+    newversion/ (now deleted), this test fails fast.
+    """
+    assert '"--v4"' not in SCHOLARFLOW_PY and "'--v4'" not in SCHOLARFLOW_PY, (
+        "--v4 flag was removed in R10.5.52 (v4 experimental deleted); "
+        "do not re-introduce — see BACKLOG.md H-002 (已决策: 删 v4)."
     )
-    # The two port constants must be present and different
+    # v4 ports (9000/6173) and v4 paths (newversion/) must NOT appear in
+    # the live launcher source. (May appear in test docstrings as historical
+    # notes — this test scans only the launcher.)
+    assert "6173" not in SCHOLARFLOW_PY, "v4 frontend port 6173 must not be in launcher"
+    assert "9000" not in SCHOLARFLOW_PY, "v4 backend port 9000 must not be in launcher"
+    assert "newversion" not in SCHOLARFLOW_PY, (
+        "newversion/ path must not be in launcher (v4 deleted in R10.5.52)"
+    )
+    # v1 ports must still be present
     assert "5173" in SCHOLARFLOW_PY, "missing v1 frontend port 5173"
-    assert "6173" in SCHOLARFLOW_PY, "missing v4 frontend port 6173"
     assert "8000" in SCHOLARFLOW_PY, "missing v1 backend port 8000"
-    assert "9000" in SCHOLARFLOW_PY, "missing v4 backend port 9000"
 
 
 # ===== Test 5: port detection (avoid hardcoded "in use" assumptions) =====

@@ -4,8 +4,8 @@
 Stdlib only — works on Windows, macOS, Linux. Windows users: chmod is a no-op
 on NTFS so `chmod +x` does not apply; invoke via `python scripts/scholarflow.py`.
 
-Usage (v1, default):
-    python scripts/scholarflow.py start        # start v1 backend (8000) + frontend (5173)
+Usage:
+    python scripts/scholarflow.py start        # start backend (8000) + frontend (5173)
     python scripts/scholarflow.py stop         # stop both
     python scripts/scholarflow.py restart
     python scripts/scholarflow.py status
@@ -13,7 +13,6 @@ Usage (v1, default):
     python scripts/scholarflow.py install      # pip install + npm install
     python scripts/scholarflow.py clean        # remove logs, __pycache__, dist
     python scripts/scholarflow.py open         # open browser to running instance
-    python scripts/scholarflow.py start --v4   # start v4 (9000/6173) instead
 """
 import argparse
 import os
@@ -30,16 +29,11 @@ LOGS = ROOT / "logs"
 LOGS.mkdir(exist_ok=True)
 PIDFILE = LOGS / "scholarflow.pids"
 
-# Version defaults
+# Version defaults (R10.5.52: v4 experimental removed, v1 is the only version)
 V1 = {"backend_port": 8000, "frontend_port": 5173,
       "backend_dir": ROOT / "backend",
       "frontend_dir": ROOT / "frontend",
       "backend_module": "backend.main:app",
-      "frontend_cmd": ["npm", "run", "dev"]}
-V4 = {"backend_port": 9000, "frontend_port": 6173,
-      "backend_dir": ROOT / "newversion" / "backend",
-      "frontend_dir": ROOT / "newversion" / "frontend",
-      "backend_module": "scholarflow_v3.app:create_app",
       "frontend_cmd": ["npm", "run", "dev"]}
 
 
@@ -109,8 +103,8 @@ def _resolve(p):
 
 
 def cmd_start(args):
-    cfg = V4 if args.v4 else V1
-    label = "v4" if args.v4 else "v1"
+    cfg = V1
+    label = "v1"
     print(f"Starting ScholarFlow {label} ...")
     pids = read_pids()
     if pids.get(f"{label}_backend") and alive(pids[f"{label}_backend"]):
@@ -161,8 +155,8 @@ def _kill_pid(pid: int) -> None:
 
 
 def cmd_stop(args):
-    cfg = V4 if args.v4 else V1
-    label = "v4" if args.v4 else "v1"
+    cfg = V1
+    label = "v1"
     pids = read_pids()
     for key in (f"{label}_backend", f"{label}_frontend"):
         pid = pids.pop(key, 0)
@@ -185,11 +179,11 @@ def cmd_status(args):
         return 0
     for key, pid in pids.items():
         print(f"  {key}: pid {pid} {'alive' if alive(pid) else 'dead'}")
-    for cfg, label in ((V1, "v1"), (V4, "v4")):
-        bp = "free" if port_free(cfg["backend_port"]) else "in-use"
-        fp = "free" if port_free(cfg["frontend_port"]) else "in-use"
-        print(f"  {label}: backend :{cfg['backend_port']}={bp}, "
-              f"frontend :{cfg['frontend_port']}={fp}")
+    cfg, label = V1, "v1"
+    bp = "free" if port_free(cfg["backend_port"]) else "in-use"
+    fp = "free" if port_free(cfg["frontend_port"]) else "in-use"
+    print(f"  {label}: backend :{cfg['backend_port']}={bp}, "
+          f"frontend :{cfg['frontend_port']}={fp}")
     return 0
 
 
@@ -209,8 +203,8 @@ def cmd_logs(args):
 
 
 def cmd_install(args):
-    cfg = V4 if args.v4 else V1
-    label = "v4" if args.v4 else "v1"
+    cfg = V1
+    label = "v1"
     print(f"Installing {label} deps ...")
     subprocess.run([sys.executable, "-m", "pip", "install", "-r",
                     str(cfg["backend_dir"] / "requirements.txt")], check=False)
@@ -235,7 +229,7 @@ def cmd_clean(args):
 
 
 def cmd_open(args):
-    cfg = V4 if args.v4 else V1
+    cfg = V1
     url = f"http://127.0.0.1:{cfg['frontend_port']}/"
     print(f"Opening {url}")
     webbrowser.open(url)
@@ -245,7 +239,6 @@ def cmd_open(args):
 def build_parser():
     p = argparse.ArgumentParser(prog="scholarflow",
                                 description="ScholarFlow cross-platform launcher")
-    p.add_argument("--v4", action="store_true", help="target v4 (ports 9000/6173)")
     subs = p.add_subparsers(dest="cmd")
     for name in ("start", "stop", "restart", "status", "logs", "install", "clean", "open"):
         subs.add_parser(name)
