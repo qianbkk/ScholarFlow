@@ -113,13 +113,10 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 - **来源**: 自分析,清理报告 C3
 - **状态**: ✅ 已完成 (2026-06-20)
 
-### D-005. `frontend/src/hooks/useSearch.ts` SSEEvent 类型重复
+### D-005. ~~`frontend/src/hooks/useSearch.ts` SSEEvent 类型重复~~ (R10.5.59 整文件删除)
 
-- **现状**: line 80 定义 `type SSEEvent` (union of 6 case),line 84-95 又定义 `interface NodeEvent`(导出) — 两个接口几乎一模一样只是 `status: 'completed'` vs `event: 'node_complete'`。
-- **目标**: 删 `SSEEvent` 的 union,统一用 `NodeEvent` + discriminated union type guards,或合并到一个清晰的 type。
-- **工作量**: 30 分钟
-- **风险**: 低
-- **来源**: 自分析,清理报告 D6
+- **现状**: R10.5.54 frontend 重构后该 hook 已被 `actions.search` + `useStore` 完全取代 (没有任何 import),整文件删除。同时删除 `frontend/src/lib/useLocalStorage.ts` (3.7KB 死代码) + `frontend/src/lib/paperFilters.ts` (550B 死代码)。
+- **状态**: ✅ 已完成 (2026-06-21)
 
 ### D-006. `backend/main.py` 顶层 `sys.modules[__name__].__class__ = _ScholarFlowMainModule` hack
 

@@ -28,5 +28,6 @@ Link to issues this PR fixes: `Closes #123`, `Fixes #456`
 - [ ] Commit message includes **root cause** (WHY)
 - [ ] Commit message includes **verification** (HOW to test)
 - [ ] No new files outside scope (multi-agent file partition respected)
-- [ ] Updated `docs/FUTURE_TASKS.md` if scope change
+- [ ] Updated `BACKLOG.md` if scope change (single tracker)
 - [ ] Updated `README.md` if user-facing change
+- [ ] Updated `ChangelogModal.tsx` if user-visible feature/bug

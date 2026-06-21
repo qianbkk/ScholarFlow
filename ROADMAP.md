@@ -3,7 +3,7 @@
 > **本文件仅保留战略方向 + 历史记录**。具体的"待办 / 触发型 / 跳过"清单见 [`BACKLOG.md`](BACKLOG.md)。
 > 历史记录查 `git log`。
 >
-> **最近更新**: 2026-06-20 — R10.5.51 cleanup 收口,TODO.md 内容并入 BACKLOG.md
+> **最近更新**: 2026-06-21 — R10.5.59 5 项前端/后端迭代 + README/Changelog 全面更新
 
 ---
 
@@ -50,3 +50,6 @@ R11 前置: BACKLOG.md **E-001** (P1-1 静态 guard 真行为化)。
 - **R10.5.36..40 指南 24 项**: P1 主题/布局切换 + 内联卡 + 8 节点进度 + shared/ 抽取 + pytest-cov + CONTRIBUTING + 3 ADR + 跨平台 launcher + 图谱 2-hop + EndNote XML + /simplify + /code-review
 - **R10.5.41..50** R10.5.41 跳过, R10.5.42..50 散点修复 (CI / 测试污染 / admin store WAL / token pre-check 等), 详见 `git log`。
 - **R10.5.51 cleanup** 删 8 项死代码 + STORAGE_KEYS 中央化 + BACKLOG.md 统一跟踪 (本次合并)
+- **R10.5.54** frontend 完全重构 — Editorial Desk Reference 视觉 / 14 组件 + 单 store
+- **R10.5.55** i18n 中英文切换 + D3 图谱独立 tab 完整复刻 + SettingsDrawer 替换 Settings tab + runtimeMode 改名 + Auth 严格化
+- **R10.5.59** 5 项迭代:hamburger Settings / paper_count 滑块 (3-30) / LLM strict ≥ 8 → 放宽 ≥ 7 / Search 概要 + Report 居中 / 图谱 jitter 修复 / 完整 i18n 覆盖 + README + Changelog 同步
