@@ -130,7 +130,8 @@ const dictZh: Dict = {
 
   // ===== HistoryView =====
   'history.title': '历史记录',
-  'history.empty': '暂无搜索历史.',
+  'history.emptyTitle': '暂无历史',
+  'history.empty': '回到 Search tab 跑一次试试.',
   'history.rerun': '重跑 →',
   'history.open': '打开',
   'history.sourceReal': '真实 API',
@@ -374,7 +375,8 @@ const dictEn: Dict = {
 
   // ===== HistoryView =====
   'history.title': 'History',
-  'history.empty': 'No search history yet.',
+  'history.emptyTitle': 'No history yet',
+  'history.empty': 'Run a search from the Search tab to get started.',
   'history.rerun': 'Rerun →',
   'history.open': 'Open',
   'history.sourceReal': 'Real API',

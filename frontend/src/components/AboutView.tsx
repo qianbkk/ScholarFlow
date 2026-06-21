@@ -15,20 +15,20 @@ export function AboutView() {
       role="tabpanel"
       aria-labelledby="tab-about"
       style={{
-        maxWidth: 720,
+        maxWidth: 760,
         margin: '0 auto',
-        padding: '48px 24px 96px',
+        padding: '56px 32px 96px',
       }}
       data-testid="about-view"
     >
-      <header style={{ marginBottom: 32, paddingBottom: 16, borderBottom: '1px solid var(--sf-border)' }}>
+      <header style={{ marginBottom: 40, paddingBottom: 16, borderBottom: '1px solid var(--sf-border)' }}>
         <h1
           className="font-display"
           style={{
-            fontSize: 32,
-            letterSpacing: '-0.02em',
+            fontSize: 36,
+            letterSpacing: '-0.025em',
             fontStyle: 'italic',
-            margin: '0 0 4px',
+            margin: '0 0 6px',
           }}
         >
           {t('about.title')}

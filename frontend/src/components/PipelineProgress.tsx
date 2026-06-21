@@ -62,7 +62,7 @@ export function PipelineProgress() {
   return (
     <section
       style={{
-        padding: '12px 0',
+        padding: '16px 0',
         borderTop: '1px solid var(--sf-border)',
         borderBottom: '1px solid var(--sf-border)',
       }}
@@ -72,7 +72,8 @@ export function PipelineProgress() {
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 6,
+          gap: 8,
+          flexWrap: 'wrap',
         }}
       >
         {NODES.map((n) => {
@@ -91,30 +92,37 @@ export function PipelineProgress() {
               data-testid={`pipeline-${n.key}`}
               className="font-ui"
               style={{
-                background: 'none',
+                background: expanded ? 'var(--sf-surface-alt)' : 'none',
                 border: 'none',
-                padding: '4px 6px',
+                padding: '5px 8px',
+                borderRadius: 2,
                 cursor: 'pointer',
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
                 color: isDone ? 'var(--sf-text)' : isRunning ? 'var(--sf-accent)' : 'var(--sf-muted)',
                 fontSize: 12,
                 fontWeight: isDone ? 600 : 400,
+                transition: 'background-color 120ms ease, color 120ms ease',
+              }}
+              onMouseEnter={(e) => {
+                if (!expanded) e.currentTarget.style.backgroundColor = 'var(--sf-surface-alt)';
+              }}
+              onMouseLeave={(e) => {
+                if (!expanded) e.currentTarget.style.backgroundColor = '';
               }}
             >
               <span
                 aria-hidden
                 style={{
                   display: 'inline-block',
-                  width: 10,
-                  height: 10,
+                  width: 9,
+                  height: 9,
                   borderRadius: '50%',
                   border: isDone ? 'none' : '1px solid currentColor',
-                  backgroundColor: isDone
-                    ? 'var(--sf-accent)'
-                    : 'transparent',
+                  backgroundColor: isDone ? 'var(--sf-accent)' : 'transparent',
                   flexShrink: 0,
+                  transition: 'background-color 200ms ease, border-color 200ms ease',
                 }}
                 className={isRunning ? 'sf-pulse' : ''}
               />
@@ -126,8 +134,8 @@ export function PipelineProgress() {
         <div style={{ flex: 1 }} />
 
         <span
-          className="font-mono"
-          style={{ fontSize: 11, color: 'var(--sf-muted)' }}
+          className="font-mono tabular-nums"
+          style={{ fontSize: 11, color: 'var(--sf-muted)', letterSpacing: '0.02em' }}
         >
           {displayElapsed.toFixed(1)}s · ${totalCost.toFixed(4)} · {totalTokens.toLocaleString()} tok
         </span>
@@ -138,8 +146,8 @@ export function PipelineProgress() {
         <div
           className="sf-fade-in"
           style={{
-            marginTop: 12,
-            padding: '12px 0',
+            marginTop: 14,
+            padding: '14px 0 4px',
             borderTop: '1px dashed var(--sf-border)',
           }}
         >

@@ -18,43 +18,53 @@ export function HistoryView() {
       role="tabpanel"
       aria-labelledby="tab-history"
       style={{
-        maxWidth: 720,
+        maxWidth: 760,
         margin: '0 auto',
-        padding: '48px 24px 96px',
+        padding: '56px 32px 96px',
       }}
     >
-      <h1
-        className="font-display"
-        style={{
-          fontSize: 32,
-          letterSpacing: '-0.02em',
-          margin: '0 0 8px',
-        }}
-      >
-        {t('history.title')}
-      </h1>
-      <p
-        className="font-body"
-        style={{
-          fontSize: 14,
-          color: 'var(--sf-muted)',
-          margin: '0 0 32px',
-        }}
-      >
-        {recent.length} 条 · sessionStorage 持久化
-      </p>
+      <header style={{ marginBottom: 32 }}>
+        <h1
+          className="font-display"
+          style={{
+            fontSize: 32,
+            letterSpacing: '-0.02em',
+            margin: '0 0 8px',
+          }}
+        >
+          {t('history.title')}
+        </h1>
+        <p
+          className="font-body"
+          style={{
+            fontSize: 14,
+            color: 'var(--sf-muted)',
+            margin: 0,
+          }}
+        >
+          {recent.length} 条 · sessionStorage 持久化
+        </p>
+      </header>
 
       {recent.length === 0 ? (
         <div
+          className="sf-fade-in"
           style={{
-            padding: '48px 16px',
+            padding: '64px 24px',
             textAlign: 'center',
             color: 'var(--sf-muted)',
             border: '1px dashed var(--sf-border)',
-            borderRadius: 4,
+            borderRadius: 2,
+            backgroundColor: 'var(--sf-surface)',
           }}
         >
-          <p className="font-body" style={{ fontSize: 14, margin: 0 }}>
+          <p
+            className="font-display"
+            style={{ fontSize: 18, fontStyle: 'italic', margin: '0 0 8px', color: 'var(--sf-text)' }}
+          >
+            {t('history.emptyTitle')}
+          </p>
+          <p className="font-body" style={{ fontSize: 13, margin: 0 }}>
             {t('history.empty')}
           </p>
         </div>

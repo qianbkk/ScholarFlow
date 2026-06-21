@@ -51,52 +51,66 @@ export function SearchWorkspace() {
       role="tabpanel"
       aria-labelledby="tab-search"
       style={{
-        maxWidth: 720,
+        maxWidth: 760,
         margin: '0 auto',
-        padding: '48px 24px 96px',
+        padding: '56px 32px 96px',
       }}
     >
-      <h1
-        className="font-display"
-        style={{
-          fontSize: 36,
-          lineHeight: 1.2,
-          letterSpacing: '-0.02em',
-          margin: '0 0 12px',
-        }}
-      >
-        {t('search.title')}
-      </h1>
-      <p
-        className="font-body"
-        style={{
-          fontSize: 16,
-          color: 'var(--sf-muted)',
-          margin: '0 0 32px',
-        }}
-      >
-        {t('search.subtitle')}
-      </p>
+      <header style={{ marginBottom: 40 }}>
+        <h1
+          className="font-display"
+          style={{
+            fontSize: 38,
+            lineHeight: 1.15,
+            letterSpacing: '-0.025em',
+            margin: '0 0 10px',
+            color: 'var(--sf-text)',
+          }}
+        >
+          {t('search.title')}
+        </h1>
+        <p
+          className="font-body"
+          style={{
+            fontSize: 15,
+            lineHeight: 1.55,
+            color: 'var(--sf-muted)',
+            margin: 0,
+            maxWidth: 600,
+          }}
+        >
+          {t('search.subtitle')}
+        </p>
+      </header>
 
       <QueryInput providers={providers} />
 
       {/* PipelineProgress: 8 nodes + thinking log + evolution scrubber */}
-      {(loading || result) && <PipelineProgress />}
+      {(loading || result) && (
+        <div style={{ marginTop: 32 }}>
+          <PipelineProgress />
+        </div>
+      )}
 
       {/* R10.5.59: Search 概要卡 — 不渲染完整报告. 跳报告按钮在 Report tab. */}
       <SearchSummary />
 
       {/* Error footer */}
       {error && (
-        <p
-          className="font-body"
+        <div
+          className="font-body sf-fade-in"
+          role="alert"
           style={{
             fontSize: 14,
+            lineHeight: 1.5,
             color: 'var(--sf-accent)',
             margin: '24px 0',
-            padding: '12px 0',
-            borderTop: '1px solid var(--sf-border)',
+            padding: '12px 16px',
+            border: '1px solid var(--sf-accent)',
+            borderRadius: 2,
+            backgroundColor: 'oklch(96% 0.03 40 / 0.4)',
           }}
+          data-testid="search-error"
         >
           {error}
           {budgetExceeded && (
@@ -128,19 +142,23 @@ export function SearchWorkspace() {
               </button>
             </>
           )}
-        </p>
+        </div>
       )}
 
       {/* Degraded response caption */}
       {isDegraded && (
         <p
-          className="font-body"
+          className="font-body sf-fade-in"
+          role="status"
           style={{
             fontSize: 13,
+            lineHeight: 1.5,
             color: 'var(--sf-muted)',
-            margin: '16px 0 0',
-            padding: '8px 0',
-            borderTop: '1px dashed var(--sf-border)',
+            margin: '20px 0 0',
+            padding: '10px 14px',
+            border: '1px dashed var(--sf-border)',
+            borderRadius: 2,
+            backgroundColor: 'var(--sf-surface-alt)',
           }}
         >
           ⚠ Part of this result is from fallback data ({result?.fallback_paper_count ?? 0} papers).

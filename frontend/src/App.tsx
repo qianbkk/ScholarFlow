@@ -97,6 +97,7 @@ export default function App() {
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
+            backgroundColor: 'var(--sf-bg)',
           }}
         >
           {currentView === 'search' && <SearchWorkspace />}
