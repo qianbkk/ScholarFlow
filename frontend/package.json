@@ -1,7 +1,7 @@
 {
   "name": "scholarflow-frontend",
   "private": true,
-  "version": "1.0.6",
+  "version": "10.5.59",
   "type": "module",
   "scripts": {
     "dev": "vite",
