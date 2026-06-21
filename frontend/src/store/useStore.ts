@@ -19,8 +19,8 @@ import { applyTheme, THEMES } from '../lib/tokens';
 import { STORAGE_KEYS } from '../lib/storageKeys';
 import { getApiKey } from '../services/api';
 
-// R10.5.59: 删 'settings' tab — Settings 改左侧 hamburger drawer
-export type ViewId = 'search' | 'report' | 'graph' | 'history';
+// R10.5.59: 删 'settings' tab, 加 'about' tab. Settings 改左侧常驻菜单栏
+export type ViewId = 'search' | 'report' | 'graph' | 'history' | 'about';
 export type RuntimeMode = 'local' | 'llm';
 
 // ===== Pipeline events =====
@@ -105,7 +105,8 @@ interface State {
   compareDrawerOpen: boolean;
   authDialogOpen: boolean;
   changelogOpen: boolean;
-  settingsDrawerOpen: boolean;  // R10.5.55: 左侧设置抽屉 (取代旧 Settings tab)
+  // R10.5.59: 左侧设置菜单常驻 + 可收起
+  settingsCollapsed: boolean;
 }
 
 const initialState: State = {
@@ -134,7 +135,7 @@ const initialState: State = {
   compareDrawerOpen: false,
   authDialogOpen: false,
   changelogOpen: false,
-  settingsDrawerOpen: false,
+  settingsCollapsed: false,
 };
 
 // ===== Persistence helpers =====
@@ -230,6 +231,7 @@ let state: State = (() => {
     recentSearches: recent,
     runtimeMode: runtimeMode,
     hasApiKey: !!apiKey,
+    settingsCollapsed: readStorage<boolean>('sf-settings-collapsed', false),
   };
 })();
 
@@ -553,8 +555,10 @@ export const actions = {
   closeCommandPalette(): void { setState({ commandPaletteOpen: false }); },
   openAuthDialog(): void { setState({ authDialogOpen: true }); },
   closeAuthDialog(): void { setState({ authDialogOpen: false }); },
-  openSettingsDrawer(): void { setState({ settingsDrawerOpen: true }); },
-  closeSettingsDrawer(): void { setState({ settingsDrawerOpen: false }); },
+  toggleSettingsCollapsed(): void {
+    setState((s) => ({ settingsCollapsed: !s.settingsCollapsed }));
+    try { localStorage.setItem('sf-settings-collapsed', JSON.stringify(!getState().settingsCollapsed)); } catch { /* ignore */ }
+  },
   openChangelog(): void { setState({ changelogOpen: true }); },
   closeChangelog(): void { setState({ changelogOpen: false }); },
   openCompareDrawer(): void { setState({ compareDrawerOpen: true }); },

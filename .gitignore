@@ -52,7 +52,8 @@ docs/audit-logs/
 playwright_runs/
 
 # Claude memory: local-only (AI collaboration meta, not for public repo)
-.claude/memory/
+# R10.5.59: 整个 .claude/ 目录不入仓 (memory + skills 都是 AI 协作上下文, 非代码)
+.claude/
 
 # ===== R10.5: 开发过程产生的辅助文件不入仓 (本地保留) =====
 # docs/ 下的子目录 (notes / audit-logs / internal) 忽略, 但 ARCHITECTURE.md /

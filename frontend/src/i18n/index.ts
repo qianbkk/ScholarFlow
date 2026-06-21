@@ -24,11 +24,13 @@ const dictZh: Dict = {
   'nav.report': '报告',
   'nav.graph': '图谱',
   'nav.history': '历史',
-  'nav.settings': '设置',
+  'nav.about': '关于',
 
   // ===== TopNav misc =====
+  'topbar.nav': '主导航',
+  'topbar.viewTabs': '主视图',
+  'topbar.running': '运行中',
   'topbar.openSettings': '打开设置',
-  'topbar.openSettings.en': 'Open settings',
   'topbar.goSearch': '回到 Search',
   'topbar.goSearch.zh': '回到 Search',
 
@@ -135,7 +137,33 @@ const dictZh: Dict = {
   'history.sourceLocal': '本地 mock',
   'history.sourceUnknown': '未知',
 
-  // ===== SettingsDrawer =====
+  // ===== AboutView (R10.5.59) =====
+  'about.title': '关于',
+  'about.project': 'ScholarFlow',
+  'about.subtitle': '多 Agent 学术文献综述工具',
+  'about.version': '版本',
+  'about.author': '作者',
+  'about.github': 'GitHub',
+  'about.desc': '多 Agent 学术文献综述工具 — 提问, 看 8 节点 LangGraph 流水线工作, 拿到带引用的报告.',
+  'about.shortcuts.title': '键盘快捷键',
+  'about.shortcuts.cmdK': '打开命令面板',
+  'about.shortcuts.cmdEnter': '提交查询',
+  'about.shortcuts.esc': '关闭弹窗 / 清选中',
+  'about.shortcuts.f': '适配图谱 (Graph tab)',
+  'about.shortcuts.shiftF': '切换全屏 (Graph tab)',
+  'about.changelog.title': '更新日志',
+
+  // ===== SettingsSidebar (R10.5.59: 常驻左侧可收起) =====
+  'sidebar.title': '设置',
+  'sidebar.expand': '展开',
+  'sidebar.collapse': '收起',
+  'sidebar.language': '语言',
+  'sidebar.keySet': '已配置 key',
+  'sidebar.addKey': '添加 API key',
+  'sidebar.manageKeys': '管理 API key',
+  'sidebar.save': '保存',
+
+  // ===== SettingsDrawer (保留兼容) =====
   'settings.title': '设置',
   'settings.theme': '主题色系',
   'settings.runtimeMode': '运行时模式',
@@ -237,9 +265,12 @@ const dictEn: Dict = {
   'nav.report': 'Report',
   'nav.graph': 'Graph',
   'nav.history': 'History',
-  'nav.settings': 'Settings',
+  'nav.about': 'About',
 
   // ===== TopNav misc =====
+  'topbar.nav': 'Main navigation',
+  'topbar.viewTabs': 'Main views',
+  'topbar.running': 'Running',
   'topbar.openSettings': 'Open settings',
   'topbar.goSearch': 'Go to Search',
 
@@ -346,7 +377,33 @@ const dictEn: Dict = {
   'history.sourceLocal': 'Local mock',
   'history.sourceUnknown': 'Unknown',
 
-  // ===== SettingsDrawer =====
+  // ===== SettingsSidebar (R10.5.59) =====
+  'sidebar.title': 'Settings',
+  'sidebar.expand': 'Expand',
+  'sidebar.collapse': 'Collapse',
+  'sidebar.language': 'Language',
+  'sidebar.keySet': 'keys set',
+  'sidebar.addKey': 'Add API key',
+  'sidebar.manageKeys': 'Manage API keys',
+  'sidebar.save': 'Save',
+
+  // ===== AboutView (R10.5.59) =====
+  'about.title': 'About',
+  'about.project': 'ScholarFlow',
+  'about.subtitle': 'Multi-agent literature survey tool',
+  'about.version': 'Version',
+  'about.author': 'Author',
+  'about.github': 'GitHub',
+  'about.desc': 'A multi-agent literature survey tool — ask a research question, watch the 8-node LangGraph pipeline work, get a cited report.',
+  'about.shortcuts.title': 'Keyboard shortcuts',
+  'about.shortcuts.cmdK': 'Open command palette',
+  'about.shortcuts.cmdEnter': 'Submit query',
+  'about.shortcuts.esc': 'Close modal / clear selection',
+  'about.shortcuts.f': 'Fit graph (in Graph tab)',
+  'about.shortcuts.shiftF': 'Toggle fullscreen (in Graph tab)',
+  'about.changelog.title': 'Changelog',
+
+  // ===== SettingsDrawer (legacy) =====
   'settings.title': 'Settings',
   'settings.theme': 'Theme',
   'settings.runtimeMode': 'Runtime mode',

@@ -100,6 +100,7 @@ import backend.api.services.budget as _budget_svc
 from backend.api.routes.health import router as health_router
 from backend.api.routes.auth import router as auth_router  # R10.5 Fix-P0-B
 from backend.api.routes.admin import router as admin_router  # R10.5.28: admin 路由抽离
+from backend.api.routes.config import router as config_router  # R10.5.59: /config/env 端点
 # R10.5.28: get_runtime_mode / is_runtime_mock / set_runtime_mode 仍被 search()/search_stream()
 # inline 用到 (cache key 需要), 不能仅靠 admin.py 导入. 显式 import 一次, 跟其它 helper 一起.
 from backend.utils.runtime_mode import get_runtime_mode, is_runtime_mock, set_runtime_mode  # R10.5.20
@@ -474,6 +475,7 @@ API_V1_PREFIX = "/api/v1"
 app.include_router(health_router, prefix=API_V1_PREFIX)
 app.include_router(auth_router, prefix=API_V1_PREFIX)
 app.include_router(admin_router, prefix=API_V1_PREFIX)  # R10.5.28: admin 路由抽到 routes/admin.py
+app.include_router(config_router, prefix=API_V1_PREFIX)  # R10.5.59: /api/v1/config/env
 # R10.5.30 (D2): search router 抽到 routes/search.py, 替代 main.py 的 inline
 # 路由. 旧版 main.py 1140 行里有 ~300 行 search/search_stream/cancel_search
 # inline 代码 + 静态测试 (test_routes_not_double_mounted.py) 锁死不能迁移.

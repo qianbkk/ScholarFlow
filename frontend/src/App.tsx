@@ -1,10 +1,8 @@
 /**
- * App.tsx — R10.5.54 frontend rebuild
+ * App.tsx — R10.5.59 frontend shell
  *
- * Phase 1 壳子: Provider + TopNav + 4-tab 路由 + 命令面板 + 认证对话框.
- * 目标 ~120 LOC. 取代之前 877 行的巨文件.
- *
- * Phase 2-4 接入: SearchWorkspace 真实 SSE, GraphView (改写), CompareDrawer, HistoryView.
+ * 5 tabs (查询/报告/图谱/历史/关于) + 左侧 SettingsSidebar (常驻可收起)
+ * + 命令面板 + 认证对话框 + 更新日志 modal + 对比 drawer.
  */
 import { useEffect, useCallback } from 'react';
 import { useStore, actions, getState } from './store/useStore';
@@ -14,15 +12,17 @@ import { SearchWorkspace } from './components/SearchWorkspace';
 import { ReportView } from './components/ReportView';
 import { GraphPage } from './components/GraphPage';
 import { HistoryView } from './components/HistoryView';
+import { AboutView } from './components/AboutView';
 import { CommandPalette } from './components/CommandPalette';
 import { AuthDialog } from './components/AuthDialog';
 import { ChangelogModal } from './components/ChangelogModal';
 import { CompareDrawer } from './components/CompareDrawer';
-import { SettingsDrawer } from './components/SettingsDrawer';
+import { SettingsSidebar } from './components/SettingsSidebar';
 import { useT } from './i18n';
 
 export default function App() {
   const currentView = useStore((s) => s.currentView);
+  const settingsCollapsed = useStore((s) => s.settingsCollapsed);
   const t = useT();
 
   // Cycle theme helper
@@ -59,12 +59,14 @@ export default function App() {
         if (s.authDialogOpen) { actions.closeAuthDialog(); return; }
         if (s.changelogOpen) { actions.closeChangelog(); return; }
         if (s.compareDrawerOpen) { actions.closeCompareDrawer(); return; }
-        if (s.settingsDrawerOpen) { actions.closeSettingsDrawer(); return; }
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Layout: 左侧 SettingsSidebar (220 / 48 wide) + 主体内容 (marginLeft 偏移)
+  const sidebarWidth = settingsCollapsed ? 48 : 220;
 
   return (
     <div
@@ -76,61 +78,73 @@ export default function App() {
         color: 'var(--sf-text)',
       }}
     >
-      <TopNav />
+      <SettingsSidebar />
 
-      <main
+      {/* 主内容区, 左边距让出 SettingsSidebar */}
+      <div
         style={{
-          flex: 1,
-          minHeight: 0,
-          overflowY: 'auto',
-        }}
-      >
-        {currentView === 'search' && <SearchWorkspace />}
-        {currentView === 'report' && <ReportView />}
-        {currentView === 'graph' && <GraphPage />}
-        {currentView === 'history' && <HistoryView />}
-        {/* R10.5.59: 'settings' tab 已删除. 4 个 tab 渲染如上. */}
-      </main>
-
-      <footer
-        style={{
-          borderTop: '1px solid var(--sf-border)',
-          padding: '8px 24px',
+          marginLeft: sidebarWidth,
+          transition: 'margin-left 180ms ease',
           display: 'flex',
-          gap: 16,
-          alignItems: 'center',
-          backgroundColor: 'var(--sf-bg)',
+          flexDirection: 'column',
+          minHeight: '100vh',
         }}
       >
-        <span className="font-mono" style={{ fontSize: 11, color: 'var(--sf-muted)' }}>
-          {t('footer.history')}
-        </span>
-        <span className="font-mono" style={{ fontSize: 11, color: 'var(--sf-muted)' }}>
-          {t('footer.shortcuts')}
-        </span>
-        <button
-          type="button"
-          onClick={actions.openChangelog}
-          className="font-mono"
+        <TopNav />
+
+        <main
           style={{
-            marginLeft: 'auto',
-            fontSize: 11,
-            color: 'var(--sf-muted)',
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            cursor: 'pointer',
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
           }}
         >
-          R10.5.59 changelog
-        </button>
-      </footer>
+          {currentView === 'search' && <SearchWorkspace />}
+          {currentView === 'report' && <ReportView />}
+          {currentView === 'graph' && <GraphPage />}
+          {currentView === 'history' && <HistoryView />}
+          {currentView === 'about' && <AboutView />}
+        </main>
+
+        <footer
+          style={{
+            borderTop: '1px solid var(--sf-border)',
+            padding: '8px 24px',
+            display: 'flex',
+            gap: 16,
+            alignItems: 'center',
+            backgroundColor: 'var(--sf-bg)',
+          }}
+        >
+          <span className="font-mono" style={{ fontSize: 11, color: 'var(--sf-muted)' }}>
+            {t('footer.history')}
+          </span>
+          <span className="font-mono" style={{ fontSize: 11, color: 'var(--sf-muted)' }}>
+            {t('footer.shortcuts')}
+          </span>
+          <button
+            type="button"
+            onClick={actions.openChangelog}
+            className="font-mono"
+            style={{
+              marginLeft: 'auto',
+              fontSize: 11,
+              color: 'var(--sf-muted)',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+            }}
+          >
+            R10.5.59 changelog
+          </button>
+        </footer>
+      </div>
 
       <CommandPalette cycleTheme={cycleTheme} cancelSearch={cancelSearch} />
       <AuthDialog />
       <ChangelogModal />
       <CompareDrawer />
-      <SettingsDrawer />
     </div>
   );
 }

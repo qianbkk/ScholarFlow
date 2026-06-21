@@ -36,7 +36,7 @@ export function CommandPalette({ cycleTheme, cancelSearch }: Props) {
 
   const cmds: Command[] = useMemo(() => buildCommands({
     goToView: actions.setView,
-    openSettings: actions.openSettingsDrawer,
+    openSettings: actions.toggleSettingsCollapsed,
     cycleTheme,
     cancelSearch,
     openAuth: actions.openAuthDialog,

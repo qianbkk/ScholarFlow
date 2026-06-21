@@ -1,19 +1,22 @@
 /**
- * TopNav — R10.5.54 编辑参考书视觉重设计
+ * TopNav — R10.5.59 编辑参考书视觉
  *
- * 单行 56px sticky: wordmark + 4 tab + 右侧 cluster (暗黑切换 + 用户徽章).
+ * 单行 56px sticky: wordmark + 5 tab + 右侧 cluster (用户徽章).
  * active tab 在整行下方居中显示 2px 烧橙 tick (不在文字下).
  * 不再用 emoji 图标 + tracking eyebrow.
+ *
+ * R10.5.59: 删除 ☰ hamburger 按钮 (Settings 改左侧常驻). 删除中/EN 切换 (移入 SettingsSidebar).
+ *           TABS 5 个: 查询 / 报告 / 图谱 / 历史 / 关于.
  */
 import { useStore, actions, type ViewId } from '../store/useStore';
-import { useT, toggleLocale } from '../i18n';
+import { useT } from '../i18n';
 
-// R10.5.59: 删除 'settings' tab — Settings 改左侧 hamburger drawer
-const TABS: { id: ViewId; label: string }[] = [
-  { id: 'search', label: 'Search' },
-  { id: 'report', label: 'Report' },
-  { id: 'graph', label: 'Graph' },
-  { id: 'history', label: 'History' },
+const TABS: { id: ViewId }[] = [
+  { id: 'search' },
+  { id: 'report' },
+  { id: 'graph' },
+  { id: 'history' },
+  { id: 'about' },
 ];
 
 export function TopNav() {
@@ -21,13 +24,12 @@ export function TopNav() {
   const user = useStore((s) => s.user);
   const hasApiKey = useStore((s) => s.hasApiKey);
   const loading = useStore((s) => s.loading);
-  const locale = useStore((s) => s.locale);
   const t = useT();
 
   return (
     <nav
       role="navigation"
-      aria-label="主导航"
+      aria-label={t('topbar.nav')}
       style={{
         position: 'sticky',
         top: 0,
@@ -48,44 +50,10 @@ export function TopNav() {
           gap: 24,
         }}
       >
-        {/* R10.5.59: 左侧 ☰ 三横线按钮 — 唤起 SettingsDrawer. 替代右上角齿轮按钮. */}
-        <button
-          type="button"
-          onClick={actions.openSettingsDrawer}
-          aria-label={locale === 'zh' ? '打开设置' : 'Open settings'}
-          className="font-ui"
-          data-testid="open-settings"
-          style={{
-            width: 32,
-            height: 32,
-            display: 'inline-flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: 4,
-            background: 'none',
-            border: '1px solid var(--sf-border)',
-            borderRadius: 2,
-            cursor: 'pointer',
-            color: 'var(--sf-text)',
-            transition: 'border-color 100ms ease',
-          }}
-          onMouseEnter={(e) => {
-            e.currentTarget.style.borderColor = 'var(--sf-accent)';
-          }}
-          onMouseLeave={(e) => {
-            e.currentTarget.style.borderColor = 'var(--sf-border)';
-          }}
-        >
-          <span aria-hidden style={{ display: 'block', width: 14, height: 1.5, backgroundColor: 'currentColor' }} />
-          <span aria-hidden style={{ display: 'block', width: 14, height: 1.5, backgroundColor: 'currentColor' }} />
-          <span aria-hidden style={{ display: 'block', width: 14, height: 1.5, backgroundColor: 'currentColor' }} />
-        </button>
-
         {/* Wordmark */}
         <button
           onClick={() => actions.setView('search')}
-          aria-label={locale === 'zh' ? '回到 Search' : 'Go to Search'}
+          aria-label={t('topbar.goSearch')}
           style={{
             background: 'none',
             border: 'none',
@@ -105,7 +73,7 @@ export function TopNav() {
         {/* Tabs (centered area) */}
         <div
           role="tablist"
-          aria-label="主视图"
+          aria-label={t('topbar.viewTabs')}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -163,7 +131,7 @@ export function TopNav() {
                   {/* Running indicator: small pulsing dot */}
                   {active && loading && (
                     <span
-                      aria-label="运行中"
+                      aria-label={t('topbar.running')}
                       style={{
                         display: 'inline-block',
                         marginLeft: 8,
@@ -194,43 +162,8 @@ export function TopNav() {
           })}
         </div>
 
-        {/* Right cluster: i18n toggle + user */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          {/* R10.5.59: ⚙ 齿轮按钮已删除 — Settings 改用左侧 ☰ 唤起. */}
-          <button
-            type="button"
-            onClick={toggleLocale}
-            aria-label={locale === 'zh' ? 'Switch to English' : '切换到中文'}
-            aria-pressed={locale === 'en'}
-            className="font-ui"
-            data-testid="toggle-locale"
-            style={{
-              width: 32,
-              height: 32,
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              background: 'none',
-              border: '1px solid var(--sf-border)',
-              borderRadius: 2,
-              cursor: 'pointer',
-              color: 'var(--sf-text)',
-              fontSize: 11,
-              fontWeight: 600,
-              transition: 'border-color 100ms ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.borderColor = 'var(--sf-accent)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.borderColor = 'var(--sf-border)';
-            }}
-          >
-            {locale === 'zh' ? '中' : 'EN'}
-          </button>
-
-          <UserBadge user={user} hasApiKey={hasApiKey} />
-        </div>
+        {/* Right cluster: 用户徽章 (语言切换 + 主题在 SettingsSidebar 里) */}
+        <UserBadge user={user} hasApiKey={hasApiKey} />
       </div>
     </nav>
   );

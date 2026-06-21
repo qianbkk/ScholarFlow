@@ -1,171 +1,294 @@
 # ScholarFlow
 
-> **多 Agent 学术文献综述工具** · 提问 → 8 节点 LangGraph 流水线 → 带引用的 Markdown 报告 + D3 引文图谱 + 完整 thinking 日志。
->
-> **当前版本**: R10.5.59 (frontend/backend 迭代改进) · build on `R10.5.54 frontend rebuild` + `R10.5.55 i18n + auth + graph` + `R10.5.59 paper_count + LLM strict ≥ 8`
+> **A multi-agent literature survey tool** — Ask a research question, watch the 8-node LangGraph pipeline work, get a cited report with a citation graph.
 
-Ask a research question in Chinese or English. A real LangGraph pipeline lights up — decompose → search (Semantic Scholar / OpenAlex / arXiv / Crossref / PubMed) → expand citations → 3D rank → refine → synthesize → build graph → track cost. The output is a Markdown report with numbered citations, a D3 force-directed citation graph, real-time thinking logs, and BibTeX / RIS export.
+ScholarFlow is an opinionated research assistant that turns a natural-language question into a structured survey. A real LangGraph pipeline decomposes the query, searches five academic APIs (Semantic Scholar, OpenAlex, arXiv, Crossref, PubMed), expands citations, ranks by relevance / authority / consistency, refines iteratively, and synthesizes a Markdown report with numbered inline citations. Every step emits a thinking log you can watch in real time, every paper gets a D3 force-directed node in the citation graph, and the whole thing runs against real LLMs (no mock data unless you opt in).
 
 ---
 
-## ✨ Highlights
+## Table of contents
 
-- **完整 8 节点 LangGraph 流水线** — 每个节点 emit `_step()` thinking 日志,SSE 流式推到前端 `PipelineProgress`,逐条 fade-in 展示思考过程
-- **LLM 检索模式 strict ≥ 8 分** — 真实有效文献门槛,iter 不够自动放宽到 ≥ 7,**绝不 mock fallback**;本地模式允许 mock (离线演示)
-- **可调论文数量 3-30** — UI 双滑块,默认 5-10
-- **D3 完整图谱独立 tab** — filter bar (year + author) / 2-hop 高亮 / 8 色社区 / 4 类边 + marker / drag-to-fix / 全屏 / f 适配 / 富 tooltip
-- **完整 i18n** — TopNav / Search / Report / Graph / History / Settings / Auth / CommandPalette / PipelineProgress 全部中英双语切换 (`中 ⇄ EN` 按钮)
-- **左侧 Settings drawer** — ☰ 三横线按钮唤起;主题色/runtime mode/API key/键盘/关于 6 分组
-- **认证系统** — Register / Login 双 tab + 5 类错误区分 + `/auth/revoke` 自助轮换 key + `/auth/logout` 真正登出
-- **Search 概要 + Report 居中** — Search tab 不再渲染完整报告,显示标题+Top 5+跳报告按钮;Report tab 居中(maxWidth 720)
+- [Highlights](#highlights)
+- [Quick start](#quick-start)
+- [Architecture](#architecture)
+- [How a query flows](#how-a-query-flows)
+- [Configuration](#configuration)
+- [Frontend structure](#frontend-structure)
+- [Backend structure](#backend-structure)
+- [API surface](#api-surface)
+- [Keyboard shortcuts](#keyboard-shortcuts)
+- [Export](#export)
+- [Internationalization](#internationalization)
+- [Documentation](#documentation)
+- [Release notes](#release-notes)
+- [Author](#author)
+- [Acknowledgments](#acknowledgments)
 
-## 🏗 架构 (3 层)
+---
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│ Frontend (React 18 + TS strict + Vite)                       │
-│   • 14 组件 + 单 useStore (useSyncExternalStore)             │
-│   • 4 tab: 查询 / 报告 / 图谱 / 历史                        │
-│   • SettingsDrawer (左侧) + CommandPalette (Cmd+K)           │
-│   • SSE 客户端 + 节点 thinking log fade-in 动画              │
-└────────────────────────┬─────────────────────────────────────┘
-                         ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Backend (FastAPI + LangGraph)                                │
-│   • 8-node pipeline (backend/agents/*.py)                    │
-│   • SearchRequest {paper_min/paper_max} + runtime_mode       │
-│   • /search (POST) + /search/stream (SSE) + /auth/{*}        │
-│   • auth + budget guard + cost tracker + cache               │
-└────────────────────────┬─────────────────────────────────────┘
-                         ▼
-┌──────────────────────────────────────────────────────────────┐
-│ Data sources (5 academic APIs)                               │
-│   Semantic Scholar · OpenAlex · arXiv · Crossref · PubMed    │
-│   (mock fallback 仅 'local' runtime mode)                    │
-└──────────────────────────────────────────────────────────────┘
-```
+## Highlights
 
-## 🚀 Quick start
+- **Real 8-node LangGraph pipeline** — `query_decompose → search → expand_citations → rank → refine → synthesize → build_graph → track_cost`, streamed over SSE.
+- **5-source parallel search** — Semantic Scholar, OpenAlex, arXiv, Crossref, PubMed, deduped and re-ranked.
+- **LLM-strict mode** — In LLM Search mode the ranker filters to `final_score ≥ 8` real papers, automatically relaxes to `≥ 7` on the next iteration if the corpus is thin, and never falls back to mock data.
+- **Adjustable paper count** — Pick a `[min, max]` range from 3 to 30 papers per query (default 5–10).
+- **Streaming thinking logs** — Each pipeline node appends reasoning steps that fade in on the cockpit; no opaque black box.
+- **D3 citation graph** — Independent tab with year/author filter, 2-hop neighbor highlight, 8-color community palette, drag-to-pin, fit-to-view (`f`), fullscreen (`Shift+F`), rich tooltip.
+- **Search summary + centered report** — The Search tab shows a summary card with the top 5 papers and a "view full report" link; the Report tab centers the rendered Markdown.
+- **Settings drawer** — Language, theme, runtime mode, and API-key controls live in a persistent left sidebar that collapses on demand; About / changelog / shortcuts moved to a dedicated `About` tab.
+- **Full i18n** — Every UI string is bilingual (Chinese default, English toggle); proper nouns like API Key, Author, BibTeX, Semantic Scholar stay in English.
+- **Auth done properly** — Separate Register / Login tabs with seven distinct error messages, `/auth/revoke` for self-service key rotation, `/auth/logout` actually invalidates the session.
+- **Pinned results** — PBKDF2-hashed passwords stored in a SQLite WAL database, HttpOnly session cookies with CSRF double-submit (see `docs/ADR/0001`).
 
-### 后端 (:8000)
+## Quick start
+
+### Prerequisites
+
+- Python 3.12+
+- Node.js 20+
+- One LLM provider key (minimax / kimi / glm / Anthropic / DeepSeek)
+
+### Backend (port 8000)
 
 ```bash
 cd backend
 pip install -r requirements.txt
+cp ../.env.example .env        # edit values
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
 
-跨平台启动器:
-```bash
-python scripts/scholarflow.py start    # 一键启动 / 停止 / 看日志
-python scripts/scholarflow.py --help   # 所有子命令
-```
+> For a one-shot start/stop/logs wrapper use `python scripts/scholarflow.py start` (cross-platform; see `scripts/scholarflow.py --help`).
 
-### 前端 (:5173)
+### Frontend (port 5173)
 
 ```bash
 cd frontend
 npm install
 npm run dev
-# → http://127.0.0.1:5173/
+# open http://127.0.0.1:5173/
 ```
 
-### 环境变量
+Vite proxies `/api` to the backend, so no CORS configuration is required in development.
+
+### Production build
 
 ```bash
-cp .env.example .env
-# 必须: OPEN_MODE=true (无需注册即可用)
-# 或: 设 LLM_API_KEY (kimi / glm / minimax / anthropic)
+cd frontend
+npm run build                  # tsc + vite build, output in dist/
+docker build -f Dockerfile.frontend -t scholarflow-frontend .
+docker build -f Dockerfile.backend  -t scholarflow-backend  .
 ```
 
-## 🎯 8 节点流水线
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for systemd, Docker Compose, and Kubernetes recipes.
 
-| # | 节点 | 作用 |
+## Architecture
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│  Frontend — React 18 + TypeScript (strict) + Vite             │
+│  14 components · single useStore · SSE client                 │
+│  TopNav (5 tabs) + Settings sidebar + Command palette         │
+└──────────────────────────────┬─────────────────────────────────┘
+                               │  /api/v1/* (proxied in dev)
+┌──────────────────────────────▼─────────────────────────────────┐
+│  Backend — FastAPI + LangGraph                                 │
+│  ┌─────────────────────────────────────────────────────────┐  │
+│  │ 8-node pipeline (backend/agents/*.py)                   │  │
+│  │ query_decompose → search → expand → rank → refine →     │  │
+│  │ synthesize → build_graph → track_cost                   │  │
+│  └─────────────────────────────────────────────────────────┘  │
+│  Auth · Budget guard · Cost tracker · Cache · Rate limit      │
+└──────────────────────────────┬─────────────────────────────────┘
+                               │
+┌──────────────────────────────▼─────────────────────────────────┐
+│  Data sources                                                   │
+│  Semantic Scholar · OpenAlex · arXiv · Crossref · PubMed       │
+│  (mock fallback ONLY when runtime_mode = "local")              │
+└────────────────────────────────────────────────────────────────┘
+```
+
+For a deeper look at the backend design (state shape, router logic, cache strategy) see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+
+## How a query flows
+
+1. The user types a question in the Search tab and picks provider, budget (USD), max iterations, and the `[min, max]` paper count.
+2. The frontend POSTs `/api/v1/search` and opens an SSE stream on `/api/v1/search/stream`.
+3. The backend runs the LangGraph pipeline. Every node emits a `node_complete` event; every `_step()` call emits a `node_thinking` event so the user sees the reasoning in real time.
+4. `query_decompose` splits the question into 3–5 sub-queries with structured constraints (year range, venues).
+5. `search` fans the sub-queries out to all five APIs in parallel, then dedupes. In LLM Search mode fallback papers are dropped here.
+6. `expand_citations` walks references and citations forward and backward with a `Semaphore(4)` rate limiter.
+7. `rank` scores every paper on relevance / authority / consistency. In LLM Search mode it drops anything below the active threshold.
+8. `refine` runs only when results are thin — generates more sub-queries and relaxes the score threshold (8.0 → 7.0).
+9. `synthesize` calls the LLM to produce the Markdown report and validates that every `[N]` citation resolves to a paper in the ranked set.
+10. `build_graph` produces the D3 graph (cites, co-cited, same venue, author overlap).
+11. `track_cost` aggregates tokens, cost, and elapsed time.
+
+## Configuration
+
+All runtime configuration lives in `.env` (see `.env.example` for the full list). The most relevant keys:
+
+| Variable | Purpose | Default |
 |---|---|---|
-| 0 | `query_decompose` | 拆 3-5 个子查询 |
-| 1 | `search` | 5 源并行检索 (LLM 模式去掉 mock fallback) |
-| 2 | `expand_citations` | 向后 + 向前引文扩展 |
-| 3 | `rank` | 三维评分 (relevance/authority/consistency);**LLM 模式 strict ≥ 8** |
-| 4 | `refine` | 不足时放宽到 ≥ 7 + 生成补充 sub_queries |
-| 5 | `synthesize` | LLM 综述生成 + 引文校验 |
-| 6 | `build_graph` | 构建 D3 引文图谱 (4 类边) |
-| 7 | `track_cost` | 成本 / tokens / elapsed 汇总 |
+| `OPEN_MODE` | Skip auth and use a synthetic dev user (development only) | `false` |
+| `BUDGET_LIMIT_USD` | Default per-query budget cap | `2.0` |
+| `MAX_SEARCH_ITERATIONS` | Default max refinement iterations | `3` |
+| `MiniMax_API_KEY` / `KIMI_API_KEY` / `GLM_API_KEY` / `ANTHROPIC_API_KEY` | LLM provider keys | empty |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated list of allowed origins | `http://127.0.0.1:5173` |
 
-## ⌨️ 快捷键
+The Settings sidebar in the frontend exposes a subset of these (theme, runtime mode, API key) without restarting the backend; the rest live in `.env` and require a server restart.
+
+## Frontend structure
+
+```
+frontend/src/
+├── App.tsx                # top-level layout + global keybindings
+├── commands.ts            # command palette registry
+├── main.tsx               # React 18 entry + error boundary
+├── index.css              # tokens + base styles
+│
+├── components/
+│   ├── TopNav.tsx              # hamburger · wordmark · 5 tabs · user menu
+│   ├── SearchWorkspace.tsx     # query input + summary card + paper list
+│   ├── SearchSummary.tsx       # title + Top 5 + "view full report"
+│   ├── ReportView.tsx          # centered Markdown + anchored papers
+│   ├── GraphPage.tsx           # standalone D3 graph tab
+│   ├── HistoryView.tsx         # recent searches + rerun
+│   ├── AboutView.tsx           # about / shortcuts / changelog
+│   ├── SettingsDrawer.tsx      # left sidebar (collapsed/expanded)
+│   ├── AuthDialog.tsx          # register / login / rotate key / sign out
+│   ├── CommandPalette.tsx      # Cmd/Ctrl-K palette
+│   ├── ChangelogModal.tsx      # release notes overlay
+│   ├── CompareDrawer.tsx       # side-by-side paper comparison
+│   ├── PipelineProgress.tsx    # 8 ticks + thinking log + graph scrubber
+│   ├── QueryInput.tsx          # textarea + provider/budget/iter/paper sliders
+│   └── PaperList.tsx           # numbered paper list with selection
+│
+├── i18n/index.ts          # useT hook + Chinese/English dictionaries
+├── store/useStore.ts      # single store (useSyncExternalStore)
+├── lib/tokens.ts          # OKLCH theme tokens
+├── lib/storageKeys.ts     # localStorage key registry
+├── services/api.ts        # typed fetch wrappers + SSE client
+└── types/index.ts         # shared TypeScript types
+```
+
+## Backend structure
+
+```
+backend/
+├── main.py                # FastAPI app + lifespan + middleware
+├── config.py              # env loading + defaults
+├── middleware.py          # CORS + rate limit + trusted host
+│
+├── api/
+│   ├── routes/
+│   │   ├── search.py      # /search, /search/stream (SSE), /search/cancel
+│   │   ├── auth.py        # register, login, logout, revoke, me, csrf
+│   │   ├── admin.py       # admin-only runtime-mode switching
+│   │   └── health.py      # /health, /providers
+│   └── services/          # budget, providers, streaming helpers
+│
+├── agents/                # the 8-node LangGraph pipeline
+│   ├── query_decomposer.py
+│   ├── search_agent.py
+│   ├── citation_expander.py
+│   ├── ranker_agent.py
+│   ├── query_refiner.py
+│   ├── synthesis_agent.py
+│   ├── graph_builder.py
+│   ├── critic_agent.py
+│   ├── cost_tracker.py
+│   ├── _schemas.py        # Pydantic shared schemas + parse helpers
+│   ├── _state_utils.py    # state pruning
+│   └── _step_helper.py    # thinking-log helper
+│
+├── auth/                  # PBKDF2 + SQLite WAL + dependencies
+├── models/                # Pydantic + TypedDict state shape
+├── utils/                 # budget · cache · runtime_mode · sanitize · observability
+└── workflow/              # LangGraph graph + router
+```
+
+## API surface
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/v1/search` | Run a search synchronously (480 s timeout). |
+| `GET` | `/api/v1/search/stream` | Run a search, stream SSE events. |
+| `POST` | `/api/v1/search/cancel` | Cancel an in-flight search by `request_id`. |
+| `POST` | `/api/v1/auth/register` | Create an account, returns API key. |
+| `POST` | `/api/v1/auth/login` | Sign in, rotates key. |
+| `POST` | `/api/v1/auth/logout` | Invalidate the session. |
+| `POST` | `/api/v1/auth/revoke` | Self-service key rotation (requires auth). |
+| `GET` | `/api/v1/auth/me` | Current user info. |
+| `GET` | `/api/v1/auth/csrf-token` | CSRF double-submit token. |
+| `GET` | `/api/v1/auth/stream-token` | Short-lived token for SSE handshakes. |
+| `GET` | `/api/v1/health` | Health check (no auth). |
+| `GET` | `/api/v1/providers` | List configured LLM providers. |
+| `POST` | `/api/v1/admin/runtime-mode` | Admin-only runtime-mode switch. |
+
+The SSE event vocabulary is documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#sse-event-vocabulary).
+
+## Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| `⌘ K` / `Ctrl K` | 打开命令面板 |
-| `⌘ ↵` / `Ctrl ↵` | 提交查询 |
-| `Esc` | 关闭弹窗 / 清选中 / 退出图谱全屏 |
-| `f` (在 Graph) | 适配视图 (fit-to-view) |
-| `Shift+F` (在 Graph) | 全屏图谱 |
-| `?` | 显示快捷键 |
+| `Cmd/Ctrl + K` | Open the command palette |
+| `Cmd/Ctrl + Enter` | Submit the current query |
+| `Esc` | Close any open modal; in the Graph tab, clear the selection or exit fullscreen |
+| `f` (Graph tab) | Fit the graph to view |
+| `Shift + F` (Graph tab) | Toggle graph fullscreen |
+| `?` | Show the shortcut overlay |
 
-## 📦 导出
+## Export
 
-- `.bib` (BibTeX, 导入 Zotero / Mendeley)
-- `.ris` (RIS, 导入 EndNote)
-- `.md` (原始 Markdown 报告)
+- **BibTeX** (`.bib`) — for Zotero, Mendeley, and any LaTeX-based pipeline.
+- **RIS** (`.ris`) — for EndNote, RefMan, and most reference managers.
+- **Markdown** (`.md`) — the raw report with inline `[N]` citations and anchored papers section.
 
-## 🗂 项目结构
+The report tab includes `↓ .bib`, `↓ .ris`, and `↓ .md` download links.
 
-```
-Atest/
-├── backend/
-│   ├── agents/             # 8 节点 + _schemas / _state_utils / _step_helper
-│   ├── api/routes/         # search / auth / admin / health
-│   ├── auth/               # PBKDF2 + SQLite WAL
-│   ├── models/             # Pydantic SearchRequest / SearchState TypedDict
-│   ├── utils/              # budget / cache / runtime_mode / sanitize / observability
-│   ├── workflow/           # LangGraph graph + router
-│   └── main.py             # FastAPI app + lifespan
-├── frontend/
-│   ├── src/
-│   │   ├── components/     # 14 组件 (TopNav / SearchWorkspace / ReportView / GraphPage / HistoryView / SettingsDrawer / AuthDialog / CommandPalette / ChangelogModal / CompareDrawer / PipelineProgress / QueryInput / PaperList / SearchSummary)
-│   │   ├── i18n/           # 中英字典 + useT hook
-│   │   ├── store/          # useStore (单 store + useSyncExternalStore)
-│   │   ├── lib/            # tokens (OKLCH) + storageKeys
-│   │   ├── services/       # api.ts (register / login / revokeKey / logout / SSE)
-│   │   ├── types/          # 共享类型
-│   │   ├── App.tsx / commands.ts / main.tsx / index.css
-│   └── vite.config.ts + tailwind.config.js
-├── docs/
-│   ├── ARCHITECTURE.md     # 后端架构详述
-│   ├── DEPLOYMENT.md       # systemd + Docker + K8s
-│   └── ADR/                # 0001 HTTP-only session / 0002 dual-version / 0003 mock pipeline
-├── tests/                  # pytest unit + e2e
-├── scripts/scholarflow.py  # 跨平台启动器
-├── BACKLOG.md              # 唯一跟踪文件 (清理/重构/漂移/P0/P1)
-├── ROADMAP.md              # R11+ 战略方向 + 历史记录
-├── VERSION                 # 当前版本
-└── README.md (本文件)
-```
+## Internationalization
 
-## 📚 文档
+The interface is fully bilingual. The toggle is the `中 / EN` button in the top-right corner of the navigation bar.
 
-- [`BACKLOG.md`](BACKLOG.md) — 唯一跟踪文件:C/D/E/F/G 5 类清理/重构/漂移/跳过 P0/P1/中优先级/低优先级/不做
-- [`ROADMAP.md`](ROADMAP.md) — R11+ 战略方向 (LangGraph 1.0 / Memory Layer / Multi-Agent Runtime / Sandbox / K8s / i18n) + 历史发布记录
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — 后端架构 (8 节点 / 状态机 / 数据流)
-- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — 部署 (systemd / Docker Compose / K8s)
-- [`docs/ADR/`](docs/ADR/) — 架构决策记录 (HTTP-only session / dual-version / mock pipeline)
-- [`RELEASES.md`](RELEASES.md) — GitHub Releases 草稿区 (每版本一段可直接 copy-paste)
-- `.claude/skills/impeccable/` — 本地安装的 [pbakaus/impeccable](https://github.com/pbakaus/impeccable) 设计技能,可用 `/impeccable craft / shape / critique / audit / polish`
+| | Chinese (default) | English |
+|---|---|---|
+| Tabs | 查询 / 报告 / 图谱 / 历史 / 设置 | Search / Report / Graph / History / Settings |
+| Pipeline | 查询分解 / 双源检索 / 引文扩展 / 三维排序 / 查询优化 / 综述生成 / 图谱构建 / 成本汇总 | Query decompose / Dual-source search / Citation expand / 3D rank / Query refine / Synthesize / Graph build / Cost track |
 
-## 📝 Release notes
+Proper nouns (Semantic Scholar, OpenAlex, API Key, Author, BibTeX, RIS) are kept in English in both locales. The dictionary lives in [`frontend/src/i18n/index.ts`](frontend/src/i18n/index.ts).
 
-最新 5 个版本 (详细见 ChangelogModal 在 App 内):
+## Documentation
 
-- **R10.5.59** (2026-06-21) — hamburger Settings / paper_count 滑块 / LLM strict ≥ 8→7 / 搜索概要+报告居中 / 图谱 jitter 修复 / 完整 i18n 覆盖
-- **R10.5.55** (2026-06-21) — i18n 中英文切换 / D3 图谱独立 tab 完整复刻 / SettingsDrawer 替换 Settings tab / runtimeMode 改名 + 拒降级 / Auth 严格化 (Register/Login/revoke)
-- **R10.5.54** (2026-06-20) — frontend 完全重构: Editorial Desk Reference 视觉 / 14 组件 + 单 store
-- **R10.5.53** (2026-06-20) — 节点级 thinking log / 图谱演化折叠
-- **R10.5.51** (2026-06-19) — `/simplify` 8 项清理 + STORAGE_KEYS 中央化 + BACKLOG.md 统一跟踪
+- [`BACKLOG.md`](BACKLOG.md) — single source of truth for outstanding cleanup, refactors, deferred P0/P1 items, and R11+ strategy.
+- [`ROADMAP.md`](ROADMAP.md) — R11+ strategic direction and historical release log.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — backend architecture (state shape, node details, SSE vocabulary).
+- [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) — systemd, Docker Compose, Kubernetes.
+- [`docs/ADR/`](docs/ADR/) — accepted architectural decisions:
+  - [0001 — HttpOnly + SameSite=Strict session cookies with CSRF double-submit](docs/ADR/0001-http-only-session-cookies.md)
+  - [0002 — Dual-version strategy](docs/ADR/0002-dual-version-strategy.md)
+  - [0003 — Deterministic mock pipeline](docs/ADR/0003-deterministic-mock-pipeline.md)
+- [`RELEASES.md`](RELEASES.md) — copy-paste-ready GitHub Release notes per version.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — how to contribute.
 
-## 📄 License
+## Release notes
 
-MIT. See [`LICENSE`](LICENSE).
+The most recent five releases:
 
-## ✍️ Author
+- **R10.5.59** (2026-06-21) — Hamburger Settings sidebar · adjustable paper count (3-30) · LLM Search strict score threshold (≥ 8 → relax ≥ 7) · Search summary card + centered Report · D3 graph hover-jitter fix · complete i18n coverage.
+- **R10.5.55** (2026-06-21) — Chinese/English i18n · D3 graph as a standalone tab · Settings drawer replacing the Settings tab · `runtime_mode` renamed to `local` / `llm` · strict auth (register/login/revoke) · per-node thinking logs.
+- **R10.5.54** (2026-06-20) — Frontend rebuild on the Editorial Desk Reference visual language · 14 components · single `useStore` replacing three React contexts and 13 `useState` hooks.
+- **R10.5.53** (2026-06-20) — 4-tab routing · per-node thinking logs · graph evolution folded into the pipeline cockpit.
+- **R10.5.51** (2026-06-19) — `/simplify` 8-item cleanup · `STORAGE_KEYS` centralization · `BACKLOG.md` consolidation.
 
-[qianbkk](https://github.com/qianbkk) — [github.com/qianbkk/ScholarFlow](https://github.com/qianbkk/ScholarFlow)
+The full per-version changelog lives in the in-app `ChangelogModal` and in [`RELEASES.md`](RELEASES.md).
+
+## Author
+
+**qianbkk** — [github.com/qianbkk/ScholarFlow](https://github.com/qianbkk/ScholarFlow)
+
+## Acknowledgments
+
+- Built on top of [LangGraph](https://langchain-ai.github.io/langgraph/) for the multi-agent pipeline.
+- Powered by [OpenAlex](https://openalex.org), [Semantic Scholar](https://www.semanticscholar.org/), [arXiv](https://arxiv.org/), [Crossref](https://www.crossref.org/), and [PubMed](https://pubmed.ncbi.nlm.nih.gov/).
+- UI follows the Editorial Desk Reference visual language; D3 powers the citation graph.
+- Release engineering workflow informed by the [`create-readme`](https://github.com/github/awesome-copilot/tree/main/skills/create-readme) and [`readme-blueprint-generator`](https://github.com/github/awesome-copilot/tree/main/skills/readme-blueprint-generator) skills from the [`github/awesome-copilot`](https://github.com/github/awesome-copilot) community.
