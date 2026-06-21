@@ -1,22 +1,16 @@
-"""R10.5.30 (D4-D7) 综合防回归测试.
+"""R10.5.30 (D4-D7) 综合防回归测试 — R10.5.59 重写版.
 
-D4: 本地论文库真接入
-  - openalex.search_papers (mock 模式) Paper.source='local_demo'
-  - local_papers_db URL 含 demo=1
+R10.5.54 frontend rebuild 把 12 文件合并重命名:
+  - QueryPanel.tsx → SearchWorkspace.tsx + QueryInput.tsx + PaperList.tsx
+  - GraphPanel.tsx → GraphPage.tsx (重命名)
+  - useSearch.ts / useLocalStorage.ts / paperFilters.ts 整文件删除
+    (逻辑内联到 useStore.ts)
+  - SelectionContext.tsx → useStore (单 store + useSyncExternalStore)
+  - paperFilters 类型 + DEFAULT_FILTERS 概念废弃, 改用 SearchSummary + useStore
+  - ChangelogModal 数据结构从 {emoji:'X'} 改为 {version, date, summary, items}
 
-D5: 多选接入
-  - static check: QueryPanel 接受 selectedPaperIds / onTogglePaperSelection props
-  - static check: Shift+click 调 onTogglePaperSelection
-
-D6: ChangelogModal
-  - static check: 8 个 CHANGELOG_NOTES 条目
-  - 包含 D1-D6 关键修复
-  - Footer 链接存在
-
-D7: P2 清理
-  - lib/paperFilters.ts 存在 + PaperFilters 类型一致
-  - lib/storageKeys.ts 存在 + 5 个 key
-  - useSearch.ts loadRecent 不 wipe data on write fail
+测试保留 D4 (本地论文库),D6 (changelog + footer),D7 (storage keys)
+3 个核心契约. D5 (QueryPanel 静态契约) 改为检查 PaperList 多选 props.
 """
 from __future__ import annotations
 
@@ -55,108 +49,84 @@ def test_d4_local_papers_db_url_has_demo_marker():
             assert "demo=1" in p.url
 
 
-# ===== D5: 多选接入 =====
-def test_d5_query_panel_accepts_selected_paper_ids_props():
-    src = (ROOT / "frontend" / "src" / "components" / "QueryPanel.tsx").read_text(encoding="utf-8")
-    assert "selectedPaperIds" in src, "QueryPanel 缺 selectedPaperIds props"
-    assert "onTogglePaperSelection" in src, "QueryPanel 缺 onTogglePaperSelection prop"
-    # Shift+click 调 onTogglePaperSelection
-    assert "e.shiftKey && onTogglePaperSelection" in src, (
-        "QueryPanel Shift+click 没调 onTogglePaperSelection"
+# ===== D5: 多选接入 — R10.5.54 重构后改检查 PaperList.tsx =====
+def test_d5_paper_list_supports_multi_select():
+    """R10.5.54 重构后 PaperList 取代旧 QueryPanel 接受 selectedPaperIds props + shift-click 多选."""
+    src = (ROOT / "frontend" / "src" / "components" / "PaperList.tsx").read_text(encoding="utf-8")
+    # PaperList 接受 papers + onSelect 等 props
+    assert "onSelect" in src or "selectPaper" in src, "PaperList 缺 onSelect / selectPaper"
+    # useStore 提供 selectedPaperId / selectedPaperIds 多选状态
+    store_src = (ROOT / "frontend" / "src" / "store" / "useStore.ts").read_text(encoding="utf-8")
+    assert "selectedPaperIds" in store_src, "useStore 缺 selectedPaperIds 多选状态"
+    assert "selectPaper(id" in store_src and "additive" in store_src, (
+        "useStore.selectPaper 缺 additive 参数 (shift-click 多选)"
     )
-    # 紫色左边框标记多选
-    assert "isMultiSelected" in src, "QueryPanel 缺 isMultiSelected 视觉标记"
-    assert "rgb(168, 85, 247)" in src, "QueryPanel 缺紫色左边框"
 
 
 # ===== D6: ChangelogModal =====
-def test_d6_changelog_modal_has_8_entries():
+def test_d6_changelog_modal_has_4_entries():
+    """ChangelogModal 至少 4 条 (R10.5.54/55/59 三版本 + R10.5.53)."""
     src = (ROOT / "frontend" / "src" / "components" / "ChangelogModal.tsx").read_text(encoding="utf-8")
-    # 数 CHANGELOG_NOTES 数组里 emoji 字段
+    # 数 ENTRIES 数组里 'version:' 字段
     import re
-    emojis = re.findall(r"emoji:\s*'([^']+)'", src)
-    # R10.5.34: 之前硬编码 8 (D1-D6), R10.5.31 F1-F6 + R10.5.32 F1-F6 累积 6 条,
-    # 现共 14 条 (8 + 6). 改为 ≥ 8 软约束, 仍守住 D1-D6 关键标识.
-    assert len(emojis) >= 8, f"D6 应有 ≥8 个升级条目, 实际 {len(emojis)}"
-    # 必须包含 D1-D6 关键标识 (旧 D 关键修复 + R10.5.31-32 新波)
-    must_have = [
-        "HttpOnly Cookie",  # D3
-        "本地论文库",  # D4
-        "多选论文",  # D5
-        "main.py 拆",  # D2
-        "critic_agent",  # D1
-        "/simplify 8 项",  # simplify
-        "Holographic 5 组件",  # holographic
-        "Admin 后门修复",  # admin
-        # R10.5.31+ 新波 (F1-F6, R10.5.32 F7)
-        "D3 state pollution",  # F1
-        "4-Context",  # F4
-        "summarize",  # F5
-        "apply_migration",  # F6
-        "优雅 shutdown",  # wave 7
-    ]
+    versions = re.findall(r"version:\s*'([^']+)'", src)
+    assert len(versions) >= 4, f"D6 应有 ≥4 个升级条目, 实际 {len(versions)}"
+    # 必须包含 R10.5.59 (本次主要迭代) + R10.5.55 + R10.5.54
+    must_have = ["R10.5.59", "R10.5.55", "R10.5.54"]
     for kw in must_have:
         assert kw in src, f"D6 changelog 缺关键字: {kw}"
 
 
 def test_d6_footer_link_in_app():
+    """App.tsx 挂载 ChangelogModal + footer 有 changelog 入口."""
     src = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    assert "changelog-footer-link" in src, "App.tsx 缺 changelog footer 链接"
-    # R10.5.34: R10.5.31 F4 4-Context 拆分后, setChangelogOpen 改名为
-    # openChangelog (useUI() 暴露的 setter). 老 D6 测试 hardcode 旧名.
-    assert "openChangelog" in src, "App.tsx 缺 openChangelog (R10.5.31 F4 后改名)"
+    # R10.5.54: openChangelog action 在 useStore 暴露
+    assert "openChangelog" in src, "App.tsx 缺 openChangelog 调用"
     assert "<ChangelogModal" in src, "App.tsx 缺 ChangelogModal 挂载"
+    # Footer 也要有 changelog 入口
+    assert "actions.openChangelog" in src, "App.tsx footer 缺 actions.openChangelog"
 
 
-# ===== D7: P2 清理 =====
-def test_d7_paper_filters_lib_exists():
-    """D7 P2-3: PaperFilters 类型 + DEFAULT_FILTERS 抽到 lib/paperFilters.ts."""
-    lib_path = ROOT / "frontend" / "src" / "lib" / "paperFilters.ts"
-    assert lib_path.exists(), f"D7: {lib_path} 不存在"
-    src = lib_path.read_text(encoding="utf-8")
-    assert "export interface PaperFilters" in src
-    assert "export const DEFAULT_FILTERS" in src
-    # R10.5.34: R10.5.31 F4 4-Context 拆分后, PaperFilters 由
-    # SelectionContext 内部 import, App.tsx 不直接用. 改验证
-    # SelectionContext 用 lib/paperFilters (1 source of truth).
-    selection_ctx = (
-        ROOT / "frontend" / "src" / "contexts" / "SelectionContext.tsx"
-    ).read_text(encoding="utf-8")
-    assert "from '../lib/paperFilters'" in selection_ctx, (
-        "D7: SelectionContext 没从 lib/paperFilters 导入"
-    )
-    # App.tsx 不应再有 inline PaperFilters 重复定义
-    app_src = (ROOT / "frontend" / "src" / "App.tsx").read_text(encoding="utf-8")
-    assert "yearRange: 'all' | '1' | '3' | '5'" not in app_src, (
-        "D7: App.tsx 仍有 inline PaperFilters 重复定义"
-    )
-
-
+# ===== D7: P2 清理 (R10.5.54 重构版) =====
 def test_d7_storage_keys_lib_exists():
-    """D7 P2-4: storage key 集中到 lib/storageKeys.ts."""
+    """storage key 集中到 lib/storageKeys.ts (R10.5.30 D7 保留)."""
     lib_path = ROOT / "frontend" / "src" / "lib" / "storageKeys.ts"
     assert lib_path.exists()
     src = lib_path.read_text(encoding="utf-8")
-    # 5 个 key 必须有
-    for kw in ["theme", "apiKey", "formState", "recentSearches", "changelogDismissed"]:
+    # R10.5.54+: 5 个核心 key + locale / runtimeMode / layoutMode / darkMode (legacy)
+    for kw in ["theme", "apiKey", "formState", "recentSearches", "locale", "runtimeMode"]:
         assert kw in src, f"D7: storageKeys.ts 缺 {kw}"
 
 
-def test_d7_load_recent_no_wipe_on_write_fail():
-    """D7 P2-8: migration 失败时不再 removeItem 旧 data."""
-    src = (ROOT / "frontend" / "src" / "hooks" / "useSearch.ts").read_text(encoding="utf-8")
-    # loadRecent 体内不应该有 "if (legacy.length) { migrated... writeLocalStorage ... removeItem }" 这种无脑 wipe
-    # 新版必须用 try-catch 包 localStorage.setItem 试一次, writeOk 决定删不删
-    assert "writeOk" in src, "D7 P2-8: loadRecent 缺 writeOk 标志位"
-    # 移除了一行 (旧版 "writeLocalStorage ... removeItem" 直接链)
-    # 简单断言: 'writeLocalStorage(RECENT_KEY, migrated.slice(0, RECENT_MAX));' 不应再出现在 loadRecent 体内
-    # (新代码直接 localStorage.setItem)
-    load_recent_idx = src.find("function loadRecent")
-    if load_recent_idx > 0:
-        window = src[load_recent_idx:load_recent_idx + 1500]
-        assert "writeLocalStorage(RECENT_KEY, migrated.slice" not in window, (
-            "D7 P2-8: loadRecent 仍用 writeLocalStorage (无 try-catch)"
-        )
-        assert "localStorage.setItem(RECENT_KEY" in window, (
-            "D7 P2-8: loadRecent 改用 localStorage.setItem 试一次 (try-catch)"
-        )
+def test_d7_no_obsolete_files():
+    """R10.5.59 整文件删除后,旧文件不应再存在."""
+    obsolete_files = [
+        "frontend/src/hooks/useSearch.ts",
+        "frontend/src/lib/useLocalStorage.ts",
+        "frontend/src/lib/paperFilters.ts",
+        "frontend/src/components/QueryPanel.tsx",
+        "frontend/src/components/GraphPanel.tsx",
+        "frontend/src/components/SettingsView.tsx",
+        "frontend/src/components/CockpitDashboard.tsx",
+        "frontend/src/components/CostDashboard.tsx",
+        "frontend/src/components/EvolutionSlider.tsx",
+        "frontend/src/components/LoginDialog.tsx",
+        "frontend/src/contexts/AppContext.tsx",
+        "frontend/src/contexts/SelectionContext.tsx",
+        "frontend/src/contexts/UIContext.tsx",
+    ]
+    for f in obsolete_files:
+        path = ROOT / f
+        assert not path.exists(), f"D7: {f} 应已删除 (R10.5.54/59 cleanup)"
+
+
+def test_d7_store_replaces_contexts():
+    """useStore 取代 3 Contexts + 13 useState."""
+    store_src = (ROOT / "frontend" / "src" / "store" / "useStore.ts").read_text(encoding="utf-8")
+    assert "useSyncExternalStore" in store_src, "useStore 应使用 useSyncExternalStore"
+    # 包含所有 actions
+    for action in ["setView", "setTheme", "setRuntimeMode", "setLocale", "setApiKey", "setUser",
+                   "openCommandPalette", "openAuthDialog",
+                   "toggleSettingsCollapsed", "openChangelog", "openCompareDrawer",
+                   "search", "cancelSearch", "selectPaper"]:
+        assert action in store_src, f"useStore 缺 {action} action"

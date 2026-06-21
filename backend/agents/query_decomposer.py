@@ -214,7 +214,7 @@ Rules:
         base_usage=None,
     )
 
-    # 解析成功 → 拿 query_type + sub_queries; 解析失败 → 全 None / 兜底
+    # 解析成功 → 拿 query_type + sub_queries; 解析失败 → R10.5.59b: 严格报错
     if parsed_obj is not None:
         query_type = parsed_obj.query_type
         if query_type not in _QUERY_TYPE_LIMITS:
@@ -238,14 +238,26 @@ Rules:
                   f"methods={raw_constraints.get('methods')}, "
                   f"datasets={raw_constraints.get('datasets')}")
     else:
-        # 兜底: query_type 默认, constraints 走 _fallback_constraints
+        # R10.5.59b: 严格 LLM 模式 — LLM 解析失败时禁止走 _fallback_decompose
+        # 离线兜底分解 (避免在 LLM 模式下混用本地 mock 数据).
+        # LLM 失败 = 立即报错, 让用户知道上游 LLM 服务有问题.
+        runtime_mode = state.get("runtime_mode") or "llm"
+        if runtime_mode == "llm":
+            _step("❌ LLM 解析失败 (2 次重试后仍坏), LLM 模式下禁止离线兜底")
+            raise RuntimeError(
+                "query_decompose: LLM 解析失败, 2 次重试后仍坏. "
+                "LLM 模式 (runtime_mode=llm) 禁止离线兜底分解. "
+                "请检查 LLM provider 配置 / 网络 / 预算后重试."
+            )
+        # local 模式允许离线兜底 (用于离线演示)
         query_type = "default"
         max_subs = _QUERY_TYPE_LIMITS[query_type]
         raw_constraints = None
-        _step("⚠️ LLM 解析失败 (2 次重试后仍坏), 走离线兜底分解")
+        _step("⚠️ LLM 解析失败 (2 次重试后仍坏), local 模式走离线兜底分解")
+        sub_queries = _fallback_decompose(state["original_query"])
 
     if not sub_queries:
-        # 兜底：原始查询 + 派生变体
+        # R10.5.59b: local 模式才允许无 sub_queries 兜底, llm 模式已经在上面 raise 了.
         sub_queries = _fallback_decompose(state["original_query"])
     # 限制 sub_queries 数量 — 按 query_type 自适应 (P1-D: 简单查询不浪费 API 配额)
     sub_queries = sub_queries[:max_subs]

@@ -162,6 +162,10 @@ const dictZh: Dict = {
   'sidebar.addKey': '添加 API key',
   'sidebar.manageKeys': '管理 API key',
   'sidebar.save': '保存',
+  'sidebar.alias': '代号',
+  'sidebar.delete': '删除',
+  'sidebar.keysCount': '{n} / 10 已配置',
+  'sidebar.fullSlot': '已满',
 
   // ===== SettingsDrawer (保留兼容) =====
   'settings.title': '设置',
@@ -386,6 +390,10 @@ const dictEn: Dict = {
   'sidebar.addKey': 'Add API key',
   'sidebar.manageKeys': 'Manage API keys',
   'sidebar.save': 'Save',
+  'sidebar.alias': 'alias',
+  'sidebar.delete': 'Delete',
+  'sidebar.keysCount': '{n} / 10 configured',
+  'sidebar.fullSlot': 'full',
 
   // ===== AboutView (R10.5.59) =====
   'about.title': 'About',

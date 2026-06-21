@@ -5,7 +5,7 @@
  * 包含 4 个分组: 语言 / 主题色系 / 运行时模式 / API Key.
  * 关于 / 快捷键 / 更新日志移到 AboutView (独立 tab).
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useStore, actions, type RuntimeMode } from '../store/useStore';
 import { THEMES } from '../lib/tokens';
 import { useT, toggleLocale, type Locale } from '../i18n';
@@ -123,10 +123,10 @@ export function SettingsSidebar() {
                   <button
                     key={th.id}
                     type="button"
-                    aria-label={`Theme: ${th.label}`}
+                    aria-label={`Theme: ${locale === 'en' ? th.labelEn : th.label}`}
                     aria-pressed={active}
                     onClick={() => actions.setTheme(th.id)}
-                    title={th.label}
+                    title={locale === 'en' ? th.labelEn : th.label}
                     style={{
                       display: 'flex',
                       alignItems: 'center',
@@ -151,7 +151,7 @@ export function SettingsSidebar() {
                         flexShrink: 0,
                       }}
                     />
-                    <span style={{ fontSize: 11, color: 'var(--sf-text)' }}>{th.label}</span>
+                    <span style={{ fontSize: 11, color: 'var(--sf-text)' }}>{locale === 'en' ? th.labelEn : th.label}</span>
                   </button>
                 );
               })}
@@ -273,62 +273,105 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 /**
- * API Key section — 显示当前 key 状态 + 编辑/添加按钮 (调用后端 /api/v1/config/env 端点)
+ * API Key section — R10.5.59b 多模型管理
+ *
+ * 支持:
+ *   - 每个 model 多个 alias (primary + 自定义)
+ *   - 全局 ≤10 keys / 单 model ≤2 keys
+ *   - 显示已配置 key 的代号 + masked preview
+ *   - 新增 / 修改 / 删除 keys
  */
+type ProviderInfo = {
+  provider: string;
+  label: string;
+  env_var_prefix: string;
+  model_id: string;
+  color: string;
+  keys: Array<{
+    provider: string;
+    env_var: string;
+    alias: string;
+    masked_preview: string | null;
+    is_active: boolean;
+  }>;
+};
+
 function ApiKeySection() {
   const t = useT();
   const hasApiKey = useStore((s) => s.hasApiKey);
   const [editing, setEditing] = useState(false);
-  const [providers, setProviders] = useState<Array<{ id: string; label: string; has_key: boolean }>>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [selectedProvider, setSelectedProvider] = useState('minimax');
+  const [aliasInput, setAliasInput] = useState('');
   const [keyInput, setKeyInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
 
-  useEffect(() => {
-    fetch('/api/v1/providers')
-      .then((r) => r.json())
-      .then((res) => {
-        if (res?.providers) {
-          setProviders(
-            res.providers.map((p: any) => ({
-              id: p.id,
-              label: p.label || p.id,
-              has_key: !!p.has_key,
-            })),
-          );
+  const refresh = useCallback(async () => {
+    try {
+      const r = await fetch('/api/v1/config/env', { credentials: 'include' });
+      const headers = Object.fromEntries(r.headers.entries());
+      void headers;
+      const apiKey = (await import('../services/api')).getApiKey();
+      const res = await fetch('/api/v1/config/env', {
+        credentials: 'include',
+        headers: apiKey ? { 'X-API-Key': apiKey } : {},
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.providers) {
+        setProviders(data.providers);
+        // 自动建议 alias: provider-1, provider-2 (下一个序号)
+        if (!aliasInput && data.providers.length > 0) {
+          const sel = data.providers.find((p: ProviderInfo) => p.provider === selectedProvider);
+          if (sel) {
+            const next = sel.keys.length === 0 ? 'primary' : `${sel.provider}-${sel.keys.length + 1}`;
+            setAliasInput(next);
+          }
         }
-      })
-      .catch(() => { /* ignore */ });
-  }, []);
+      }
+    } catch { /* ignore */ }
+  }, [aliasInput, selectedProvider]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  // 当切换 provider 时, 重置 alias 建议
+  const onSelectProvider = (p: string) => {
+    setSelectedProvider(p);
+    const sel = providers.find((x) => x.provider === p);
+    if (sel) {
+      const next = sel.keys.length === 0 ? 'primary' : `${sel.provider}-${sel.keys.length + 1}`;
+      setAliasInput(next);
+    } else {
+      setAliasInput('primary');
+    }
+  };
 
   const save = async () => {
-    if (!keyInput.trim()) return;
+    if (!keyInput.trim() || !aliasInput.trim()) return;
     setBusy(true);
     setStatus(null);
     try {
+      const apiKey = (await import('../services/api')).getApiKey();
       const r = await fetch('/api/v1/config/env', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
         credentials: 'include',
-        body: JSON.stringify({ provider: selectedProvider, api_key: keyInput.trim() }),
+        body: JSON.stringify({
+          provider: selectedProvider,
+          alias: aliasInput.trim(),
+          api_key: keyInput.trim(),
+        }),
       });
       if (!r.ok) {
         const detail = (await r.json().catch(() => ({}))).detail || '保存失败';
         setStatus(`✗ ${detail}`);
       } else {
-        setStatus(`✓ ${selectedProvider} key 已保存到 .env`);
+        setStatus(`✓ ${aliasInput} → ${selectedProvider} 已保存`);
         setKeyInput('');
-        const res = await fetch('/api/v1/providers').then((r) => r.json());
-        if (res?.providers) {
-          setProviders(
-            res.providers.map((p: any) => ({
-              id: p.id,
-              label: p.label || p.id,
-              has_key: !!p.has_key,
-            })),
-          );
-        }
+        await refresh();
       }
     } catch (e: any) {
       setStatus(`✗ ${e?.message || '网络错误'}`);
@@ -337,49 +380,167 @@ function ApiKeySection() {
     }
   };
 
+  const remove = async (provider: string, alias: string) => {
+    if (!window.confirm(`删除 ${provider}/${alias} 的 key?`)) return;
+    setBusy(true);
+    try {
+      const apiKey = (await import('../services/api')).getApiKey();
+      const r = await fetch('/api/v1/config/env', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+        credentials: 'include',
+        body: JSON.stringify({ provider, alias }),
+      });
+      if (!r.ok) {
+        const detail = (await r.json().catch(() => ({}))).detail || '删除失败';
+        setStatus(`✗ ${detail}`);
+      } else {
+        setStatus(`✓ ${provider}/${alias} 已删除`);
+        await refresh();
+      }
+    } catch (e: any) {
+      setStatus(`✗ ${e?.message || '网络错误'}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const totalConfigured = providers.reduce((acc, p) => acc + p.keys.length, 0);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <p
         className="font-mono"
-        style={{
-          fontSize: 11,
-          color: 'var(--sf-muted)',
-          margin: 0,
-        }}
+        style={{ fontSize: 11, color: 'var(--sf-muted)', margin: 0 }}
       >
-        {providers.filter((p) => p.has_key).length} / {providers.length} {t('sidebar.keySet')}
+        {totalConfigured} / 10 已配置
       </p>
+
+      {/* 已配置的 keys 列表 (代号 + masked preview + 删除按钮) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+        {providers.map((p) => (
+          p.keys.map((k) => (
+            <div
+              key={`${p.provider}-${k.alias}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                padding: '4px 6px',
+                border: '1px solid var(--sf-border)',
+                borderRadius: 2,
+                fontSize: 10,
+              }}
+              data-testid={`apikey-row-${p.provider}-${k.alias}`}
+            >
+              <span
+                aria-hidden
+                style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: p.color,
+                  flexShrink: 0,
+                }}
+              />
+              <span
+                className="font-mono"
+                style={{ color: 'var(--sf-text)', fontWeight: 500, flexShrink: 0 }}
+                title={`${p.label} (${p.env_var_prefix})`}
+              >
+                {k.alias}
+              </span>
+              <span
+                className="font-mono"
+                style={{
+                  color: 'var(--sf-muted)',
+                  fontSize: 9,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  flex: 1,
+                }}
+              >
+                {k.masked_preview || '***'}
+              </span>
+              <button
+                type="button"
+                onClick={() => remove(p.provider, k.alias)}
+                disabled={busy}
+                aria-label={`删除 ${k.alias}`}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  color: 'var(--sf-muted)',
+                  cursor: 'pointer',
+                  fontSize: 11,
+                  lineHeight: 1,
+                }}
+                data-testid={`apikey-del-${p.provider}-${k.alias}`}
+              >
+                ✕
+              </button>
+            </div>
+          ))
+        ))}
+      </div>
+
       {!editing ? (
         <button
           type="button"
-          onClick={() => setEditing(true)}
+          onClick={() => {
+            setEditing(true);
+            onSelectProvider(selectedProvider);
+          }}
           className="sf-btn font-ui"
           style={{ padding: '4px 8px', fontSize: 11 }}
           data-testid="apikey-edit-btn"
         >
-          {hasApiKey ? t('sidebar.manageKeys') : t('sidebar.addKey')}
+          {hasApiKey ? '+ ' + t('sidebar.manageKeys') : '+ ' + t('sidebar.addKey')}
         </button>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <select
-            value={selectedProvider}
-            onChange={(e) => setSelectedProvider(e.target.value)}
-            className="font-ui"
-            style={{
-              padding: '4px 6px',
-              fontSize: 11,
-              border: '1px solid var(--sf-border)',
-              borderRadius: 2,
-              background: 'var(--sf-bg)',
-              color: 'var(--sf-text)',
-            }}
-          >
-            {providers.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}{p.has_key ? ' ✓' : ''}
-              </option>
-            ))}
-          </select>
+          <div style={{ display: 'flex', gap: 4 }}>
+            <select
+              value={selectedProvider}
+              onChange={(e) => onSelectProvider(e.target.value)}
+              className="font-ui"
+              style={{
+                flex: 1,
+                padding: '4px 6px',
+                fontSize: 11,
+                border: '1px solid var(--sf-border)',
+                borderRadius: 2,
+                background: 'var(--sf-bg)',
+                color: 'var(--sf-text)',
+              }}
+              data-testid="apikey-provider-select"
+            >
+              {providers.map((p) => {
+                const full = p.keys.length >= 2;
+                return (
+                  <option key={p.provider} value={p.provider}>
+                    {p.label} ({p.keys.length}/2){full ? ' · 已满' : ''}
+                  </option>
+                );
+              })}
+            </select>
+            <input
+              type="text"
+              value={aliasInput}
+              onChange={(e) => setAliasInput(e.target.value)}
+              placeholder="alias"
+              className="font-mono"
+              style={{
+                flex: 1,
+                padding: '4px 6px',
+                fontSize: 11,
+                border: '1px solid var(--sf-border)',
+                borderRadius: 2,
+                background: 'var(--sf-bg)',
+                color: 'var(--sf-text)',
+              }}
+              data-testid="apikey-alias-input"
+            />
+          </div>
           <input
             type="password"
             value={keyInput}
@@ -394,14 +555,16 @@ function ApiKeySection() {
               background: 'var(--sf-bg)',
               color: 'var(--sf-text)',
             }}
+            data-testid="apikey-key-input"
           />
           <div style={{ display: 'flex', gap: 4 }}>
             <button
               type="button"
               onClick={save}
-              disabled={busy || !keyInput.trim()}
+              disabled={busy || !keyInput.trim() || !aliasInput.trim()}
               className="sf-btn sf-btn-primary font-ui"
               style={{ flex: 1, padding: '4px 8px', fontSize: 11 }}
+              data-testid="apikey-save-btn"
             >
               {busy ? '...' : t('sidebar.save')}
             </button>
@@ -410,16 +573,21 @@ function ApiKeySection() {
               onClick={() => { setEditing(false); setKeyInput(''); setStatus(null); }}
               className="sf-btn font-ui"
               style={{ padding: '4px 8px', fontSize: 11 }}
+              data-testid="apikey-cancel-btn"
             >
               ✕
             </button>
           </div>
-          {status && (
-            <p className="font-mono" style={{ fontSize: 10, color: 'var(--sf-accent)', margin: 0 }}>
-              {status}
-            </p>
-          )}
         </div>
+      )}
+      {status && (
+        <p
+          className="font-mono"
+          style={{ fontSize: 10, color: status.startsWith('✓') ? 'var(--sf-accent)' : 'var(--sf-accent)', margin: 0 }}
+          data-testid="apikey-status"
+        >
+          {status}
+        </p>
       )}
     </div>
   );

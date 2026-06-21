@@ -31,8 +31,11 @@ def test_f7_health_version_from_file():
         f"/health version 应 = VERSION 文件内容 ({expected_version}), "
         f"实际 {data['version']}"
     )
-    # 当前文件应是 1.0.2 (R10.5.32 wave 5 升)
-    assert expected_version == "1.0.2"
+    # R10.5.59: VERSION 改成 R10.5.59 (release tag 同步). 后续大版本可能
+    # 改回 semver (R11+), 但 R10.5.x 系列保持 R10.5.xx 形式.
+    assert expected_version.startswith("R"), (
+        f"VERSION 应以 R 开头 (R10.5.x 系列), 实际 {expected_version!r}"
+    )
 
 
 def test_f7_health_detailed_version_from_file():

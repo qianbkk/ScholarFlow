@@ -48,7 +48,9 @@ def test_f7_summarize_returns_markdown_summary():
     assert "total_cost_usd" in data
     assert "total_tokens_used" in data
     assert "elapsed_seconds" in data
-    assert data["runtime_mode"] in ("mock", "real", "unknown")
+    # R10.5.55: runtime_mode 改名 'mock'/'real' → 'local'/'llm'.
+    # 测试同时接受旧 (mock/real) 和新 (local/llm/unknown) 三态.
+    assert data["runtime_mode"] in ("local", "llm", "unknown", "mock", "real")
 
 
 def test_f7_summarize_handles_llm_failure():

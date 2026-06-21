@@ -17,8 +17,10 @@ export type ThemeId = 'parchment' | 'kraft' | 'midnight' | 'sage';
 
 export interface ThemeSpec {
   id: ThemeId;
-  label: string;
+  label: string;        // Chinese name (default)
+  labelEn: string;      // R10.5.59b: English name (for i18n)
   description: string;
+  descriptionEn: string; // R10.5.59b: English description
   // OKLCH 三元组: bg / text / accent
   bg: string;
   text: string;
@@ -33,7 +35,9 @@ export const THEMES: Record<ThemeId, ThemeSpec> = {
   parchment: {
     id: 'parchment',
     label: '羊皮纸',
+    labelEn: 'Parchment',
     description: '暖白 · 烧橙',
+    descriptionEn: 'Warm cream · burnt orange',
     bg:       'oklch(96% 0.02 80)',
     text:     'oklch(22% 0.01 60)',
     muted:    'oklch(48% 0.01 60)',
@@ -45,7 +49,9 @@ export const THEMES: Record<ThemeId, ThemeSpec> = {
   kraft: {
     id: 'kraft',
     label: '牛皮纸',
+    labelEn: 'Kraft',
     description: '深米 · 橙红',
+    descriptionEn: 'Deep tan · red-orange',
     bg:       'oklch(93% 0.03 75)',
     text:     'oklch(22% 0.015 60)',
     muted:    'oklch(46% 0.02 60)',
@@ -57,7 +63,9 @@ export const THEMES: Record<ThemeId, ThemeSpec> = {
   midnight: {
     id: 'midnight',
     label: '午夜',
+    labelEn: 'Midnight',
     description: '深蓝 · 亮橙',
+    descriptionEn: 'Deep slate · bright orange',
     bg:       'oklch(18% 0.005 60)',
     text:     'oklch(94% 0.01 80)',
     muted:    'oklch(68% 0.01 60)',
@@ -69,7 +77,9 @@ export const THEMES: Record<ThemeId, ThemeSpec> = {
   sage: {
     id: 'sage',
     label: '鼠尾草',
+    labelEn: 'Sage',
     description: '绿灰 · 锈',
+    descriptionEn: 'Muted green · rust',
     bg:       'oklch(85% 0.02 100)',
     text:     'oklch(22% 0.015 60)',
     muted:    'oklch(46% 0.02 100)',

@@ -129,34 +129,33 @@ def test_f6_gc_cache_empty_returns_zero():
         _cache._DB_INITIALIZED = orig_init
 
 
-def test_f6_graphpanel_uses_viridis_color_palette():
-    """GraphPanel: 静态契约 — 节点颜色用 Viridis 色板 (色觉障碍友好).
+def test_f6_graphpage_uses_viridis_color_palette():
+    """GraphPage: 静态契约 — 节点颜色用 Viridis 色板 (色觉障碍友好).
 
+    R10.5.59 重命名: GraphPanel.tsx → GraphPage.tsx (R10.5.54 frontend rebuild).
     R10.5.34 修复: 增加 scaleLinear() 链接校验, 防止 R10.5.32 wave 6
     误删 d3.scaleLinear<string>() 调用链导致 CI TS2339 失败.
     """
-    src_path = ROOT / "frontend" / "src" / "components" / "GraphPanel.tsx"
+    src_path = ROOT / "frontend" / "src" / "components" / "GraphPage.tsx"
     src = src_path.read_text(encoding="utf-8")
     # Viridis 3-stop: #fde725 (黄) → #21918c (青) → #440154 (深紫)
-    assert "#fde725" in src, "R10.5.32 (wave 6): GraphPanel 应使用 Viridis 色板起点 #fde725"
-    assert "#440154" in src, "R10.5.32 (wave 6): GraphPanel 应使用 Viridis 色板终点 #440154"
+    assert "#fde725" in src, "R10.5.32 (wave 6): GraphPage 应使用 Viridis 色板起点 #fde725"
+    assert "#440154" in src, "R10.5.32 (wave 6): GraphPage 应使用 Viridis 色板终点 #440154"
     # 旧绿渐变 (色觉障碍不友好) 应该没了
     assert "'#ffffcc'" not in src, "R10.5.32 (wave 6): 旧 #ffffcc 绿渐变应已替换"
     assert "'#78c679'" not in src, "R10.5.32 (wave 6): 旧 #78c679 绿渐变应已替换"
-    # R10.5.34 静态契约: scaleLinear() 链不能漏 — R10.5.32 wave 6 改成
-    # `d3` + 直接 `.domain()` 漏 `.scaleLinear()`, CI 报 TS2339.
-    # 用 regex 匹配任意前导空白, 防止再犯.
+    # R10.5.34 静态契约: scaleLinear() 链不能漏
     import re
     pattern = re.compile(r"\.scaleLinear(?:<[^>]+>)?\(\)")
     assert pattern.search(src), (
-        "R10.5.34: GraphPanel color scale 必须有 .scaleLinear<...>() 调用, "
+        "R10.5.34: GraphPage color scale 必须有 .scaleLinear<...>() 调用, "
         "不能漏"
     )
 
 
-def test_f6_graphpanel_uses_alpha_decay_008():
-    """GraphPanel: 静态契约 — alphaDecay 0.08, 50+ 节点更快收敛."""
-    src_path = ROOT / "frontend" / "src" / "components" / "GraphPanel.tsx"
+def test_f6_graphpage_uses_alpha_decay_008():
+    """GraphPage: 静态契约 — alphaDecay 0.08, 50+ 节点更快收敛."""
+    src_path = ROOT / "frontend" / "src" / "components" / "GraphPage.tsx"
     src = src_path.read_text(encoding="utf-8")
     assert ".alphaDecay(0.08)" in src, (
         "R10.5.32 (wave 6): alphaDecay 应为 0.08 (旧 0.05 在 50+ 节点慢)"

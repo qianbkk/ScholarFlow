@@ -302,9 +302,23 @@ async def search(
     except HTTPException:
         # R10.5.1 V3-fix: 内部 try 已 raise HTTPException(504), 外层不能再转 500
         raise
+    except RuntimeError as e:
+        # R10.5.59b: query_decompose LLM 解析失败时禁止离线兜底, 主动 raise RuntimeError.
+        # 透传具体错误信息给前端 (用户能看到真实失败原因, 而非模糊 "内部服务错误").
+        msg = str(e)
+        logger.error(f"[/search] RuntimeError: {msg}", exc_info=True)
+        # RuntimeError 通常意味着上游 LLM/服务问题, 用 502 Bad Gateway 比 500 更准确.
+        if any(k in msg.lower() for k in ("llm", "provider", "api", "network", "timeout", "decompose")):
+            raise HTTPException(
+                status_code=502,
+                detail=f"上游服务异常: {msg[:200]}",
+            ) from e
+        raise HTTPException(status_code=500, detail=msg[:200]) from e
     except Exception as e:
         logger.error("[/search] error", exc_info=True)
-        raise HTTPException(status_code=500, detail="内部服务错误，请稍后重试")
+        # R10.5.59b: 把异常类名 + 简短信息透传, 用户能看到真实失败原因.
+        detail = f"{type(e).__name__}: {str(e)[:200]}" if str(e) else "未捕获的异常"
+        raise HTTPException(status_code=500, detail=f"内部服务错误 - {detail}")
     finally:
         if budget_reserved and return_amount > 0.01:
             try:
@@ -623,15 +637,31 @@ async def search_stream(
                     pass
                 # 重新 raise 让上层 cleanup 知道 task 被取消
                 raise
-            except Exception:
+            except RuntimeError as e:
+                # R10.5.59b: query_decompose LLM 失败时禁止兜底, 透传 RuntimeError.
+                logger.error(f"[/search/stream] RuntimeError: {e}", exc_info=True)
+                await _return_budget(budget)
+                return_amount = 0.0
+                msg = str(e)[:200]
+                try:
+                    yield _emit({
+                        "event": "error",
+                        "code": "upstream",
+                        "message": f"上游服务异常: {msg}",
+                    })
+                except Exception:
+                    pass
+                return
+            except Exception as e:
                 logger.error("[/search/stream] error", exc_info=True)
                 await _return_budget(budget)
                 return_amount = 0.0
+                detail = f"{type(e).__name__}: {str(e)[:200]}" if str(e) else "未捕获的异常"
                 try:
                     yield _emit({
                         "event": "error",
                         "code": "internal",
-                        "message": "内部服务错误，请稍后重试",
+                        "message": f"内部服务错误 - {detail}",
                     })
                 except Exception:
                     pass
