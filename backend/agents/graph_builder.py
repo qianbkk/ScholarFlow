@@ -17,6 +17,7 @@ import math
 import logging
 from collections import defaultdict
 from backend.models.state import SearchState
+from backend.agents._step_helper import _step  # R10.5.55
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +160,7 @@ def build_graph_node(state: SearchState) -> SearchState:
     # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
     ranked_full = (state.get("ranked_papers") or [])
     ranked = apply_graph_pruning(ranked_full, max_nodes=MAX_GRAPH_NODES)
+    _step(state, "build_graph", f"🔨 构建 {len(ranked)} nodes")
     node_id_set = {p.get("paper_id", "") for p in ranked if p.get("paper_id")}
 
     # ===== M-18: 计算 4 类边的边集合 =====
@@ -330,5 +332,11 @@ def build_graph_node(state: SearchState) -> SearchState:
             "pruned_count": max(0, len(ranked_full) - len(ranked)),
         },
     }
+
+    # R10.5.55: thinking log 报告 4 类边 + community detection.
+    link_type_counts_msg = " · ".join(f"{k}={v}" for k, v in link_type_counts.items())
+    _step(state, "build_graph", f"🔗 cites/co_cited/same_venue/author_overlap edges: {link_type_counts_msg}")
+    _step(state, "build_graph", f"🎨 community detection · {community_count} communities")
+    _step(state, "build_graph", f"✅ 图谱构建完成 · {len(nodes)} nodes · {len(links)} edges")
 
     return {**state, "citation_graph": graph, "status": "done"}

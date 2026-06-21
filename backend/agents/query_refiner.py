@@ -10,6 +10,7 @@ from backend.utils.sanitize import wrap_user_input, isolation_system_suffix  # V
 from backend.utils.text_utils import extract_json_object as _extract_json_object
 # R10.5.46: prune_state 抽到 _state_utils.py 共享, search_node 入口也调.
 from backend.agents._state_utils import prune_state
+from backend.agents._step_helper import _step  # R10.5.55
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,7 @@ async def query_refine_node(state: SearchState) -> SearchState:
 
     # R10.5.22 + R10.5.46: 入口先裁剪 state, 防止本 iter 读到大膨胀 list
     state = prune_state(state)
+    _step(state, "refine", f"🔍 分析 top 5 gap · iter={state.get('iteration', 0)}")
 
     ranked = state.get("ranked_papers") or []
     iteration = state.get("iteration", 0)
@@ -91,6 +93,37 @@ JSON output:
 
     logger.info(f"[QueryRefiner] iter={iteration+1} | new_queries={len(new_queries)}")
 
+    # R10.5.59: LLM 模式放宽阈值 — 若本轮 ranked < paper_min 且未放宽,
+    # 把 score_threshold 从 8.0 降到 7.0, 标记 score_relaxed=True.
+    # 下一轮 rank_node 用 7.0 筛选; 再不够宁可降低数量, 绝不 mock fallback.
+    runtime_mode = state.get("runtime_mode") or "llm"
+    paper_min = int(state.get("paper_min") or 5)
+    cur_threshold = float(state.get("score_threshold") or 0.0)
+    already_relaxed = bool(state.get("score_relaxed", False))
+    ranked_count = len(ranked)
+    new_threshold = cur_threshold
+    new_relaxed = already_relaxed
+    if (
+        runtime_mode == "llm"
+        and cur_threshold >= 8.0
+        and not already_relaxed
+        and ranked_count < paper_min
+    ):
+        new_threshold = 7.0
+        new_relaxed = True
+        _step(
+            state,
+            "refine",
+            f"📉 放宽阈值 8.0 → 7.0 (本轮 ranked={ranked_count} < paper_min={paper_min})",
+        )
+        logger.info(
+            f"[QueryRefiner] relax score_threshold 8.0 → 7.0 "
+            f"(ranked={ranked_count} < paper_min={paper_min})"
+        )
+
+    _step(state, "refine", f"🧠 LLM 生成 {len(new_queries)} new sub_queries")
+    _step(state, "refine", f"↻ 启动 iteration {iteration + 1}")
+
     return {
         **state,
         **cost_update,
@@ -98,4 +131,6 @@ JSON output:
         "iteration": iteration + 1,
         "status": "checking_refine",
         "top5_summary_cache": safe_top5,
+        "score_threshold": new_threshold,
+        "score_relaxed": new_relaxed,
     }

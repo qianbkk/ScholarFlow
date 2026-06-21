@@ -22,6 +22,9 @@ from backend.utils.scrub import scrub_sensitive  # VULN-004
 from backend.utils.async_helpers import bounded_gather  # VULN-004
 # R10.5.46 (P1): 共享 state 裁剪. search_node 入口也调, 第一次 pass 也有 cap.
 from backend.agents._state_utils import prune_state
+# R10.5.55: thinking step helper. 每个关键步骤 push 到 state._step_queue,
+# SSE 路由流式 emit 给前端 PipelineProgress 渲染.
+from backend.agents._step_helper import _step
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +80,8 @@ async def search_node(state: SearchState) -> SearchState:
     prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
 
     sub_queries = state.get("sub_queries") or []
+    # R10.5.55: 流式 thinking log — 每个 phase emit 一条 _step() 给前端.
+    _step(state, "search", f"🔍 启动多源检索 · {len(sub_queries)} sub_queries · 5 sources")
     if not sub_queries:
         return {
             **state,
@@ -102,6 +107,10 @@ async def search_node(state: SearchState) -> SearchState:
             tasks_with_source.append((source_name, _throttled_search(coro, batch_semaphore)))
     tasks = [t for _, t in tasks_with_source]
     source_names = [n for n, _ in tasks_with_source]
+    # R10.5.55: 按 source 分别 _step() 报告检索状态.
+    unique_sources = sorted(set(source_names))
+    for src in unique_sources:
+        _step(state, "search", f"📡 检索 {src} · {source_names.count(src)} 个并行请求")
 
     # R10.5 Fix-Timeout: per-gather 60s 上限, 防慢响应累计 timeout.
     # 60s 截断: 部分 sub_queries 拿不到结果就用空 list, 不阻塞 pipeline.
@@ -125,6 +134,20 @@ async def search_node(state: SearchState) -> SearchState:
     # 过滤无摘要论文
     all_papers = [p for p in all_papers if p.abstract and len(p.abstract) > 80]
     unique_papers = deduplicate_papers(all_papers)
+    _step(state, "search", f"✅ 检索完成 · {len(unique_papers)} unique papers")
+
+    # R10.5.55: LLM 检索模式不允许降级到 mock/fallback 数据. 过滤掉
+    # is_fallback=True 的论文, 只保留真实学术 API 返回的.
+    # 'local' 模式保留 fallback (用于离线演示 + API 不可用时降级).
+    runtime_mode = state.get("runtime_mode") or "llm"
+    if runtime_mode == "llm":
+        before = len(unique_papers)
+        unique_papers = [p for p in unique_papers if not getattr(p, "is_fallback", False)]
+        if before != len(unique_papers):
+            logger.info(
+                f"[search_node] LLM mode: dropped {before - len(unique_papers)} "
+                f"fallback papers, kept {len(unique_papers)} real"
+            )
 
     # R10.5.14 (P0-B): 应用 query_decomposer 抽出的结构化约束 (year_range / venues).
     # SS/OA 的 search endpoint 都不支持精确 venue 过滤, 客户端二次过滤最稳.

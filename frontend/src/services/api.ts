@@ -204,6 +204,10 @@ export interface AuthResponse {
   display_name: string;
   api_key: string;
   open_mode: boolean;
+  // R10.5.25 (深度审计 §5): 后端 register/login/revoke 返 key_rotated 字段,
+  // true 表示"已有用户 key 轮换" (旧 key 立即失效), false 表示"新用户首次".
+  // AuthDialog 据此显示 "欢迎回来 + 你的 key 已自动轮换" 提示.
+  key_rotated?: boolean;
 }
 
 export interface UserInfo {
@@ -213,27 +217,130 @@ export interface UserInfo {
   open_mode: boolean;
 }
 
-export async function registerOrLogin(
+// R10.5.55: register / login / revoke 三个独立函数. 替代旧的 registerOrLogin
+// (旧版永远打 /auth/login 拿 key, 不区分新用户和老用户, 也无 revoke 端点).
+
+export class AuthError extends Error {
+  status: number;
+  code: 'email_not_registered' | 'wrong_password' | 'already_registered' | 'weak_password' | 'invalid_email' | 'open_mode' | 'unknown';
+  constructor(message: string, status: number, code: AuthError['code'] = 'unknown') {
+    super(message);
+    this.status = status;
+    this.code = code;
+  }
+}
+
+function _mapAuthError(status: number, detail: string, mode: 'register' | 'login'): AuthError {
+  const lower = detail.toLowerCase();
+  if (lower.includes('已注册') || lower.includes('已存在')) {
+    return new AuthError(detail, status, 'already_registered');
+  }
+  if (lower.includes('未注册')) {
+    return new AuthError(detail, 404, 'email_not_registered');
+  }
+  if (lower.includes('密码错误')) {
+    return new AuthError(detail, 401, 'wrong_password');
+  }
+  if (lower.includes('密码至少')) {
+    return new AuthError(detail, 400, 'weak_password');
+  }
+  if (lower.includes('email 格式') || lower.includes('@')) {
+    return new AuthError(detail, 400, 'invalid_email');
+  }
+  if (lower.includes('open_mode')) {
+    return new AuthError(detail, 400, 'open_mode');
+  }
+  return new AuthError(detail, status);
+}
+
+export async function register(
   email: string,
+  password: string = '',
   displayName: string = ''
 ): Promise<AuthResponse> {
-  const resp = await fetch(`${API_BASE}/auth/login`, {
+  const resp = await fetch(`${API_BASE}/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, display_name: displayName }),
+    credentials: 'include',
+    body: JSON.stringify({ email, password, display_name: displayName }),
   });
   if (!resp.ok) {
-    let detail = 'login failed';
+    let detail = '注册失败';
     try { detail = (await resp.json()).detail || detail; } catch {}
-    throw new Error(detail);
+    throw _mapAuthError(resp.status, detail, 'register');
   }
   const data: AuthResponse = await resp.json();
   setApiKey(data.api_key);
   return data;
 }
 
-export function logout(): void {
+export async function login(
+  email: string,
+  password: string = '',
+  displayName: string = ''
+): Promise<AuthResponse> {
+  const resp = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ email, password, display_name: displayName }),
+  });
+  if (!resp.ok) {
+    let detail = '登录失败';
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw _mapAuthError(resp.status, detail, 'login');
+  }
+  const data: AuthResponse = await resp.json();
+  setApiKey(data.api_key);
+  return data;
+}
+
+// R10.5.55: 用户自助轮换 API key (登录后才有意义)
+export async function revokeKey(): Promise<AuthResponse> {
+  const key = getApiKey();
+  if (!key) throw new AuthError('Not signed in', 401, 'unknown');
+  const resp = await fetch(`${API_BASE}/auth/revoke`, {
+    method: 'POST',
+    headers: { 'X-API-Key': key, 'Content-Type': 'application/json' },
+  });
+  if (!resp.ok) {
+    let detail = '轮换 key 失败';
+    try { detail = (await resp.json()).detail || detail; } catch {}
+    throw new AuthError(detail, resp.status);
+  }
+  const data: AuthResponse = await resp.json();
+  setApiKey(data.api_key);  // 更新 sessionStorage
+  return data;
+}
+
+// R10.5.55: logout 改成 async, 先调 /auth/logout 让服务端删 session, 再清本地.
+// 旧实现只 setApiKey(null), 服务端 session 行泄漏.
+export async function logout(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+  } catch {
+    // 服务端不可达时仍清本地, 用户体感一致
+  }
   setApiKey(null);
+}
+
+// 保留旧 registerOrLogin 作为 fallback (向后兼容 Phase A 之前的代码路径)
+export async function registerOrLogin(
+  email: string,
+  displayName: string = ''
+): Promise<AuthResponse> {
+  // 先试 register, 已注册则 fallback 到 login
+  try {
+    return await register(email, '', displayName);
+  } catch (e: any) {
+    if (e?.code === 'already_registered') {
+      return await login(email, '', displayName);
+    }
+    throw e;
+  }
 }
 
 export async function fetchMe(): Promise<UserInfo | null> {

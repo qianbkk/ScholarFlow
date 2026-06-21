@@ -92,3 +92,22 @@ class SearchState(TypedDict):
     # 0 结果: streak +1; 有结果: streak = 0.
     # router.should_refine 在 streak >= 2 时强制 synthesize (避免 3 次空迭代).
     empty_result_streak: int
+
+    # R10.5.53 (P1 UI 反馈): 节点级思考日志, 喂前端 CockpitDashboard "Thought Stream".
+    # query_decompose / query_refiner / rank / synthesize / critic 等 LLM 节点在
+    # 调 LLM 前/中/后把"思考步骤" append 到本字段对应 node key 列表.
+    # search.py SSE 流在 node_chain_end 时 emit `node_thinking` 事件推前端.
+    # 不参与 LangGraph state 路由决策, 仅作 observability.
+    thinking_log: Optional[dict]
+
+    # R10.5.55: 用户运行时模式. 'llm' (LLM 检索模式, 不允许 mock fallback)
+    # 或 'local' (本地模式, 允许 mock fallback 用于离线演示).
+    # 由 /search 入口从 SearchRequest.runtime_mode 注入, agent 节点透传读取.
+    # SearchResponse.runtime_mode 也回传这个值, 前端根据它显示"真实/本地"badge.
+    runtime_mode: Optional[str]
+
+    # R10.5.55: 流式 thinking 日志队列. 每个 agent 节点的 _step() 调用把消息
+    # append 到本字段 (list[str]), graph.astream 流式返回 SSE 时增量 emit.
+    # _step_queue 在节点完成时合并进 thinking_log 并清空, 保持原有 observability.
+    # 这是 LangGraph 0.2+ astream stream_mode="updates" 的标准 pattern.
+    _step_queue: Optional[list]

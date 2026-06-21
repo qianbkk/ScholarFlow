@@ -16,8 +16,6 @@ export const STORAGE_KEYS = {
   formState: 'sf-form-state',
   // recent searches (QueryPanel popover)
   recentSearches: 'sf-recent-searches',
-  // 升级公告 sessionStorage 已阅 (R10.5.29 R10_5_28Banner)
-  upgradeBannerDismissed: 'sf-r10_5_28-banner-dismissed',
   // R10.5.30 升级日志 modal 已阅
   changelogDismissed: 'sf-changelog-dismissed-30',
   // R10.5.40 (Agent 1): binary dark/light mode toggle. 跟 4 套 Editorial 主题
@@ -26,6 +24,11 @@ export const STORAGE_KEYS = {
   // R10.5.40 (Agent 1): 3-col / focus 单栏布局切换.
   // 持久化到 localStorage, key = 'sf-layout-mode'.
   layoutMode: 'sf-layout-mode',
+  // R10.5.54 (frontend rebuild): runtime mode (mock vs real).
+  // Was in App.tsx localStorage key 'sf-runtime-mode' — promoted to central registry.
+  runtimeMode: 'sf-runtime-mode',
+  // R10.5.55: i18n locale ('zh' | 'en'), 持久化到 localStorage.
+  locale: 'sf-locale',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

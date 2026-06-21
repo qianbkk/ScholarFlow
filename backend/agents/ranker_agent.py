@@ -23,6 +23,7 @@ from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # R10.5.51 (/simplify): 用 _schemas 共享 Pydantic + 1 retry helper
 from backend.agents._schemas import RankBatchOutput, parse_with_retry_async
+from backend.agents._step_helper import _step  # R10.5.55
 from backend.utils.text_utils import (
     extract_json_object as _extract_json_object,
     sanitize_paper_content,  # Fix-X6: 防 arXiv 论文摘要间接 prompt 注入
@@ -198,6 +199,7 @@ async def rank_node(state: SearchState) -> SearchState:
     """三维评分：相关性(LLM) × 权威性(规则+venue) × 一致性(LLM)。"""
 
     papers_dicts = state.get("expanded_papers") or state.get("raw_papers") or []
+    _step(state, "rank", f"📊 准备评分 · {len(papers_dicts)} papers")
     papers: list[Paper] = []
     for d in papers_dicts:
         try:
@@ -353,14 +355,40 @@ async def rank_node(state: SearchState) -> SearchState:
             p.final_score = 0.0
 
     papers.sort(key=lambda p: p.final_score, reverse=True)
-    # FIX: 统一 ranked 论文数为 25 — 与 synthesis / graph_builder 的 [:25] 截断对齐
-    # 旧 [:30] 导致 21-30 论文在 report + graph 中被丢弃（暗物质）。
-    ranked = papers[:25]
+
+    # R10.5.59: LLM 模式严格筛选 final_score >= 8 (真实有效文献).
+    # 若不足, 标记 score_relaxed 一次, 下一轮放宽到 >= 7.
+    # 若放宽后仍不够, **降低论文数量绝不 mock fallback**.
+    runtime_mode = state.get("runtime_mode") or "llm"
+    paper_min = int(state.get("paper_min") or 5)
+    paper_max = int(state.get("paper_max") or 10)
+    score_threshold = float(state.get("score_threshold") or 0.0)
+    already_relaxed = bool(state.get("score_relaxed", False))
+
+    if runtime_mode == "llm" and score_threshold > 0:
+        before = len(papers)
+        papers = [p for p in papers if (p.final_score or 0.0) >= score_threshold]
+        filtered_out = before - len(papers)
+        _step(state, "rank", f"🎯 LLM 严格筛 · final_score ≥ {score_threshold:.1f} · 命中 {len(papers)}/{before}")
+        if len(papers) < paper_min and not already_relaxed:
+            # 不够, 触发放宽: 下一轮用 7.0 + 强制重新 refine
+            _step(state, "rank", f"⚠️ 命中不足 {paper_min} · 标记放宽到 ≥ 7.0 触发下一次迭代")
+            logger.info(
+                f"[rank_node] LLM strict: only {len(papers)} papers pass score >= "
+                f"{score_threshold}, will relax to 7.0 in next iteration"
+            )
+        elif len(papers) < paper_min:
+            # 已经放宽过, 还是不够. 接受当前数量 (宁可低于 paper_min, 也绝不 mock fallback).
+            _step(state, "rank", f"⚠️ 放宽后仍不足 {paper_min} · 接受 {len(papers)} papers (不 mock)")
+
+    # 应用 paper_max 上限 (用户可滑 3-30)
+    ranked = papers[:paper_max]
 
     top_score = ranked[0].final_score if ranked else 0
     logger.info(
         f"[RankerAgent] Ranked {len(ranked)} papers, top_score={top_score:.2f}, "
-        f"cost=${total_cost:.4f}, n_batches_combined={len(combined_batches)}"
+        f"cost=${total_cost:.4f}, n_batches_combined={len(combined_batches)}, "
+        f"runtime_mode={runtime_mode}, score_threshold={score_threshold}"
     )
 
     cost_update = merge_usage_into_state(state, {
@@ -378,6 +406,10 @@ async def rank_node(state: SearchState) -> SearchState:
     # 供 router 计算"本轮真实增量" (iter_delta = cost_now - prev_iter_cost_usd)。
     # 注: 真正的 iter-START 值由 search_agent 入口写入 (透传 prev_iter_cost 链),
     #     这里再写一次作为 defense-in-depth。
+    _step(state, "rank", f"✅ 排序完成 · top: {ranked[0].title[:30]} (★{ranked[0].final_score:.1f})" if ranked else "✅ 排序完成 · 0 papers")
+
+    # R10.5.59: 透传 LLM 模式放宽信号 + 当前 score_threshold 到 next iter.
+    # 若本轮命中 < paper_min 且未放宽, query_refiner 会把 score_threshold 降到 7.0.
     return {
         **state,
         **cost_update,

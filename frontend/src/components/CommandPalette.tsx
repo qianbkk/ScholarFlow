@@ -1,447 +1,250 @@
 /**
- * P1: 命令面板 (Command Palette)
- * 灵感来自 FanBox 的快捷操作菜单
- * 
- * 功能:
- * - Cmd+K / Ctrl+K 呼出
- * - 指令如/summarize、/critique、/export bibtex等
- * - 减少鼠标操作，提升极客体验
+ * CommandPalette — R10.5.54 Phase 4 完整实现
+ *
+ * Cmd+K 模态 + fuzzy filter + 键盘导航.
+ * 命令注册表在 commands.ts, App 注入.
  */
-import { useState, useEffect, useCallback, useMemo } from 'react';
-
-interface Command {
-  id: string;
-  label: string;
-  description: string;
-  shortcut?: string;
-  category: 'general' | 'filter' | 'export' | 'view' | 'agent';
-  action: () => void;
-}
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useStore, actions } from '../store/useStore';
+import { buildCommands, type Command } from '../commands';
+import { useT } from '../i18n';
 
 interface Props {
-  isOpen: boolean;
-  onClose: () => void;
-  onExecuteCommand?: (commandId: string) => void;
+  cycleTheme: () => void;
+  cancelSearch: () => void;
 }
 
-export function CommandPalette({ isOpen, onClose, onExecuteCommand }: Props) {
-  const [searchQuery, setSearchQuery] = useState('');
-  const [selectedIndex, setSelectedIndex] = useState(0);
+function fuzzyMatch(query: string, target: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  const t = target.toLowerCase();
+  let i = 0;
+  for (const ch of t) {
+    if (ch === q[i]) i++;
+    if (i === q.length) return true;
+  }
+  return false;
+}
 
-  // 定义可用命令
-  const commands: Command[] = useMemo(() => [
-    {
-      id: 'summarize',
-      label: '/summarize',
-      description: '快速生成当前文献摘要',
-      shortcut: '⌘S',
-      category: 'agent',
-      action: () => console.log('Executing: summarize'),
-    },
-    {
-      id: 'critique',
-      label: '/critique',
-      description: '触发 Critic Agent 评审选中论文',
-      shortcut: '⌘C',
-      category: 'agent',
-      action: () => console.log('Executing: critique'),
-    },
-    {
-      id: 'compare',
-      label: '/compare',
-      description: '开启分屏对比模式',
-      shortcut: '⌘D',
-      category: 'view',
-      action: () => console.log('Executing: compare'),
-    },
-    {
-      id: 'export-bibtex',
-      label: '/export bibtex',
-      description: '导出参考文献为 BibTeX 格式',
-      category: 'export',
-      action: () => console.log('Executing: export bibtex'),
-    },
-    {
-      id: 'export-ris',
-      label: '/export ris',
-      description: '导出参考文献为 RIS 格式',
-      category: 'export',
-      action: () => console.log('Executing: export ris'),
-    },
-    {
-      id: 'export-csv',
-      label: '/export csv',
-      description: '导出文献元数据为 CSV',
-      category: 'export',
-      action: () => console.log('Executing: export csv'),
-    },
-    {
-      id: 'filter-rct',
-      label: '/filter rct',
-      description: '快速过滤 RCT 研究',
-      category: 'filter',
-      action: () => console.log('Executing: filter rct'),
-    },
-    {
-      id: 'filter-recent',
-      label: '/filter recent',
-      description: '只看近 3 年文献',
-      category: 'filter',
-      action: () => console.log('Executing: filter recent'),
-    },
-    {
-      id: 'filter-high-quality',
-      label: '/filter quality',
-      description: '只看高质量论文 (评分≥8)',
-      category: 'filter',
-      action: () => console.log('Executing: filter quality'),
-    },
-    {
-      id: 'toggle-dark-mode',
-      label: '/toggle theme',
-      description: '切换深色/浅色主题',
-      shortcut: '⌘T',
-      category: 'general',
-      action: () => console.log('Executing: toggle theme'),
-    },
-    {
-      id: 'reset-filters',
-      label: '/reset filters',
-      description: '重置所有过滤器',
-      category: 'filter',
-      action: () => console.log('Executing: reset filters'),
-    },
-    {
-      id: 'expand-graph',
-      label: '/expand graph',
-      description: '扩展当前图谱节点',
-      category: 'view',
-      action: () => console.log('Executing: expand graph'),
-    },
-    {
-      id: 'focus-query',
-      label: '/focus query',
-      description: '聚焦到查询输入框',
-      shortcut: '⌘L',
-      category: 'general',
-      action: () => console.log('Executing: focus query'),
-    },
-  ], []);
+export function CommandPalette({ cycleTheme, cancelSearch }: Props) {
+  const open = useStore((s) => s.commandPaletteOpen);
+  const loading = useStore((s) => s.loading);
+  const t = useT();
+  const [query, setQuery] = useState('');
+  const [sel, setSel] = useState(0);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
-  // 过滤命令
-  const filteredCommands = useMemo(() => {
-    if (!searchQuery.trim()) return commands;
-    
-    const query = searchQuery.toLowerCase();
-    return commands.filter(cmd =>
-      cmd.label.toLowerCase().includes(query) ||
-      cmd.description.toLowerCase().includes(query) ||
-      cmd.category.includes(query)
+  const cmds: Command[] = useMemo(() => buildCommands({
+    goToView: actions.setView,
+    openSettings: actions.openSettingsDrawer,
+    cycleTheme,
+    cancelSearch,
+    openAuth: actions.openAuthDialog,
+    openChangelog: actions.openChangelog,
+    isLoading: loading,
+    t,
+  }), [loading, cycleTheme, cancelSearch, t]);
+
+  const filtered = useMemo(() => {
+    if (!query.trim()) return cmds;
+    return cmds.filter((c) =>
+      fuzzyMatch(query, c.label) ||
+      fuzzyMatch(query, c.id) ||
+      (c.keywords || []).some((k) => fuzzyMatch(query, k))
     );
-  }, [commands, searchQuery]);
+  }, [cmds, query]);
 
-  // 按类别分组
-  const groupedCommands = useMemo(() => {
-    const groups: Record<string, Command[]> = {};
-    filteredCommands.forEach(cmd => {
-      if (!groups[cmd.category]) {
-        groups[cmd.category] = [];
-      }
-      groups[cmd.category].push(cmd);
-    });
-    return groups;
-  }, [filteredCommands]);
-
-  // 键盘导航
   useEffect(() => {
-    if (!isOpen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        setSelectedIndex(prev => 
-          prev < filteredCommands.length - 1 ? prev + 1 : 0
-        );
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        setSelectedIndex(prev => 
-          prev > 0 ? prev - 1 : filteredCommands.length - 1
-        );
-      } else if (e.key === 'Enter') {
-        e.preventDefault();
-        const selected = filteredCommands[selectedIndex];
-        if (selected) {
-          selected.action();
-          onExecuteCommand?.(selected.id);
-          onClose();
-        }
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        onClose();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filteredCommands, selectedIndex, onClose, onExecuteCommand]);
-
-  // 全局快捷键监听
-  useEffect(() => {
-    const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      const modifierKey = isMac ? e.metaKey : e.ctrlKey;
-      
-      if (modifierKey && e.key === 'k') {
-        e.preventDefault();
-        // 如果已打开则关闭，否则不处理（由父组件控制）
-        if (isOpen) {
-          onClose();
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleGlobalKeyDown);
-    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isOpen, onClose]);
-
-  // 重置搜索和选择索引
-  useEffect(() => {
-    if (isOpen) {
-      setSearchQuery('');
-      setSelectedIndex(0);
+    if (open) {
+      setQuery('');
+      setSel(0);
+      requestAnimationFrame(() => inputRef.current?.focus());
     }
-  }, [isOpen]);
+  }, [open]);
 
-  if (!isOpen) return null;
+  useEffect(() => {
+    if (sel >= filtered.length) setSel(0);
+  }, [filtered.length, sel]);
 
-  const categories: Record<string, { label: string; icon: string }> = {
-    general: { label: '通用', icon: '⚙️' },
-    filter: { label: '过滤', icon: '🔍' },
-    export: { label: '导出', icon: '📤' },
-    view: { label: '视图', icon: '👁️' },
-    agent: { label: 'AI Agent', icon: '🤖' },
+  if (!open) return null;
+
+  const run = (c: Command) => {
+    c.run();
+    actions.closeCommandPalette();
   };
 
-  let globalIndex = 0;
+  const onKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setSel((s) => Math.min(filtered.length - 1, s + 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setSel((s) => Math.max(0, s - 1));
+    } else if (e.key === 'Enter' && filtered[sel]) {
+      e.preventDefault();
+      run(filtered[sel]);
+    }
+  };
+
+  // 按 group 分组
+  const groups = useMemo(() => {
+    const m = new Map<string, Command[]>();
+    for (const c of filtered) {
+      const g = c.group || '';
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(c);
+    }
+    return Array.from(m.entries());
+  }, [filtered]);
+
+  // 把 sel 转成 flat 索引用于高亮
+  let runningIdx = -1;
 
   return (
-    <div className="command-palette-overlay" style={{
-      position: 'fixed',
-      inset: 0,
-      backgroundColor: 'rgba(0, 0, 0, 0.6)',
-      backdropFilter: 'blur(4px)',
-      zIndex: 9999,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-    }} onClick={onClose}>
-      <div className="command-palette" style={{
-        width: '560px',
-        maxHeight: '70vh',
-        backgroundColor: 'var(--sf-bg-elev)',
-        borderRadius: '12px',
-        border: '1px solid var(--sf-border)',
-        boxShadow: '0 24px 48px rgba(0, 0, 0, 0.4)',
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100,
         display: 'flex',
-        flexDirection: 'column',
-        overflow: 'hidden',
-      }} onClick={e => e.stopPropagation()}>
-        {/* 搜索输入框 */}
-        <div className="command-input-wrapper" style={{
-          padding: '16px',
-          borderBottom: '1px solid var(--sf-border)',
-        }}>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="输入命令或搜索... (例如：/export, /filter)"
-            autoFocus
-            style={{
-              width: '100%',
-              padding: '12px 16px',
-              fontSize: '14px',
-              backgroundColor: 'var(--sf-bg)',
-              border: '1px solid var(--sf-border)',
-              borderRadius: '8px',
-              color: 'var(--sf-text)',
-              outline: 'none',
-              fontFamily: 'monospace',
-            }}
-          />
-          <div style={{
-            marginTop: '8px',
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            fontSize: '11px',
-            color: 'var(--sf-muted)',
-          }}>
-            <span>💡 提示：使用 ↑↓ 导航，Enter 执行，Esc 关闭</span>
-            <span style={{ fontFamily: 'monospace' }}>⌘K 关闭</span>
-          </div>
-        </div>
+        alignItems: 'flex-start',
+        justifyContent: 'center',
+        paddingTop: 96,
+        backgroundColor: 'rgba(0, 0, 0, 0.4)',
+      }}
+      onClick={actions.closeCommandPalette}
+    >
+      <div
+        className="sf-fade-in"
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: 480,
+          maxWidth: 'calc(100vw - 48px)',
+          backgroundColor: 'var(--sf-bg)',
+          border: '1px solid var(--sf-border)',
+          borderRadius: 4,
+          padding: 0,
+          maxHeight: '70vh',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+        }}
+      >
+        <input
+          ref={inputRef}
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={onKey}
+          placeholder="Type a command…"
+          aria-label="Command filter"
+          className="font-ui"
+          style={{
+            width: '100%',
+            padding: '14px 16px',
+            border: 'none',
+            borderBottom: '1px solid var(--sf-border)',
+            backgroundColor: 'transparent',
+            color: 'var(--sf-text)',
+            fontSize: 15,
+            outline: 'none',
+          }}
+        />
 
-        {/* 命令列表 */}
-        <div className="command-list" style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '8px 0',
-        }}>
-          {Object.entries(groupedCommands).map(([category, cmds]) => (
-            <div key={category} className="command-group">
-              {/* 组标题 */}
-              <div style={{
-                padding: '8px 16px',
-                fontSize: '11px',
-                fontWeight: '600',
+        <div style={{ flex: 1, overflowY: 'auto' }}>
+          {filtered.length === 0 && (
+            <p
+              className="font-body"
+              style={{
+                padding: '24px',
+                fontSize: 13,
                 color: 'var(--sf-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}>
-                <span>{categories[category]?.icon}</span>
-                <span>{categories[category]?.label}</span>
-                <span style={{
-                  marginLeft: 'auto',
-                  fontSize: '10px',
-                  opacity: 0.7,
-                }}>
-                  {cmds.length}
-                </span>
-              </div>
-
-              {/* 命令项 */}
-              {cmds.map((cmd) => {
-                const index = globalIndex++;
-                const isSelected = index === selectedIndex;
-
-                return (
-                  <button
-                    key={cmd.id}
-                    onClick={() => {
-                      cmd.action();
-                      onExecuteCommand?.(cmd.id);
-                      onClose();
-                    }}
-                    onMouseEnter={() => setSelectedIndex(index)}
-                    style={{
-                      width: '100%',
-                      padding: '10px 16px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '12px',
-                      background: 'none',
-                      border: 'none',
-                      cursor: 'pointer',
-                      textAlign: 'left',
-                      backgroundColor: isSelected ? 'var(--sf-accent)' : 'transparent',
-                      color: isSelected ? 'white' : 'var(--sf-text)',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    {/* 命令标签 */}
-                    <span style={{
-                      fontFamily: 'monospace',
-                      fontSize: '13px',
-                      fontWeight: '600',
-                      minWidth: '120px',
-                    }}>
-                      {cmd.label}
-                    </span>
-
-                    {/* 命令描述 */}
-                    <span style={{
-                      fontSize: '12px',
-                      opacity: isSelected ? 0.9 : 1,
-                      flex: 1,
-                    }}>
-                      {cmd.description}
-                    </span>
-
-                    {/* 快捷键 */}
-                    {cmd.shortcut && (
-                      <span style={{
-                        fontSize: '10px',
-                        fontFamily: 'monospace',
-                        padding: '2px 6px',
-                        backgroundColor: isSelected ? 'rgba(255,255,255,0.2)' : 'var(--sf-bg)',
-                        borderRadius: '4px',
-                        opacity: isSelected ? 1 : 0.7,
-                      }}>
-                        {cmd.shortcut}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+                fontStyle: 'italic',
+                margin: 0,
+              }}
+            >
+              no command matches
+            </p>
+          )}
+          {groups.map(([g, list]) => (
+            <div key={g || '_'} style={{ padding: '8px 0' }}>
+              {g && (
+                <div
+                  className="font-mono"
+                  style={{
+                    padding: '4px 16px',
+                    fontSize: 10,
+                    color: 'var(--sf-muted)',
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {g}
+                </div>
+              )}
+              <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                {list.map((c) => {
+                  runningIdx++;
+                  const isSel = runningIdx === sel;
+                  return (
+                    <li
+                      key={c.id}
+                      onClick={() => run(c)}
+                      style={{
+                        position: 'relative',
+                        padding: '8px 16px',
+                        cursor: 'pointer',
+                        backgroundColor: isSel ? 'var(--sf-surface-alt)' : 'transparent',
+                      }}
+                      onMouseEnter={() => setSel(cmds.indexOf(c))}
+                    >
+                      {isSel && (
+                        <span
+                          aria-hidden
+                          style={{
+                            position: 'absolute',
+                            left: 0,
+                            top: 0,
+                            bottom: 0,
+                            width: 2,
+                            backgroundColor: 'var(--sf-accent)',
+                          }}
+                        />
+                      )}
+                      <div className="font-ui" style={{ fontSize: 14, color: 'var(--sf-text)' }}>
+                        {c.label}
+                      </div>
+                      {c.hint && (
+                        <div className="font-body" style={{ fontSize: 12, color: 'var(--sf-muted)' }}>
+                          {c.hint}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
           ))}
-
-          {filteredCommands.length === 0 && (
-            <div style={{
-              padding: '40px 16px',
-              textAlign: 'center',
-              color: 'var(--sf-muted)',
-              fontSize: '13px',
-            }}>
-              <div style={{ fontSize: '24px', marginBottom: '8px' }}>🔍</div>
-              <div>未找到匹配的命令</div>
-              <div style={{ fontSize: '11px', marginTop: '4px', opacity: 0.8 }}>
-                尝试搜索其他关键词，如 "export", "filter", "summarize"
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* 底部状态栏 */}
-        <div className="command-footer" style={{
-          padding: '8px 16px',
-          borderTop: '1px solid var(--sf-border)',
-          backgroundColor: 'var(--sf-bg)',
-          fontSize: '10px',
-          color: 'var(--sf-muted)',
-          display: 'flex',
-          justifyContent: 'space-between',
-        }}>
-          <span>共 {filteredCommands.length} 个命令</span>
-          <span>ScholarFlow Command Palette v1.0</span>
-        </div>
+        <footer
+          className="font-mono"
+          style={{
+            padding: '8px 16px',
+            fontSize: 10,
+            color: 'var(--sf-muted)',
+            borderTop: '1px solid var(--sf-border)',
+            display: 'flex',
+            gap: 12,
+          }}
+        >
+          <span>↑↓ navigate</span>
+          <span>↵ run</span>
+          <span>esc close</span>
+        </footer>
       </div>
     </div>
   );
-}
-
-// Hook: 使用命令面板
-export function useCommandPalette() {
-  const [isOpen, setIsOpen] = useState(false);
-
-  const open = useCallback(() => setIsOpen(true), []);
-  const close = useCallback(() => setIsOpen(false), []);
-  const toggle = useCallback(() => setIsOpen(prev => !prev), []);
-
-  // 注册全局快捷键
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const isMac = navigator.platform.toUpperCase().indexOf('MAC') >= 0;
-      const modifierKey = isMac ? e.metaKey : e.ctrlKey;
-      
-      if (modifierKey && e.key === 'k') {
-        e.preventDefault();
-        toggle();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggle]);
-
-  return {
-    isOpen,
-    open,
-    close,
-    toggle,
-  };
 }

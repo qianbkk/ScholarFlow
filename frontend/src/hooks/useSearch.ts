@@ -79,7 +79,17 @@ interface SSEGraphSnapshotEvent {
   link_count: number;
 }
 
-type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent | SSEGraphSnapshotEvent;
+// R10.5.53: 节点级思考日志事件, 后端 query_decompose / query_refiner /
+// rank / synthesize / critic 等 LLM 节点在 on_chain_end 时 emit 累积的
+// 思考步骤. 前端累积到 nodeThinking[nodeName] 给 CockpitDashboard 显示.
+interface SSENodeThinkingEvent {
+  event: 'node_thinking';
+  node: string;
+  step: number;
+  messages: string[];
+}
+
+type SSEEvent = SSEStartedEvent | SSENodeEvent | SSEDoneEvent | SSEErrorEvent | SSEBudgetExceededEvent | SSEGraphSnapshotEvent | SSENodeThinkingEvent;
 
 // R10.5.28: Holographic 集成类型 — 喂给 CockpitDashboard / EvolutionSlider.
 // 跟 CockpitDashboard.tsx 里 NodeEvent / GraphSnapshot 接口保持一致
@@ -206,6 +216,11 @@ export function useSearch() {
   // R10.5.28: 每次 build_graph 节点完成时后端推一个图谱快照, 喂 EvolutionSlider
   // 让用户拖时间轴看图谱生长 (V1 → V2 → V3).
   const [graphSnapshots, setGraphSnapshots] = useState<GraphSnapshot[]>([]);
+
+  // R10.5.53: 节点级思考日志, 后端 LLM 节点 (query_decompose / query_refiner /
+  // rank / synthesize / critic) 在 on_chain_end 时 emit node_thinking 事件,
+  // 累积到 nodeThinking[nodeName] 给 CockpitDashboard 展开节点详情显示.
+  const [nodeThinking, setNodeThinking] = useState<Record<string, string[]>>({});
 
   // R10.5.9 落地: 移除 esRef/reconnectTimerRef 历史注释 — R10.5.8 code-review
   // 已删两个 ref, 注释没必要每次提醒"已移除". 代码即真相.
@@ -371,6 +386,8 @@ export function useSearch() {
             // R10.5.28: 新搜索开始, 清空 events + graphSnapshots 重新累积
             setEvents([]);
             setGraphSnapshots([]);
+            // R10.5.53: 清空节点级思考日志
+            setNodeThinking({});
             return false;
           case 'node_complete': {
             const stepIdx = NODE_NAME_TO_STEP[payload.node];
@@ -405,6 +422,15 @@ export function useSearch() {
                 link_count: payload.link_count,
               },
             ]);
+            return false;
+          // R10.5.53: node_thinking 事件 — LLM 节点 (query_decompose /
+          // query_refiner / rank / synthesize / critic) on_chain_end 时
+          // emit 累积的"思考步骤"消息, 喂给 CockpitDashboard 展开节点详情.
+          case 'node_thinking':
+            setNodeThinking((prev) => ({
+              ...prev,
+              [payload.node]: payload.messages,
+            }));
             return false;
           case 'done':
             setResult(payload.result);
@@ -694,6 +720,8 @@ export function useSearch() {
     // R10.5.28: reset 时也清空 events / graphSnapshots, 下次搜索干净起步
     setEvents([]);
     setGraphSnapshots([]);
+    // R10.5.53: reset 时清空节点级思考日志
+    setNodeThinking({});
   }, []);
 
   return {
@@ -714,5 +742,7 @@ export function useSearch() {
     // R10.5.28 (Holographic 集成): 节点级事件流 + 图谱快照, 喂 CockpitDashboard / EvolutionSlider
     events,
     graphSnapshots,
+    // R10.5.53: 节点级思考日志, 喂 CockpitDashboard 展开节点详情显示
+    nodeThinking,
   };
 }

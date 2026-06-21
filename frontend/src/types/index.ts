@@ -23,6 +23,7 @@ export interface Paper {
 
 export interface GraphNode {
   id: string;
+  paper_id?: string;
   index: number;
   title: string;
   year: number;

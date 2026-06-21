@@ -130,6 +130,20 @@ def _sanitize_constraints(raw: object) -> dict:
 async def query_decompose_node(state: SearchState) -> SearchState:
     """将用户原始查询分解为多个英文子查询。"""
 
+    # R10.5.53 (P1 UI 反馈): 节点级思考日志初始化.
+    # 各 LLM 节点 (query_decompose / query_refiner / rank / synthesize /
+    # critic) 把"思考步骤" append 到 thinking_log[node_name],
+    # search.py SSE 在 node_chain_end 时 emit node_thinking 事件推前端.
+    thinking = dict(state.get("thinking_log") or {})
+    decompose_log: list[str] = []
+
+    def _step(msg: str) -> None:
+        decompose_log.append(msg)
+        logger.info(f"[query_decompose.thinking] {msg}")
+
+    _step(f"📥 收到原始查询: {state['original_query'][:60]!r}")
+    _step("🔍 分析查询意图: 判断 query_type (simple/survey/method/comparison/latest)")
+
     # ===== 纵深防御 (VULN-001 Layer 1) =====
     # 这是首个 LLM 调用节点：用户原始查询直接拼入 prompt，必须隔离。
     safe_query = wrap_user_input(state['original_query'], tag="user_query")
@@ -179,6 +193,9 @@ Rules:
     # R10.5.51 (/simplify): 抽到 _schemas.parse_with_retry_async, ~45 行 → ~10 行.
     # 之前这里内联 Pydantic 校验 + 1 次 retry + merge_usage (ranker 一样,
     # 两份 ~70 行重复, 且 ranker 的 merge_usage 是死代码 bug).
+    _step(f"🧠 调用 LLM 抽取 query_type + sub_queries + 4 维约束 "
+          f"(system prompt {len(SYSTEM + isolation_system_suffix())} chars, "
+          f"max_tokens=500, task_type=complex_reason)")
     sub_queries: list[str] = []
     parsed_obj, usage = await parse_with_retry_async(
         call_llm=call_llm,
@@ -204,17 +221,28 @@ Rules:
             query_type = "default"
         max_subs = _QUERY_TYPE_LIMITS[query_type]
         sub_queries = parsed_obj.sub_queries[:max_subs]
+        # R10.5.53: 思考日志记录 LLM 输出概要
+        _step(f"✅ LLM 解析成功: query_type={query_type}, "
+              f"生成 {len(sub_queries)} 个 sub_queries")
+        for i, sq in enumerate(sub_queries, 1):
+            _step(f"   {i}. {sq}")
         # 把 Pydantic 解析出的 constraints 字段转回 dict 格式 (下游代码用 dict 访问)
         raw_constraints = (
             parsed_obj.constraints.model_dump(exclude_none=True)
             if parsed_obj.constraints is not None
             else None
         )
+        if raw_constraints:
+            _step(f"📋 抽取约束: venues={raw_constraints.get('venues')}, "
+                  f"year_range={raw_constraints.get('year_range')}, "
+                  f"methods={raw_constraints.get('methods')}, "
+                  f"datasets={raw_constraints.get('datasets')}")
     else:
         # 兜底: query_type 默认, constraints 走 _fallback_constraints
         query_type = "default"
         max_subs = _QUERY_TYPE_LIMITS[query_type]
         raw_constraints = None
+        _step("⚠️ LLM 解析失败 (2 次重试后仍坏), 走离线兜底分解")
 
     if not sub_queries:
         # 兜底：原始查询 + 派生变体
@@ -237,10 +265,16 @@ Rules:
 
     cost_update = merge_usage_into_state(state, usage or {})
 
+    # R10.5.53: 把本节点的思考日志写回 state, search.py SSE 推前端
+    _step(f"🚀 进入下一节点: search (双源检索) — "
+          f"{len(sub_queries)} sub_queries 准备检索")
+    thinking["query_decompose"] = decompose_log
+
     return {
         **state,
         **cost_update,
         "sub_queries": sub_queries,
         "constraints": constraints,
+        "thinking_log": thinking,
         "status": "searching",
     }

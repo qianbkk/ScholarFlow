@@ -11,6 +11,7 @@ from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm, merge_usage_into_state
 from backend.utils.sanitize import wrap_user_input, isolation_system_suffix
 from backend.utils.text_utils import sanitize_paper_content  # R10.5.19 P0 修复: 跟 ranker_agent 对齐, 防 arXiv 摘要间接 prompt 注入
+from backend.agents._step_helper import _step  # R10.5.55
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +106,7 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
         f"Abstract: {sanitize_paper_content(p.get('abstract',''), max_len=200)}"
         for i, p in enumerate(ranked)
     ])
+    _step(state, "synthesize", f"📝 组装 {len(ranked)} papers 文本 · {len(papers_text)} 字符")
     # ===== 纵深防御 (VULN-001 Layer 1) =====
     # 论文元数据来自外部 API (Semantic Scholar / OpenAlex)，
     # title/abstract 字段可被恶意构造，wrap_user_input 用 XML 标签隔离。
@@ -151,9 +153,11 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
                        # 调用里最重的 (max_tokens=3500), 用户实测 30-60s, 90s 留 1.5x buffer.
                        # 超过走 _fallback_report 兜底, 不再让节点占满整个 480s endpoint timeout.
     )
+    _step(state, "synthesize", f"🧠 LLM 综述生成完成 · {len(report or '')} 字符")
 
     # 兜底：LLM 失败时返回极简报告
     if not report or not report.strip():
+        _step(state, "synthesize", "⚠️ LLM 输出空, 走 fallback 模板报告")
         report = _fallback_report(query, ranked)
 
     # ===== 纵深防御 (VULN-001 Layer 1) =====
@@ -217,6 +221,7 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
     # 即使 LLM 在 Top5 推荐段编造论文, 警告 + 完整 ranked 列表仍能避免误导.
 
     _, unverified = _verify_citations_in_report(report, ranked)
+    _step(state, "synthesize", f"✅ 引文真实性校验 · {len(ranked) - len(unverified)} verified, {len(unverified)} unverified")
     if unverified:
         # R10.5.11 Fix: 用户反馈 — 旧版用 `> -  [2018]: ...` blockquote list 格式
         # 拼警告, marked 误把 `> -  [YYYY]:` 当 markdown reference link definition

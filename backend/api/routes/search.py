@@ -139,6 +139,25 @@ def _pre_check_request(safe_query: str, budget: float, max_iter: int) -> None:
     )
 
 
+# ===== R10.5.55: 运行时模式规范化 =====
+def _normalize_runtime_mode(value: Optional[str]) -> str:
+    """规范化用户传入的 runtime_mode 到 'llm' / 'local'.
+
+    - None / '' / 'unknown' → 'llm' (默认 LLM 检索模式, R10.5.55 默认值变更)
+    - 'real' / 'llm' → 'llm'
+    - 'mock' / 'local' → 'local'
+    - 其他 → 'llm' (兜底)
+    """
+    if not value:
+        return "llm"
+    v = value.strip().lower()
+    if v in ("real", "llm"):
+        return "llm"
+    if v in ("mock", "local"):
+        return "local"
+    return "llm"
+
+
 def _sse_format(data: dict, event_id: Optional[int] = None) -> str:
     """格式化一个 SSE 事件.
 
@@ -196,7 +215,10 @@ async def search(
     budget_reserved = True  # try/finally 兜底标志
 
     initial = _make_initial_state(
-        safe_query, req.max_iterations, req.budget, provider
+        safe_query, req.max_iterations, req.budget, provider,
+        runtime_mode=_normalize_runtime_mode(req.runtime_mode),
+        paper_min=req.paper_min,
+        paper_max=req.paper_max,
     )
 
     t0 = time.time()
@@ -325,6 +347,14 @@ async def search_stream(
     budget: float = Query(default=BUDGET_LIMIT_USD, ge=0.1, le=20.0),
     max_iter: int = Query(default=MAX_SEARCH_ITERATIONS, ge=1, le=5, alias="max_iter"),
     provider: Optional[str] = Query(default=None, max_length=64, description="LLM provider id"),
+    # R10.5.55: 运行时模式 query param. 'llm' / 'local' / 旧值 'real' / 'mock'.
+    runtime_mode: Optional[str] = Query(
+        default=None, max_length=16,
+        description="运行时模式: 'llm' / 'local' (兼容旧值 'real'/'mock').",
+    ),
+    # R10.5.59: 论文数量范围 [min, max], 3-30. LLM 模式 strict ≥ 8 → 放宽 ≥ 7.
+    paper_min: int = Query(default=5, ge=3, le=30, description="最少论文数"),
+    paper_max: int = Query(default=10, ge=3, le=30, description="最多论文数"),
     # R10.5.45 (P0/P1 SSE resilience): 接收客户端 Last-Event-ID 重连 resume.
     # 当前阶段仅记日志 + 接受 header 透传 (R10.5.45 不真正续传,
     # R11+ 接 LangGraph checkpointer 后才能从 last_event_id 状态续).
@@ -352,7 +382,10 @@ async def search_stream(
     await _check_and_reserve_budget(budget)
 
     initial = _make_initial_state(
-        safe_query, max_iter, budget, resolved_provider
+        safe_query, max_iter, budget, resolved_provider,
+        runtime_mode=_normalize_runtime_mode(runtime_mode),
+        paper_min=paper_min,
+        paper_max=paper_max,
     )
 
     t0 = time.time()
@@ -461,18 +494,18 @@ async def search_stream(
                         elif event_type == "on_chain_end" and event.get("name") in NODE_NAME_TO_STEP:
                             node_name = event.get("name")
                             mapped = NODE_NAME_TO_STEP.get(node_name)
-                            
+
                             # 提取状态更新和成本信息
                             output_data = event.get("data", {}).get("output", {})
                             if isinstance(output_data, dict):
                                 accumulated.update(output_data)
-                            
+
                             step_count += 1
                             new_total = float(accumulated.get("total_cost_usd", 0.0))
                             budget_limit = float(
                                 accumulated.get("budget_limit_usd", float("inf"))
                             )
-                            
+
                             # Phase 1: 增强节点完成事件 - 包含成本和模型信息
                             yield _emit({
                                 "event": "node_complete",
@@ -483,7 +516,29 @@ async def search_stream(
                                 "cost_usd": round(new_total, 4),
                                 "tokens": accumulated.get("total_tokens_used", 0),
                             })
-                            
+
+                            # R10.5.53 (P1 UI 反馈): 节点级思考日志推前端.
+                            # query_decompose / query_refiner / rank / synthesize
+                            # / critic 等 LLM 节点把"思考步骤"写到
+                            # state["thinking_log"][node_name], 这里 emit node_thinking.
+                            # R10.5.55: 节点级流式 — astream_events v2 不暴露 agent
+                            # 内部的 _step_queue 增量 (节点未完成时 state 不会 emit),
+                            # 但 astream_events 在 on_chain_end 时触发, 此时
+                            # _step_queue 已完整 accumulate 在 thinking_log 中.
+                            # 阶段 1: 我们改成"每节点完成时 emit 该节点所有 messages",
+                            # 前端 useStore dispatchSSE 改为 append 而非覆盖.
+                            # 阶段 2 (R11+): astream stream_mode="updates" 可拿到
+                            # chunk-level 增量, 实现真正的逐行流式.
+                            thinking_log = accumulated.get("thinking_log") or {}
+                            node_thinking = thinking_log.get(node_name)
+                            if node_thinking:
+                                yield _emit({
+                                    "event": "node_thinking",
+                                    "node": node_name,
+                                    "step": mapped if mapped is not None else step_count,
+                                    "messages": list(node_thinking),
+                                })
+
                             # Phase 2: 演化时间轴 - 每次迭代完成时记录图谱快照
                             if node_name == "build_graph":
                                 iteration_id = accumulated.get("iteration", 0)
@@ -692,7 +747,7 @@ async def summarize_paper(
             total_cost_usd=0.0,
             total_tokens_used=0,
             elapsed_seconds=round(_time.time() - t0, 2),
-            runtime_mode=("mock" if is_runtime_mock() else "real"),
+            runtime_mode=("local" if is_runtime_mock() else "llm"),
         )
 
     return AgentPaperResponse(
@@ -702,7 +757,7 @@ async def summarize_paper(
         total_cost_usd=float((usage or {}).get("cost", 0.0)),
         total_tokens_used=int((usage or {}).get("tokens", 0)),
         elapsed_seconds=round(_time.time() - t0, 2),
-        runtime_mode=("mock" if is_runtime_mock() else "real"),
+        runtime_mode=("local" if is_runtime_mock() else "llm"),
     )
 
 
@@ -742,7 +797,7 @@ async def critique_paper(
             total_cost_usd=0.0,
             total_tokens_used=0,
             elapsed_seconds=round(_time.time() - t0, 2),
-            runtime_mode=("mock" if is_runtime_mock() else "real"),
+            runtime_mode=("local" if is_runtime_mock() else "llm"),
         )
 
     # 解析 LLM JSON 输出, 拿 quality_score + recommendation
@@ -764,5 +819,5 @@ async def critique_paper(
         total_cost_usd=float((usage or {}).get("cost", 0.0)),
         total_tokens_used=int((usage or {}).get("tokens", 0)),
         elapsed_seconds=round(_time.time() - t0, 2),
-        runtime_mode=("mock" if is_runtime_mock() else "real"),
+        runtime_mode=("local" if is_runtime_mock() else "llm"),
     )

@@ -35,6 +35,9 @@ def make_initial_state(
     status: str = "decomposing",
     *,
     include_expanded_ids: bool = True,
+    runtime_mode: str = "llm",
+    paper_min: int = 5,
+    paper_max: int = 10,
 ) -> dict:
     """构造 LangGraph SearchState 初始 dict. R10.5.17 公开版 (原 _make_initial_state).
 
@@ -42,6 +45,10 @@ def make_initial_state(
     R10.5.17: 公开给 3 个非主路径 caller 复用 (eval/f1_score.py + test_run.py +
     tests/manual/verify_random_queries.py). 加 include_expanded_ids=False 兼容
     R6 之前 caller 没 expanded_paper_ids 字段的旧路径.
+    R10.5.55: 加 runtime_mode 参数 ('llm' / 'local'). search_node 据此
+    决定是否过滤 is_fallback=True 的 mock 论文.
+    R10.5.59: 加 paper_min / paper_max (用户可滑 3-30). LLM 模式强制
+    final_score >= 8 → 不够时迭代放宽到 >= 7 → 再不够降低数量不 mock.
     """
     out = {
         "original_query": safe_query,
@@ -62,21 +69,20 @@ def make_initial_state(
         "error": None,
         "provider": provider,
         "request_id": get_request_id(),
-        # R10.5 Fix-P1-Audit-2.3: 补全 SearchState TypedDict 全部 Optional 字段.
-        # 旧实现缺这俩, 节点用 state.get("prev_iter_cost_usd", 0.0) 兜底能跑但:
-        #   1. LangGraph Checkpoint 反序列化时缺键报错 (R11+ checkpoint 续传前提)
-        #   2. 严格 TypedDict 运行时校验失败
-        #   3. 阅读代码时不确定 state 里到底有没有该字段
-        # 修复: 显式补 None, 跟 TypedDict 声明对齐.
         "prev_iter_cost_usd": None,
         "top5_summary_cache": None,
-        # R10.5.14 (P0-A): query_decomposer 抽出的结构化约束. 初始 None,
-        # 节点成功返回后会被覆盖. TypedDict 已声明该字段.
         "constraints": None,
-        # R10.5.46 (P1 LangGraph safety net): 连续 0 结果迭代计数器. 初始 0,
-        # search_node 在 dedup 后唯一论文数为 0 时 +1, 否则重置 0. router
-        # 在 streak >= 2 时强制 synthesize (防冷门/乱码查询死磕 budget).
         "empty_result_streak": 0,
+        "thinking_log": {},
+        "runtime_mode": runtime_mode,
+        "_step_queue": [],
+        # R10.5.59: 用户论文数量范围
+        "paper_min": paper_min,
+        "paper_max": paper_max,
+        # LLM 模式 strict 评分阈值: 严格 8 → 迭代放宽 7 → 不能再降
+        "score_threshold": 8.0 if runtime_mode == "llm" else 0.0,
+        # 记录是否已尝试放宽 (一次放宽机会, 防止无限循环)
+        "score_relaxed": False,
     }
     if not include_expanded_ids:
         out.pop("expanded_paper_ids", None)
@@ -97,6 +103,19 @@ class SearchRequest(BaseModel):
         max_length=64,
         description="LLM provider id (kimi/glm/minimax/anthropic/deepseek)",
     )
+    # R10.5.55: 运行时模式. 'llm' = LLM 检索模式 (不允许 mock fallback),
+    # 'local' = 本地模式 (允许 mock fallback 用于离线演示).
+    # 旧值 'real'/'mock' 仍接受 (前端兼容), 服务端规范化.
+    runtime_mode: Optional[str] = Field(
+        default=None,
+        max_length=16,
+        description="运行时模式: 'llm' (不允许 mock fallback) / 'local' (允许 mock). 兼容旧值 'real'/'mock'.",
+    )
+    # R10.5.59: 论文数量范围 [min, max]. LLM 模式: 必须严格筛 final_score >= 8
+    # 的真实论文; 若不足, 迭代一次放宽到 >= 7; 再不足宁可降低数量也不能 mock
+    # fallback. 范围 [3, 30], 默认 [5, 10].
+    paper_min: int = Field(default=5, ge=3, le=30, description="最少论文数")
+    paper_max: int = Field(default=10, ge=3, le=30, description="最多论文数")
 
 
 class SearchCancelRequest(BaseModel):

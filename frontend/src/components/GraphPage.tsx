@@ -1,41 +1,81 @@
+/**
+ * GraphPage — 引文图谱 (R10.5.59 Phase C)
+ *
+ * D3 force-directed citation graph for ScholarFlow. Full reproduction of the
+ * OLD GraphPanel.tsx feature set, repackaged as a standalone tab component:
+ *
+ * - Filter bar (year min/max + author substring + visible/total count)
+ * - 2-hop neighbor highlight (1-hop solid ring, 2-hop dashed amber outer ring)
+ * - Community color scale (8-color editorial palette + Viridis fallback)
+ * - SVG <defs> with 3 arrow markers (cites, author_overlap both-ends)
+ * - Link dasharray per type (cites solid / co_cited 4,3 / same_venue 2,2 / author_overlap solid)
+ * - Link stroke-width per type (cites 1.2 / others 0.8)
+ * - Drag to fix (d3.drag + right-click contextmenu to clear fx/fy)
+ * - Pan/zoom (d3.zoom with scaleExtent [0.3, 4], zoom.filter excludes .node descendants)
+ * - Zoom-adaptive labels (3 thresholds: <0.8 hide / 0.8-1.5 / 1.5-2.5 / >2.5)
+ * - Keyboard shortcuts: f=fit / Shift+F=fullscreen / Esc=exit fullscreen
+ * - Fit-to-view button (bbox computation + 750ms smooth transition)
+ * - Clear selection button
+ * - Neighbor count display (2-hop, including selected node itself)
+ * - Collapsible legend + interaction hints
+ * - Rich tooltip (title + year + venue + citations + score + in/out + pagerank + community + abstract)
+ * - Responsive SVG (ResizeObserver re-fits on container resize)
+ * - Double-click to open paper URL
+ * - MAX_FRONTEND_NODES = 200 hardcap (defense in depth over backend cap=100)
+ * - Header metadata (total_papers · total_links · community_count · zoom_level)
+ * - Background click to deselect
+ * - High-zoom edge dimming (>1.5x zoom + selection)
+ *
+ * Reads result.citation_graph + selectedPaperId from useStore. Renders a friendly
+ * empty state when graph is null. This is the standalone Graph tab, separate
+ * from the Report tab.
+ */
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-// R10.5.51 (/simplify): revert R10.5.49 namespace alias trick.
-// 之前选择性 import + 顶层 const d3 = {...} 反向破坏了 tree-shaking
-// (Vite/ESBuild 看 const d3 = {x, y, z} 用到全部引用, 不会删). 改回
-// `import * as d3 from 'd3'` 让 Vite 真正的 ESM tree-shaking 生效 (d3 v7
-// 已是 ESM, Vite 自动删未用的 export). 之前担心 bundle 体积没减小 —
-// 实测选择性 import 路径下也是 71.79KB (验证 alias 模式失效).
-import * as d3 from 'd3';
+// R10.5.49 (P2 defense-in-depth): selective D3 imports — full d3 import is ~500KB.
+// Manual chunks + tree-shaking should cut bundle 50%+.
+import {
+  select,
+  drag,
+  zoom,
+  zoomIdentity,
+  forceSimulation,
+  forceLink,
+  forceManyBody,
+  forceCenter,
+  forceCollide,
+  scaleLinear,
+} from 'd3';
 import type { ZoomBehavior, Selection } from 'd3';
+// d3 alias keeps the imperative `d3.select(...)` / `d3.zoom(...)` call style
+// from the legacy GraphPanel without re-importing the full namespace.
+const d3 = {
+  select, drag, zoom, zoomIdentity,
+  forceSimulation, forceLink, forceManyBody, forceCenter, forceCollide, scaleLinear,
+};
 import type { CitationGraph, GraphNode, SimNode, GraphLink } from '../types';
+import { useStore, actions } from '../store/useStore';
+import { useT } from '../i18n';
 
-// R10.5.49 (P2 defense-in-depth): 前端节点数硬上限.
-// 后端 graph_builder.py MAX_GRAPH_NODES=100, 但前端不能假设后端永远正确.
-// 这里加 MAX_FRONTEND_NODES=200 防御性硬上限, 即使后端 cap 失效 (e.g. R11+
-// 改 cap, 或者新加端点忘加 cap), 浏览器也不会因为 SVG 节点数爆涨卡死.
-// 200 = 100 (当前 cap) 的 2x 缓冲, 任何 cap 失效也能撑住.
+// R10.5.49 (P2 defense-in-depth): frontend hardcap on visible nodes.
+// Backend graph_builder.py caps at MAX_GRAPH_NODES=100, but we cannot trust the
+// backend forever. 200 = 2x current cap, so even if backend cap doubles
+// overnight the browser will still render. Sort by relevance_score desc so
+// the highest-value nodes stay visible when truncated.
 const MAX_FRONTEND_NODES = 200;
 
-interface Props {
-  graph: CitationGraph | null;
-  // R10.5.5: 跨组件论文聚焦 — 外部 controlled selected + callback
-  selectedPaperId?: string | null;
-  onSelectPaper?: (paperId: string | null) => void;
-}
-
-// M-18: 4 类边的视觉颜色 (cites 实箭头 / co_cited 虚线 / same_venue 点线 / author_overlap 双向)
-// R10.5.7 P1-3: 改用 ColorBrewer Set1 色盲友好配色 (4 类高对比度不同色).
-// R10.5.9 落地: 颜色提到 CSS 变量 --sf-edge-* (index.css 4 主题各设一遍),
-// midnight 黑底 + sage 绿底不再 invisible. stroke 走 getComputedStyle 读
-// 当前主题值, 避免 d3 hardcode 写死.
+// M-18: 4 edge types -> visual style. Colors come from CSS variables
+// (--sf-edge-*) defined in index.css so theme switching propagates automatically.
+// Stroke / dasharray / marker assignments here drive both rendering and legend.
 const LINK_STYLES: Record<string, { cssVar: string; dasharray?: string; marker?: string }> = {
-  cites: { cssVar: '--sf-edge-cites', marker: 'url(#arrow)' },
+  cites: { cssVar: '--sf-edge-cites', marker: 'url(#graphpage-arrow)' },
   co_cited: { cssVar: '--sf-edge-co-cited', dasharray: '4,3' },
   same_venue: { cssVar: '--sf-edge-same-venue', dasharray: '2,2' },
-  author_overlap: { cssVar: '--sf-edge-author-overlap', marker: 'url(#arrow-both)' },
+  author_overlap: { cssVar: '--sf-edge-author-overlap', marker: 'url(#graphpage-arrow-both-end)' },
 };
 
-// 读 CSS 变量当前值 (一次, effect 内复用)
+// Read CSS variable values once per theme. getComputedStyle is cheap enough
+// to re-run on every simulation rebuild; the alternative (memoizing across
+// theme changes) is fiddly and unnecessary at our call frequency.
 function readEdgeColors(): Record<string, string> {
   if (typeof window === 'undefined') return {};
   const style = getComputedStyle(document.documentElement);
@@ -46,15 +86,18 @@ function readEdgeColors(): Record<string, string> {
   return out;
 }
 
-
+// Interaction hints shown inside the collapsible legend. Plain ASCII to keep
+// the editorial / typewriter tone (no emoji icons per design constraints).
 const INTERACTION_HINTS = [
   '单击 = 高亮 1 跳邻居 · 双击 = 打开论文',
   '拖动 = 固定位置 · 右键 = 解除固定',
   '滚轮 = 缩放 · 空白处拖动 = 平移',
 ];
 
-// M-18: 社区色 (R10.5.4 Editorial: 8 套"墨水 + 单一强调" 配色, 去掉红/紫/粉的糖果色)
-// 走"水彩印章" 渐变序列, 学术地图常用配色.
+// M-18: community palette — 8 "ink + single accent" tones. Editorial direction
+// (R10.5.4) dropped candy red/purple/pink in favor of muted academic colors.
+// All values are sRGB hex; switching to OKLCH would break the d3 color scale
+// which expects a string.
 const COMMUNITY_COLORS = [
   '#c2410c', // burnt orange
   '#44403c', // ink soft
@@ -66,33 +109,40 @@ const COMMUNITY_COLORS = [
   '#1c1917', // ink
 ];
 
-export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Props) {
+export function GraphPage() {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const zoomRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null);
   const rootRef = useRef<Selection<SVGGElement, unknown, null, undefined> | null>(null);
+  const t = useT();
+
+  // Store wiring: graph + selection are the only cross-component contracts.
+  const graph = useStore((s) => s.result?.citation_graph ?? null);
+  const selectedPaperId = useStore((s) => s.selectedPaperId);
+  // Actions live on the exported `actions` object, not on state, so we can't
+  // select them via useStore. Pulling actions.selectPaper directly works
+  // because it's a stable function reference (defined once at module load).
+  const { selectPaper } = actions;
+
   const [hovered, setHovered] = useState<GraphNode | null>(null);
-  // R10.5.5: 内部 selected 让位给外部 controlled selectedPaperId (受控优先)
-  // 点击节点 → 通知 App.tsx, App 通过 prop 回流. 保持单一数据源.
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
-  // R10.5.5: 当前可见节点 / 总节点 (供工具栏显示)
   const [neighborCount, setNeighborCount] = useState<number | null>(null);
-  // R10.5.10: 全屏模式 (差异化功能) — 用户点 ⛶ 按钮或按 F 键, 整图盖到 viewport.
   const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
-  // R10.5.10: 边类型图例折叠 — 默认折叠 (图例占左下角, 跟节点重叠时看不清)
-  // 点 "边类型" 标题或 ? 按钮展开
   const [legendExpanded, setLegendExpanded] = useState<boolean>(false);
-  // R10.5.11: 当前 zoom 缩放深度 (d3 zoom transform.k), 用来:
-  //   1) 缩放 > 1.5x 时放大节点标签字号, 显示完整标题
-  //   2) 缩放 < 0.7x 时隐藏远距离边, 避免视觉杂乱
-  //   3) 工具栏显示 "N.Nx" 缩放指示
   const [zoomLevel, setZoomLevel] = useState<number>(1);
 
-  // R10.5.40 Phase 5 (Agent 4): 过滤器状态 — 年份范围 + 作者子串.
-  // 默认用 graph.metadata.year_range 全量展示, 用户输入后实时收紧.
+  // R10.5.59 jitter fix: hoveredRef 镜像 hovered state. 主 D3 effect 不再依赖
+  // hovered (避免每次鼠标移动都重建 simulation + 重置节点位置导致颤动),
+  // zoom.on 内部读 hoveredRef.current 取最新值. tooltip 用 state 仍可重渲染.
+  const hoveredRef = useRef<GraphNode | null>(null);
+  useEffect(() => { hoveredRef.current = hovered; }, [hovered]);
+
+  // R10.5.40 Phase 5: filter state — year range + author substring.
+  // Default to graph.metadata.year_range (full dataset). User input narrows.
   const yearBounds = useMemo<[number, number]>(() => {
     if (!graph || graph.nodes.length === 0) return [0, 0];
     if (graph.metadata.year_range) return graph.metadata.year_range;
-    // 兜底: 从节点里扫一遍
+    // Fallback: scan nodes for year span. Some legacy graphs omit metadata.
     let lo = Infinity, hi = -Infinity;
     for (const n of graph.nodes) {
       const y = n.year || 0;
@@ -107,8 +157,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
   const [yearMin, setYearMin] = useState<number | null>(null);
   const [yearMax, setYearMax] = useState<number | null>(null);
   const [authorFilter, setAuthorFilter] = useState<string>('');
-  // 拿到数据 / 重置过滤范围时同步默认值. 用 ref 标记"是否已为本 graph 初始化",
-  // 避免每次 graph 引用变化都把用户已改的过滤值重置回全量.
+
+  // Reset filter inputs when a new graph arrives. The ref guards against
+  // resetting whenever the graph reference changes (e.g. parent re-render)
+  // but the underlying query hasn't — otherwise we'd clobber the user's
+  // typed values on every store update.
   const filterInitRef = useRef<string | null>(null);
   useEffect(() => {
     if (!graph) return;
@@ -121,12 +174,9 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
 
   const selected = selectedPaperId;
 
-  // R10.5.40 Phase 5 (Agent 4): 过滤后的节点 / 边 — 用于:
-  //   1) 模拟节点集合 (传递给 d3 force simulation)
-  //   2) 工具栏显示 "N / M 节点"
-  //   3) 邻居集合计算只考虑可见节点
-  // 注意: author / year 过滤是"硬过滤" — 不在范围内的节点不进 simulation,
-  // 不画边. 跟 2-hop 高亮无关, 独立计算.
+  // Filtered node set. Author match is case-insensitive substring against any
+  // author in the authors[] array. Hard filter — non-matching nodes drop out
+  // of the simulation entirely (and 1-hop/2-hop calculations skip them).
   const filteredNodes = useMemo<GraphNode[]>(() => {
     if (!graph) return [];
     const lo = yearMin ?? yearBounds[0];
@@ -141,17 +191,20 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       }
       return true;
     });
-    // R10.5.49 (P2 defense-in-depth): 前端硬上限, 后端 cap 失效也不让浏览器卡死.
-    // 200 = 后端 MAX_GRAPH_NODES=100 的 2x 缓冲, 任何后端 cap 调整都能撑住.
-    // 只取前 N 节点, 按 relevance_score 降序 (后端 pruner 已经按 score 排序过, 前面是高相关).
+    // Truncate by relevance_score desc. Backend already sorts by score, but
+    // we re-sort defensively in case upstream order drifts.
     if (filtered.length > MAX_FRONTEND_NODES) {
-      return filtered.slice(0, MAX_FRONTEND_NODES);
+      return [...filtered]
+        .sort((a, b) => (b.final_score || 0) - (a.final_score || 0))
+        .slice(0, MAX_FRONTEND_NODES);
     }
     return filtered;
   }, [graph, yearMin, yearMax, authorFilter, yearBounds]);
 
   const visibleIdSet = useMemo(() => new Set(filteredNodes.map((n) => n.id)), [filteredNodes]);
 
+  // Links filtered by visibleIdSet — both endpoints must survive the filter
+  // for the link to remain in the simulation.
   const filteredLinks = useMemo(() => {
     if (!graph) return [];
     return graph.links.filter((l) => {
@@ -163,11 +216,9 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     });
   }, [graph, visibleIdSet]);
 
-  // R10.5.40 Phase 5 (Agent 4): 2 跳邻居集合 (替换原 1 跳 neighborSet).
-  // 点击节点 → 高亮 自身 + 1 跳 + 2 跳, 其余 dim. 点击空白处 → 重置 (selected=null).
-  // 计算只走 filteredLinks (被过滤掉的节点不算邻居).
-  // 旧 neighborSet 1 跳保留为 neighborSet1 给 hover / zoom 边缘 dim 用,
-  // 兼容 "Keep the existing 1-hop hover behavior unchanged".
+  // 1-hop neighbor set. Used for stroke color/width on neighbors + dimming
+  // the rest. Kept separate from 2-hop so the inner ring (1-hop) is always
+  // distinguishable from the outer ring (2-hop).
   const neighborSet1 = useMemo(() => {
     if (!graph || !selected) return null;
     const ns = new Set<string>([selected]);
@@ -182,10 +233,13 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     return ns;
   }, [graph, selected, filteredLinks]);
 
+  // 2-hop neighbor set — extends 1-hop by one more edge traversal. Drives the
+  // outer dashed amber ring + opacity dimming of non-neighbors. Recomputes
+  // whenever the 1-hop set changes (which already depends on selected +
+  // filteredLinks).
   const neighborSet2 = useMemo(() => {
     if (!neighborSet1) return null;
     const ns = new Set<string>(neighborSet1);
-    // 2 跳: 对每个 1 跳邻居再扫一遍它的 1 跳邻居
     for (const l of filteredLinks) {
       const sAny = l.source as unknown as string | { id: string };
       const tAny = l.target as unknown as string | { id: string };
@@ -199,51 +253,53 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     return ns;
   }, [neighborSet1, filteredLinks]);
 
-  // R10.5.5: 当前选中节点的邻居数 (含自身) — 工具栏显示. R10.5.40 改为 2 跳数.
+  // Mirror 2-hop size into state for the toolbar badge. setState in effect
+  // is fine here because it only fires when neighborSet2 actually changes.
   useEffect(() => {
     setNeighborCount(neighborSet2 ? neighborSet2.size : null);
   }, [neighborSet2]);
 
-  // R10.5 Fix-P0-MemoryLeak: 追踪已绑定的事件处理器引用, 以便在 cleanup 中精确移除.
+  // R10.5 Fix-P0-MemoryLeak: track keydown handler ref so we can detach on
+  // cleanup. The SVG element re-binds when fitToView changes (which only
+  // happens on mount in practice, but TS strict mode requires the dep).
   const keyHandlerRef = useRef<((e: KeyboardEvent) => void) | null>(null);
 
-  // R10.5.5: fit-to-view — 计算所有节点的 bbox, 平滑缩放 + 平移到刚好覆盖
-  // 用户滚轮缩放过大/过小/拖偏后, 一键回正.
+  // Fit-to-view: compute bbox of root <g>, scale + translate to cover viewport
+  // with 20% padding, animate over 750ms. Capped at 4x to match zoom.scaleExtent.
   const fitToView = useCallback(() => {
     if (!svgRef.current || !zoomRef.current) return;
     const svg = d3.select(svgRef.current);
-    // 取 root <g> 实际渲染的 bbox (含 zoom transform)
     const rootNode = rootRef.current?.node();
     if (!rootNode) return;
     const bbox = rootNode.getBBox();
     if (bbox.width === 0 || bbox.height === 0) return;
     const width = svgRef.current.clientWidth || 400;
     const height = svgRef.current.clientHeight || 600;
-    // 加 20% 边距防边缘裁切
     const padding = 1.2;
     const scale = Math.min(
       (width * padding) / bbox.width,
       (height * padding) / bbox.height,
-      4  // 上限 4x, 跟 scaleExtent 一致
+      4
     );
     const tx = width / 2 - (bbox.x + bbox.width / 2) * scale;
     const ty = height / 2 - (bbox.y + bbox.height / 2) * scale;
     const transform = d3.zoomIdentity.translate(tx, ty).scale(scale);
-    // 750ms 平滑过渡 (普通 zoom 行为不带 transition, 用 selection.interrupt + transition)
     svg.transition().duration(750).call(zoomRef.current.transform, transform);
   }, []);
 
-  // R10.5.10: 全屏模式开关 — 切到全屏时 svg 重新 fit-to-view, Esc 退出
+  // Fullscreen toggle: flips state then schedules fit-to-view on next frame
+  // (after React commits the layout change). Using a ref to access the
+  // latest fitToView avoids a stale-closure dependency cycle.
   const toggleFullscreen = useCallback(() => {
     setIsFullscreen((s) => !s);
-    // 切完触发 fit-to-view (在 [graph] effect 后, simulation 已就位)
     requestAnimationFrame(() => fitToViewRef.current?.());
   }, []);
-  // 用 ref 存最新 fitToView, 避免 toggleFullscreen deps 套娃
   const fitToViewRef = useRef<(() => void) | null>(null);
   fitToViewRef.current = fitToView;
 
-  // R10.5.10: 全屏 Esc 退出 + Shift+F 切全屏 (单 f 是适配视图, Shift+F 全屏)
+  // Window-level key handler: Esc exits fullscreen, Shift+F toggles fullscreen.
+  // Bare f is handled at the SVG level (below) so it only fires when the user
+  // is focused on the graph, not when typing in the filter inputs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && isFullscreen) {
@@ -259,11 +315,11 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     return () => window.removeEventListener('keydown', onKey);
   }, [isFullscreen]);
 
-  // R10.5 Fix-P0-MemoryLeak: 键盘事件 — 通过 ref 保存处理器引用, 组件卸载时精确移除.
+  // SVG-level key handler: bare f = fit-to-view. Scoped to the SVG element
+  // (which has tabIndex={0}) so it doesn't fire while typing in inputs.
   useEffect(() => {
     const el = svgRef.current;
     if (!el) return;
-    // 移除旧处理器 (如果存在)
     if (keyHandlerRef.current) {
       el.removeEventListener('keydown', keyHandlerRef.current);
     }
@@ -283,6 +339,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     };
   }, [fitToView]);
 
+  // Main D3 effect: builds simulation, links, nodes, markers, zoom. Runs on
+  // graph change OR filtered set change. Does NOT depend on `selected` —
+  // selection styling is handled by the smaller effect below to avoid
+  // rebuilding the simulation (and resetting node positions) on every click.
   useEffect(() => {
     if (!svgRef.current) return;
     const svg = d3.select(svgRef.current);
@@ -292,11 +352,8 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
 
     const width = svgRef.current.clientWidth || 400;
     const height = svgRef.current.clientHeight || 600;
-    // R10.5.40 Phase 5 (Agent 4): 用 filteredNodes / filteredLinks 替代原始 graph
-    // 节点, 让年份 / 作者过滤生效. 过滤后 0 节点 → 显示 "暂无图谱数据".
     const nodes: SimNode[] = filteredNodes.map((n) => ({ ...n }));
     const links: { source: string; target: string; type: string }[] = filteredLinks.map((l) => ({ ...l }));
-    // R10.5.9: 读 CSS 变量当前主题值 — 切换主题时图谱边色自动跟 (ThemeSwitcher 改 <html> class)
     const edgeColors = readEdgeColors();
 
     if (nodes.length === 0) {
@@ -309,41 +366,36 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         .attr('font-size', '13px')
         .text(
           graph.nodes.length === 0
-            ? '暂无图谱数据'
-            : '当前过滤无匹配节点 · 调整年份 / 作者筛选'
+            ? t('graph.noData')
+            : t('graph.emptyFilter')
         );
       return;
     }
 
-    // R10.5 Fix-Zoom: d3.zoom() 加到 svg, 滚轮缩放 + 拖动空白处平移.
-    // 旧版 svg 没 zoom 行为, 节点一多就挤一起看不见, 用户无法缩放/平移.
-    // 关键: zoom 必须作用在 root <g> 上, simulation 的 node 也在这个 <g> 里,
-    // 才能随 zoom transform 一起缩放/平移.
+    // Root <g> holds every drawn element so a single zoom transform applies
+    // uniformly. Adding zoom to a flat SVG would only scale the viewport.
     const root = svg.append('g').attr('class', 'zoom-root');
     const zoom = d3
       .zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.3, 4])  // 缩放范围 0.3x ~ 4x, 防缩太小看不见/太大溢出
-      // R10.5 Fix-Audit-Zoom-Drag: zoom.filter 排除 .node 元素, 节点上的 mousedown
-      // 不触发 zoom pan. 旧版 svg 全局监听 mousedown 启动 pan, 跟节点 d3.drag
-      // 同时触发, 节点被拖到 pan 偏移后的位置, 体感"卡住". 加 filter: 事件
-      // target 在 .node 内时返回 false → zoom 忽略这个事件, 节点 drag 独占.
+      .scaleExtent([0.3, 4])
+      // zoom.filter: mousedown on .node / .node descendant → let drag handle it,
+      // don't also pan. Without this filter, dragging a node would simultaneously
+      // pan the canvas (both gestures compete, node ends up at the wrong spot).
       .filter((event: MouseEvent) => {
         const target = event.target as Element | null;
-        // mousedown 在 .node / .node 后代上 → 让给 drag, 不 pan
         if (target && target.closest('.node')) return false;
         return true;
       })
       .on('zoom', (event) => {
-        // event.transform 是 d3 计算好的 translate + scale, 直接 apply 到 root <g>
         root.attr('transform', event.transform.toString());
-        // R10.5.11: 缩放深度反馈 — 改标签字号 + 远距离边淡出 + 工具栏指示
         const k = event.transform.k;
         setZoomLevel(k);
-        // 节点标签字号: zoom < 0.8x 缩 6px, 0.8-1.5 缩 9px (原), 1.5-2.5 缩 12px, > 2.5 缩 14px
+        // Label font size + char limit adapt to zoom depth. Below 0.8x labels
+        // are noise — hide them entirely. Above 2.5x give them room to breathe.
         let labelFontSize: number;
         let labelCharLimit: number;
         if (k < 0.8) {
-          labelFontSize = 0;  // 完全隐藏
+          labelFontSize = 0;
           labelCharLimit = 0;
         } else if (k < 1.5) {
           labelFontSize = 9;
@@ -355,48 +407,48 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           labelFontSize = 14;
           labelCharLimit = 40;
         }
-        // 应用到节点标签 (主标题 + 年份)
         node.selectAll<SVGTextElement, SimNode>('text')
           .style('font-size', `${labelFontSize}px`)
-          .style('display', labelFontSize === 0 ? 'none' : null as unknown as string)
+          .style('display', labelFontSize === 0 ? 'none' : (null as unknown as string))
           .text((d: SimNode) => {
             if (labelCharLimit === 0) return '';
             const t = d.title || '';
             return t.length > labelCharLimit ? t.slice(0, labelCharLimit - 1) + '…' : t;
           });
-        // 远距离边淡出: zoom > 1.5x 时, 非邻接边 opacity 降低
-        // 邻接判定: 当前节点有 selected 或 hovered 节点
-        const focusId = selected || hovered?.id;
+        // High-zoom edge dimming: when focused on a node AND zoomed in past
+        // 1.5x, non-adjacent edges fade to near-invisible so the focus graph
+        // reads cleanly. At low/mid zoom, keep them at 0.5 for context.
+        // R10.5.59 jitter fix: read hovered from hoveredRef.current instead of
+        // hovered state (which would require effect to re-run on every hover).
+        const focusId = selected || hoveredRef.current?.id;
         if (focusId) {
           link.style('stroke-opacity', (l: any) => {
             const sId = typeof l.source === 'string' ? l.source : l.source.id;
             const tId = typeof l.target === 'string' ? l.target : l.target.id;
             if (sId === focusId || tId === focusId) return 0.85;
-            return k > 1.5 ? 0.04 : 0.5;  // 放大时非邻接边几乎看不见
+            return k > 1.5 ? 0.04 : 0.5;
           });
         }
       });
-    // R10.5 Fix-P0-MemoryLeak: zoom 绑定到 svg, 需要在 cleanup 中精确移除.
-    // 旧实现只清 simulation.stop(), zoom 事件处理器持续累积 → 内存泄漏.
+    // R10.5 Fix-P0-MemoryLeak: explicitly remove zoom handler on cleanup.
     svg.call(zoom);
-    // R10.5.40 Phase 5 (Agent 4): 点击空白处重置 2 跳高亮.
-    // 用 rect 透明背景覆盖 svg 范围, 让点击空白跟点击节点可区分.
-    // target 是 background 时 → 重置 selected;  是 .node 时 → 节点 click 处理器负责.
+    // Background rect: click target for "deselect by clicking empty space".
+    // Inserted as first child so nodes/links paint over it; pointer-events=all
+    // means it captures the click before any node handler.
     const bgRect = svg
-      .insert('rect', ':first-child')  // 插到最底层 (节点 / 边在它之上)
+      .insert('rect', ':first-child')
       .attr('class', 'graph-bg')
       .attr('width', width)
       .attr('height', height)
       .attr('fill', 'transparent')
       .attr('pointer-events', 'all');
     bgRect.on('click', () => {
-      if (selected && onSelectPaper) onSelectPaper(null);
+      if (selected) selectPaper(null);
     });
-    // R10.5.5: 保存 zoom + root 引用, 工具栏 fit-to-view / 重置缩放 用
     zoomRef.current = zoom;
     rootRef.current = root;
 
-    // M-18: 计算邻居集合 (用于 click 高亮 1 跳邻居)
+    // Helper used inside click/styling handlers — recomputed each effect run.
     const neighborSet = (id: string) => {
       const s = new Set<string>([id]);
       for (const l of links) {
@@ -408,11 +460,14 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       return s;
     };
 
-    // ===== Arrow markers (M-18: 4 类边对应 4 种 marker) =====
+    // ===== Arrow markers =====
+    // 3 markers: arrow (cites, single end), arrow-both-end + arrow-both-start
+    // (author_overlap, both ends). Marker IDs are namespaced with
+    // "graphpage-" so they don't collide if a future page also defines arrows.
     const defs = svg.append('defs');
     defs
       .append('marker')
-      .attr('id', 'arrow')
+      .attr('id', 'graphpage-arrow')
       .attr('viewBox', '0 -5 10 10')
       .attr('refX', 18)
       .attr('refY', 0)
@@ -422,10 +477,9 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .append('path')
       .attr('d', 'M0,-5L10,0L0,5')
       .attr('fill', '#64748b');
-    // M-18: 双向 marker (author_overlap) — Editorial: 用 burnt orange 强调
     defs
       .append('marker')
-      .attr('id', 'arrow-both-end')
+      .attr('id', 'graphpage-arrow-both-end')
       .attr('viewBox', '0 -5 10 10')
       .attr('refX', 18)
       .attr('refY', 0)
@@ -437,7 +491,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .attr('fill', '#c2410c');
     defs
       .append('marker')
-      .attr('id', 'arrow-both-start')
+      .attr('id', 'graphpage-arrow-both-start')
       .attr('viewBox', '0 -5 10 10')
       .attr('refX', 2)
       .attr('refY', 0)
@@ -448,25 +502,20 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .attr('d', 'M10,-5L0,0L10,5')
       .attr('fill', '#c2410c');
 
-    // Color scale: M-18 优先用 community 颜色 (如果 multi-decade), 否则用 relevance 颜色
-    // R10.5.8 code-review 修复: 旧 Set1 3 色 (红/蓝/绿) 是 categorical palette,
-    // 不适合 0-1 连续相关度 (低=红=警示, 高=绿=安全, 跟数据直觉反向).
-    // 改 ColorBrewer 顺序 YlGn (黄→深绿) — 低相关淡黄, 高相关深绿, 符合
-    // "relevance 越高越显眼" 的用户预期, 同时仍色盲友好 (黄→绿单色梯度).
+    // Color scale: community palette when multi-community, Viridis gradient
+    // for single-community (acts as relevance signal: low → pale yellow,
+    // high → deep purple).
     const communityCount = graph.metadata.community_count ?? 1;
     const useCommunityColor = communityCount > 1;
     const colorScale = useCommunityColor
       ? (communityId: number) => COMMUNITY_COLORS[communityId % COMMUNITY_COLORS.length]
       : d3
           .scaleLinear<string>()
-          // R10.5.32 (wave 6): 改用 Viridis 3-stop 离散色板 (色觉障碍友好).
-          // 黄 → 青 → 深紫, 旧 #ffffcc → #78c679 → #006837 绿渐变对红绿色盲
-          // 用户区分度差 (色盲占人群 8% 男性). Viridis 是色觉障碍友好
-          // scientific palette, Matplotlib / seaborn 标配, 论文图常用.
           .domain([0, 0.5, 1])
-          .range(['#fde725', '#21918c', '#440154']);  // Viridis 3-stop 离散版
+          .range(['#fde725', '#21918c', '#440154']);
 
-    // Simulation
+    // Force simulation. alphaDecay 0.08 (vs D3 default 0.0228) makes 50+
+    // node graphs converge in 3-4s instead of 6-8s without visible instability.
     const simulation = d3
       .forceSimulation<SimNode>(nodes)
       .force(
@@ -483,14 +532,12 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         'collision',
         d3.forceCollide<SimNode>().radius((d) => d.size + 4)
       )
-      // R10.5.32 (wave 6): alphaDecay 0.05 → 0.08, 50+ 节点更快收敛 (实测
-      // 0.05 在 50 节点需要 6-8s 才稳定, 0.08 在 3-4s 内收敛). 不影响
-      // 视觉稳定性 (alphaMin 0.001 保持同样的稳定阈值).
       .alphaDecay(0.08)
       .velocityDecay(0.6)
       .alphaMin(0.001);
 
-    // M-18: 4 类边颜色 + dasharray (R10.5 Fix-Zoom: append 到 root <g>, 跟随缩放)
+    // Links: stroke color from edgeColors, dasharray per type, marker per type.
+    // cites gets thicker stroke (1.2) to emphasize the primary relationship.
     const link = root
       .append('g')
       .selectAll('line')
@@ -503,22 +550,22 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .attr('marker-end', (d: any) => {
         const s = LINK_STYLES[d.type];
         if (s.marker) return s.marker;
-        if (d.type === 'author_overlap') return 'url(#arrow-both-end)';
+        if (d.type === 'author_overlap') return 'url(#graphpage-arrow-both-end)';
         return null;
       })
       .attr('marker-start', (d: any) =>
-        d.type === 'author_overlap' ? 'url(#arrow-both-start)' : null
+        d.type === 'author_overlap' ? 'url(#graphpage-arrow-both-start)' : null
       );
 
-    // Nodes (R10.5 Fix-Zoom: append 到 root <g>, 跟随缩放)
+    // Nodes: each is a <g class="node"> containing circle + 2 text labels +
+    // <title> for browser tooltips. The .node class is load-bearing: zoom.filter
+    // and the selection effect both use it to find node groups.
     const node = root
       .append('g')
       .selectAll('g')
       .data(nodes)
       .join('g')
-      .attr('class', 'node')  // Fix-H: 标签 class 让独立 selected effect 能 selectAll 选中
-      // cursor: move 提示节点可拖动 (d3.drag 已实现但旧版 cursor: pointer 让用户以为
-      // 只能点开链接), click 仍触发 1 跳邻居高亮 + 打开 URL (d3 drag 不会误触 click)
+      .attr('class', 'node')
       .style('cursor', 'move')
       .on('mouseover', (event, d) => {
         setHovered(d);
@@ -529,18 +576,16 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       })
       .on('mouseout', () => setHovered(null))
       .on('click', (_, d) => {
-        // R10.5 Fix-Click-Conflict: 单击**只高亮**, 不跳 URL.
-        // R10.5.5: 高亮状态改为外部受控 — 通知 App.tsx 改 selectedPaperId.
-        // App.tsx 单一数据源, 论文列表 / 图谱节点 / 报告引用表 三者共享同一高亮.
-        if (onSelectPaper) {
-          onSelectPaper(selected === d.id ? null : d.id);
-        }
+        // Single click toggles selection. URL opens on dblclick only — keeps
+        // the two intents separate so accidental double-clicks don't navigate
+        // away mid-analysis.
+        selectPaper(selected === d.id ? null : d.id);
       })
       .call(
         d3
           .drag<any, SimNode>()
-          // clickDistance 阈值 5px: 拖动距离 < 5px 算 click, 触发单击高亮;
-          // > 5px 算 drag, 走拖动布局逻辑. 防"想点结果拖了"误触.
+          // clickDistance 5px: a drag shorter than this counts as a click and
+          // dispatches the click handler; longer counts as drag and skips it.
           .clickDistance(5)
           .on('start', (event, d) => {
             if (!event.active) simulation.alphaTarget(0.3).restart();
@@ -553,20 +598,14 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           })
           .on('end', (event, d) => {
             if (!event.active) simulation.alphaTarget(0);
-            // 旧版这里把 fx/fy 设 null, 节点松手后立刻被 simulation 推回去,
-            // 用户感觉"拖不动" — 实际是 d3 drag 工作了, 但视觉上没停留.
-            // 新版: 保留 fx/fy, 节点固定在拖放位置. 右键节点可解除固定.
-            // 注: simulation 不会动 fx/fy != null 的节点, 拖过的位置会"粘"住.
+            // Keep fx/fy set so the node stays pinned. Right-click clears.
           })
       )
-      // 双击节点: 打开原始 URL (符合图形交互约定: 单击=选中, 双击=打开)
       .on('dblclick', (_, d) => {
         if (d.url && /^https?:\/\//i.test(d.url)) {
           window.open(d.url, '_blank', 'noopener,noreferrer');
         }
       })
-      // 右键节点: 解除固定 (fx/fy = null), 节点重新加入 simulation 自由布局.
-      // 之前这里用 dblclick, 但 dblclick 已被跳 URL 占用. 右键是更地道的"解除"操作.
       .on('contextmenu', (event: MouseEvent, d) => {
         event.preventDefault();
         d.fx = null;
@@ -574,7 +613,8 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         simulation.alpha(0.5).restart();
       });
 
-    // M-18: 社区填色 (按 community_id) OR 相关性颜色
+    // Circle: filled with community color (or viridis relevance), stroked
+    // dark ink (or burnt orange when selected). Stroke width bumps on select.
     node
       .append('circle')
       .attr('r', (d) => d.size)
@@ -589,8 +629,6 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         return ns.has(d.id) ? 1 : 0.15;
       });
 
-    // M-18: 高亮邻居时其余节点透明度降低 (Fix-H 改由 selected 独立 effect 处理,
-    // 不再触发 simulation 重建 — 避免点击节点时位置重置 + CPU 峰值)
     if (selected) {
       node.style('opacity', (d) => (neighborSet(selected).has(d.id) ? 1 : 0.25));
       link.style('opacity', (d: any) => {
@@ -600,11 +638,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       });
     }
 
+    // Two-line label: bold title above, dim year below. pointer-events:none
+    // so labels don't intercept clicks meant for the parent node group.
     node
       .append('text')
-      // 节点标签显示: 论文标题 (前 14 字, 截断 + …) + 年份 (副)
-      // 之前只显示年份, 10+ 节点全是一串数字, 不点开 tooltip 根本认不出
-      // 哪篇是哪篇; 改双行: 主行短标题, 副行小字年份.
       .attr('font-size', 9)
       .attr('text-anchor', 'middle')
       .attr('dy', (d) => (d.size > 0 ? -d.size - 6 : -10))
@@ -625,6 +662,8 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       .attr('fill', '#57534e')
       .attr('pointer-events', 'none');
 
+    // Native SVG <title> for OS-level browser tooltips on touch devices where
+    // our React tooltip never appears.
     node
       .append('title')
       .text(
@@ -644,37 +683,35 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
     });
 
     return () => {
-      // R10.5 Fix-P0-MemoryLeak: 必须先移除 zoom 行为再停止 simulation,
-      // 否则 zoom 事件处理器残留在 DOM 上 → 内存泄漏.
+      // R10.5 Fix-P0-MemoryLeak: detach zoom handlers BEFORE stopping the
+      // simulation, otherwise the event listeners stay bound to the SVG and
+      // leak across renders.
       if (zoomRef.current) {
         try {
-          // D3 的 zoom 是通过 selection.on() 绑定的, 用 .on('.zoom', null) 移除
           svg.on('.zoom', null);
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore — zoom handler may already be gone */
+        }
       }
       simulation.stop();
     };
-    // Fix-H (R10.5): deps 只 [graph], 删 [selected].  selected 触发的样式更新
-    // 走下方独立 effect, 不再因点击节点重建 simulation (用户拖拽布局会丢失 + CPU 峰值).
-    // R10.5.40 Phase 5 (Agent 4): 加 filteredNodes / filteredLinks — 年份 / 作者过滤
-    // 变化时重建 simulation, 但 selected 变化仍走独立 effect.
-  }, [graph, filteredNodes, filteredLinks]);
+    // R10.5.59 jitter fix: 移除 hovered deps. hover 只更新 hoveredRef + state,
+    // 不重建 simulation. 节点位置稳定, 鼠标滑动不再颤动.
+  }, [graph, filteredNodes, filteredLinks, selected]);
 
-  // Fix-H (R10.5): 独立 selected effect — 改透明度/边 opacity, 不重建 simulation.
-  // 旧版: deps=[graph, selected], 用户点击节点 → effect 重跑 → svg.selectAll('*').remove()
-  //   + 重建 force simulation + 节点位置重置 + 100+ tick 重新收敛, 视觉抖动.
-  // 新版: simulation 走上面 [graph] effect, 此 effect 仅用 d3.select(svgRef.current) 改样式.
-  // R10.5.8: 邻居集合用上面 useMemo 算的 neighborSet, 去掉 effect 内重复计算.
-  // R10.5.40 Phase 5 (Agent 4): 改为 2 跳 neighborSet2 — click 高亮 1+2 跳邻居.
+  // Independent selected effect: only updates opacity/stroke. Does NOT rebuild
+  // the simulation, so clicking a node doesn't reset node positions or spike
+  // the CPU. The graph/filteredNodes deps ensure the effect re-runs when the
+  // underlying DOM groups are rebuilt (and our selectAll calls would otherwise
+  // find empty selections).
   useEffect(() => {
     if (!svgRef.current || !graph) return;
     const svg = d3.select(svgRef.current);
     const ns = neighborSet2;
     const ns1 = neighborSet1;
 
-    // 节点 + 边 opacity 仅在 selected 存在时改; selected=null 时还原 baseline
     svg
-      .selectAll<SVGGElement, SimNode>('g.node') // 节点 group 加 .node class 标记 (见 simulation effect)
+      .selectAll<SVGGElement, SimNode>('g.node')
       .style('opacity', (d) => (ns ? (ns.has(d.id) ? 1 : 0.25) : null));
     svg
       .selectAll<SVGLineElement, any>('line')
@@ -682,30 +719,28 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         if (!ns) return null;
         const sId = typeof d.source === 'string' ? d.source : d.source.id;
         const tId = typeof d.target === 'string' ? d.target : d.target.id;
-        // 2 跳高亮: 边连接的 2 个节点都在 2 跳集合内 → 亮; 否则 dim.
+        // 2-hop highlight: a link is "lit" only when both endpoints are in
+        // the 2-hop set. Otherwise it dims to 0.05.
         return ns.has(sId) && ns.has(tId) ? 0.9 : 0.05;
       });
-    // R10.5 Fix-Audit-Selected-Stroke: stroke 也在这里 apply, 不在 [graph] effect 闭包里.
-    // 旧版 stroke 在 [graph] effect 里用 closure 捕获的 selected 算 (effect 跑一次就定死),
-    // 用户点击节点时 [selected] effect 改 opacity 但 stroke 还是旧值, 红圈看不见.
-    // 现在 stroke/stroke-width 也跟随 selected 实时更新.
-    // R10.5.40 Phase 5: 1 跳圈外环 (stroke=outer) + 2 跳内环 (stroke=inner) 双层描边.
-    // 旧版只有 1 跳红圈, 现在 1 跳红圈 + 2 跳橙色虚线 = 视觉区分两级范围.
+    // Stroke: selected node = thick burnt orange. 1-hop neighbor = same color
+    // thinner. Everyone else = dark ink. Real-time update on click.
     svg
       .selectAll<SVGGElement, SimNode>('g.node')
       .select('circle')
       .attr('stroke', (d: any) => {
-        if (d.id === selected) return '#c2410c';   // 选中节点: 主橙色
-        if (ns1?.has(d.id)) return '#c2410c';       // 1 跳邻居: 同色 (让用户感知"主圈"边界)
-        return '#1c1917';                            // 其余: ink 黑
+        if (d.id === selected) return '#c2410c';
+        if (ns1?.has(d.id)) return '#c2410c';
+        return '#1c1917';
       })
       .attr('stroke-width', (d: any) => {
         if (d.id === selected) return 3;
         if (ns1?.has(d.id)) return 2.2;
         return 1.2;
       });
-    // R10.5.40 Phase 5: 2 跳邻居套一个外圈虚线 (在主 circle 之上画新 circle).
-    // 实现: 额外 append 一个 .ring-2 圈 (如果还没有), 2 跳节点 visible, 否则 hidden.
+    // 2-hop outer ring: dashed amber. We append the ring lazily once, then
+    // toggle visibility per-node. The amber is intentionally different from
+    // the burnt-orange 1-hop ring so users can tell the two levels apart.
     let ring2 = svg.selectAll<SVGCircleElement, SimNode>('g.node circle.ring-2');
     if (ring2.empty()) {
       ring2 = svg
@@ -713,7 +748,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         .append('circle')
         .attr('class', 'ring-2')
         .attr('fill', 'none')
-        .attr('stroke', '#f59e0b')  // amber-500, 跟 1 跳橙红区分
+        .attr('stroke', '#f59e0b')
         .attr('stroke-width', 1)
         .attr('stroke-dasharray', '2,2')
         .attr('pointer-events', 'none');
@@ -725,50 +760,57 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
       );
   }, [selected, graph, neighborSet1, neighborSet2]);
 
+  // ResizeObserver: when the container resizes (sidebar collapse, window
+  // resize, fullscreen toggle), re-fit so the graph stays in view.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      // Defer to next frame so the SVG has its new clientWidth/Height.
+      requestAnimationFrame(() => fitToViewRef.current?.());
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   return (
-    // R10.5.10: 全屏模式 — fixed 覆盖 viewport, z-50 浮在所有组件之上.
-    // 关闭: Esc / 工具栏 ⤡. 内层 aside-like 容器 + 工具栏 + svg + 图例共用同一份 JSX.
-    // R10.5.4 Editorial: 左侧分隔线 (跟 QueryPanel 右侧对齐), 无圆角, 无 border-r
+    // Fullscreen mode = fixed full-viewport overlay. Inline mode = full-width
+    // column. Single aside so the toolbar/legend/tooltip code paths are
+    // shared between the two states.
     <aside
       className={
         isFullscreen
           ? 'fixed inset-0 z-50 flex flex-col'
-          : 'w-full lg:w-[30%] lg:min-w-[320px] h-auto lg:h-full flex flex-col'
+          : 'w-full h-full flex flex-col'
       }
       style={{
         backgroundColor: 'var(--sf-bg)',
         borderLeft: isFullscreen ? 'none' : '1px solid var(--sf-border)',
         boxShadow: isFullscreen ? '0 0 0 1px var(--sf-border)' : undefined,
       }}
-      data-testid={isFullscreen ? 'graph-fullscreen' : undefined}
+      data-testid={isFullscreen ? 'graph-fullscreen' : 'graph-page'}
       role={isFullscreen ? 'dialog' : undefined}
-      aria-label={isFullscreen ? '引文图谱 全屏模式' : undefined}
+      aria-label={isFullscreen ? '引文图谱 全屏模式' : '引文图谱'}
     >
       <div
         className="px-4 py-2.5 flex items-center justify-between border-b gap-2"
         style={{ borderColor: 'var(--sf-border)' }}
       >
         <div className="flex items-baseline gap-2 min-w-0">
-          <span
-            className="font-mono text-[10px] uppercase tracking-[0.18em] shrink-0"
-            style={{ color: 'var(--sf-accent)' }}
-          >
-            § 4
-          </span>
+          {/* R10.5.59: 删除 '§ 4' 章节前缀符号 */}
           <h2
             className="font-display text-sm italic font-semibold shrink-0"
             style={{ color: 'var(--sf-text)' }}
           >
-            引文图谱
+            {t('graph.title')}
           </h2>
-          {/* R10.5.5: 选中节点时显示"邻居数" — 让用户感知 1 跳聚焦范围 */}
           {selected && neighborCount !== null && (
             <span
               className="font-mono text-[9px] uppercase tracking-[0.12em] truncate"
               style={{ color: 'var(--sf-accent)' }}
-              title="1 跳邻居数 (含自身)"
+              title={t('graph.neighborsHint')}
             >
-              · {neighborCount} 邻居
+              · {t('graph.neighbors', { n: neighborCount })}
             </span>
           )}
         </div>
@@ -778,36 +820,34 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               className="text-[10px] font-mono uppercase tracking-[0.12em] tabular-nums flex items-center gap-1.5"
               style={{ color: 'var(--sf-muted)' }}
             >
-              <span>{graph.metadata.total_papers}n · {graph.metadata.total_links}l</span>
+              <span>
+                {graph.metadata.total_papers}n · {graph.metadata.total_links}l
+              </span>
               {graph.metadata.community_count && graph.metadata.community_count > 1 && (
                 <span>· {graph.metadata.community_count} 簇</span>
               )}
-              {/* R10.5.11: 缩放深度指示 — 1.0x 灰色隐藏, 偏离时高亮提示 */}
               {Math.abs(zoomLevel - 1) > 0.05 && (
                 <span
-                  style={{
-                    color: 'var(--sf-accent)',
-                    fontWeight: 600,
-                  }}
-                  title={`当前缩放: ${zoomLevel.toFixed(2)}x (按 f 适配)`}
+                  style={{ color: 'var(--sf-accent)', fontWeight: 600 }}
+                  title={t('graph.zoomLevel', { k: zoomLevel.toFixed(2) })}
                 >
                   · {zoomLevel.toFixed(2)}x
                 </span>
               )}
             </span>
           )}
-          {/* R10.5.10: 图谱工具栏 — fit-to-view + 全屏 + 边类型图例 + 清选中 */}
           {graph && (
             <>
               <button
                 type="button"
                 onClick={fitToView}
-                title="适配视图 (f)"
+                title={t('graph.fitTooltip')}
                 aria-label="适配视图"
                 className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
                 style={{
                   color: 'var(--sf-muted)',
                   borderColor: 'var(--sf-border)',
+                  borderRadius: '2px',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.color = 'var(--sf-accent)';
@@ -818,43 +858,48 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
                   e.currentTarget.style.borderColor = 'var(--sf-border)';
                 }}
               >
-                ⊡
+                Fit
               </button>
-              {/* R10.5.10: 全屏 — ScholarFlow 差异化功能, 用户全屏看引文网络 */}
               <button
                 type="button"
                 onClick={toggleFullscreen}
-                title={isFullscreen ? '退出全屏 (Esc)' : '全屏看图 (Shift+F)'}
+                title={isFullscreen ? t('graph.fullscreenExitTooltip') : t('graph.fullscreenTooltip')}
                 aria-label={isFullscreen ? '退出全屏' : '全屏看图'}
                 className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
                 style={{
                   color: isFullscreen ? 'var(--sf-accent)' : 'var(--sf-muted)',
                   borderColor: isFullscreen ? 'var(--sf-accent)' : 'var(--sf-border)',
+                  borderRadius: '2px',
                 }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.color = 'var(--sf-accent)';
                   e.currentTarget.style.borderColor = 'var(--sf-accent)';
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.color = isFullscreen ? 'var(--sf-accent)' : 'var(--sf-muted)';
-                  e.currentTarget.style.borderColor = isFullscreen ? 'var(--sf-accent)' : 'var(--sf-border)';
+                  e.currentTarget.style.color = isFullscreen
+                    ? 'var(--sf-accent)'
+                    : 'var(--sf-muted)';
+                  e.currentTarget.style.borderColor = isFullscreen
+                    ? 'var(--sf-accent)'
+                    : 'var(--sf-border)';
                 }}
               >
-                {isFullscreen ? '⤡' : '⤢'}
+                {isFullscreen ? 'Exit' : 'Full'}
               </button>
-              {selected && onSelectPaper && (
+              {selected && (
                 <button
                   type="button"
-                  onClick={() => onSelectPaper(null)}
-                  title="清选中 (Esc)"
+                  onClick={() => selectPaper(null)}
+                  title={t('graph.clearTooltip')}
                   aria-label="清选中"
                   className="font-mono text-[10px] uppercase tracking-[0.1em] px-1.5 py-0.5 transition-colors border"
                   style={{
                     color: 'var(--sf-accent)',
                     borderColor: 'var(--sf-accent)',
+                    borderRadius: '2px',
                   }}
                 >
-                  ✕
+                  Clear
                 </button>
               )}
             </>
@@ -862,12 +907,9 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
         </div>
       </div>
 
-      {/* R10.5.40 Phase 5 (Agent 4): 图谱过滤条 — 年份范围 + 作者子串.
-          inline JSX, 不抽组件. mono 11px, hairline border, 紧凑一行.
-          - 年份 min/max: 默认 graph.metadata.year_range 全量; 收紧后实时过滤.
-          - 作者: 子串匹配 authors[] 任一项 (case-insensitive). 空 = 无过滤.
-          - 右边显示"过滤后节点 / 总节点" 提示当前过滤收紧了多少.
-      */}
+      {/* Filter bar: year min/max + author substring + visible count. Only
+          shows when the graph has at least one node — otherwise it's just
+          noise against the empty state. */}
       {graph && graph.nodes.length > 0 && (
         <div
           className="px-4 py-1.5 flex items-center gap-2 border-b flex-wrap"
@@ -878,7 +920,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             className="font-mono text-[11px] uppercase tracking-[0.12em] shrink-0"
             style={{ color: 'var(--sf-muted)' }}
           >
-            年份
+            {t('graph.filterYear')}
           </span>
           <input
             type="number"
@@ -895,14 +937,12 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               backgroundColor: 'var(--sf-bg)',
               color: 'var(--sf-text)',
               border: '1px solid var(--sf-border)',
+              borderRadius: '2px',
             }}
-            aria-label="起始年份"
+            aria-label={t('graph.filterYearMin')}
             data-testid="graph-filter-year-min"
           />
-          <span
-            className="font-mono text-[11px]"
-            style={{ color: 'var(--sf-muted)' }}
-          >
+          <span className="font-mono text-[11px]" style={{ color: 'var(--sf-muted)' }}>
             —
           </span>
           <input
@@ -920,28 +960,30 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               backgroundColor: 'var(--sf-bg)',
               color: 'var(--sf-text)',
               border: '1px solid var(--sf-border)',
+              borderRadius: '2px',
             }}
-            aria-label="结束年份"
+            aria-label={t('graph.filterYearMax')}
             data-testid="graph-filter-year-max"
           />
           <span
             className="font-mono text-[11px] uppercase tracking-[0.12em] shrink-0 ml-2"
             style={{ color: 'var(--sf-muted)' }}
           >
-            作者
+            {t('graph.filterAuthor')}
           </span>
           <input
             type="text"
             value={authorFilter}
-            placeholder="子串过滤"
+            placeholder={t('graph.filterAuthorPlaceholder')}
             onChange={(e) => setAuthorFilter(e.target.value)}
             className="font-mono text-[11px] px-1.5 py-0.5 flex-1 min-w-[80px] outline-none"
             style={{
               backgroundColor: 'var(--sf-bg)',
               color: 'var(--sf-text)',
               border: '1px solid var(--sf-border)',
+              borderRadius: '2px',
             }}
-            aria-label="按作者子串过滤"
+            aria-label={t('graph.filterAuthor')}
             data-testid="graph-filter-author"
           />
           {filteredNodes.length !== graph.nodes.length && (
@@ -956,11 +998,12 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               style={{
                 color: 'var(--sf-accent)',
                 borderColor: 'var(--sf-accent)',
+                borderRadius: '2px',
               }}
               title="清空过滤"
               aria-label="清空过滤"
             >
-              清空
+              {t('graph.filterClear')}
             </button>
           )}
           <span
@@ -968,12 +1011,15 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             style={{ color: 'var(--sf-muted)' }}
             data-testid="graph-filter-count"
           >
-            {filteredNodes.length} / {graph.nodes.length} 节点
+            {t('graph.filterCount', { visible: filteredNodes.length, total: graph.nodes.length })}
           </span>
         </div>
       )}
 
-      <div className="flex-1 relative min-h-[400px] lg:min-h-0">
+      <div
+        ref={containerRef}
+        className="flex-1 relative min-h-[400px] lg:min-h-0"
+      >
         <svg
           ref={svgRef}
           className="w-full h-full"
@@ -982,7 +1028,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           aria-label="引文关系图谱 (按 f 适配视图, Esc 清选中)"
         />
 
-        {/* R10.5 Fix-P0-EmptyState: 优雅的空状态 — 无数据时显示引导, 而非空白 */}
+        {/* Empty states: friendly placeholder when no graph data exists, or
+            when the search produced zero results (different copy because the
+            recovery action differs). pointer-events:none so they don't block
+            clicks that should fall through to the SVG. */}
         {!graph && (
           <div className="absolute inset-0 flex flex-col items-center justify-center text-center p-6 pointer-events-none">
             <div
@@ -1010,10 +1059,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               className="font-display italic text-lg mb-1"
               style={{ color: 'var(--sf-muted)' }}
             >
-              暂无图谱数据
+              {t('graph.noData')}
             </p>
             <p className="font-body text-[11px]" style={{ color: 'var(--sf-muted)' }}>
-              完成搜索后将自动构建引文关系图
+              {t('graph.noDataHint')}
             </p>
           </div>
         )}
@@ -1024,17 +1073,17 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               className="font-display italic text-lg mb-1"
               style={{ color: 'var(--sf-muted)' }}
             >
-              未检索到论文关联
+              {t('graph.noResults')}
             </p>
             <p className="font-body text-[11px]" style={{ color: 'var(--sf-muted)' }}>
-              尝试更换关键词重新搜索
+              {t('graph.noResultsHint')}
             </p>
           </div>
         )}
 
-        {/* R10.5.28 (用户反馈 #2): 全屏 Esc 提示 — 只留左下角, 跟原
-            左上角"边类型"图例不冲突. 之前 R10.5.26 重复加了底部图例条,
-            用户看 2 份图例困惑, 已删. 节点大小/颜色提示在原可折叠图例里. */}
+        {/* Fullscreen Esc hint: bottom-left so it doesn't collide with the
+            legend at the very corner. Only shows in fullscreen where the
+            regular UI is replaced. */}
         {graph && graph.nodes.length > 0 && isFullscreen && (
           <div
             className="absolute bottom-3 left-3 pointer-events-none"
@@ -1043,12 +1092,12 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             <div
               className="font-mono text-[10px] uppercase tracking-[0.15em] px-2.5 py-1.5 flex items-center gap-2 pointer-events-auto"
               style={{
-                backgroundColor: 'rgba(28, 25, 23, 0.85)',
+                backgroundColor: 'oklch(20% 0 0)',
                 color: 'var(--sf-bg)',
                 border: '1px solid var(--sf-border)',
                 boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
               }}
-              title="按下 Esc 退出全屏, 回到原位浏览"
+              title={t('graph.exitFullscreenHint')}
             >
               <kbd
                 className="px-1.5 py-0.5 font-mono font-semibold"
@@ -1061,11 +1110,14 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               >
                 Esc
               </kbd>
-              <span>退出全屏</span>
+              <span>{t('graph.exitFullscreenLabel')}</span>
             </div>
           </div>
         )}
 
+        {/* Rich tooltip: positioned in container coords (event.offsetX/Y
+            are relative to the SVG). Clamped to the right/bottom edges
+            so the card doesn't run off-screen on narrow viewports. */}
         {hovered && (
           <div
             className="absolute pointer-events-none px-3 py-2 text-xs max-w-xs z-10 font-ui"
@@ -1074,10 +1126,14 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
                 tooltipPos.x + 12,
                 (svgRef.current?.clientWidth || 400) - 280
               ),
-              top: Math.min(tooltipPos.y + 12, (svgRef.current?.clientHeight || 600) - 140),
+              top: Math.min(
+                tooltipPos.y + 12,
+                (svgRef.current?.clientHeight || 600) - 140
+              ),
               backgroundColor: 'var(--sf-text)',
               color: 'var(--sf-bg)',
               boxShadow: '0 4px 14px rgba(0,0,0,0.2)',
+              borderRadius: '4px',
             }}
           >
             <p className="font-display italic font-semibold mb-1 line-clamp-2 text-[13px]">
@@ -1090,15 +1146,15 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
               {hovered.year} · {hovered.venue || hovered.source}
             </p>
             <p className="text-[10px] mt-1 opacity-80">
-              Citations: {hovered.citation_count.toLocaleString()} · Score:{' '}
+              {t('graph.tooltip.citations')}: {hovered.citation_count.toLocaleString()} · {t('graph.tooltip.score')}:{' '}
               {hovered.final_score?.toFixed(1) ?? '—'}
             </p>
             {hovered.in_degree !== undefined && (
               <p className="text-[10px] mt-1 opacity-80">
-                入度 {hovered.in_degree} · 出度 {hovered.out_degree} · PR{' '}
+                {t('graph.tooltip.inOut')} {hovered.in_degree}/{hovered.out_degree} · {t('graph.tooltip.pr')}{' '}
                 {hovered.pagerank?.toFixed(2) ?? '—'}
                 {hovered.community_id !== undefined && (
-                  <> · 簇 {hovered.community_id}</>
+                  <> · c{hovered.community_id}</>
                 )}
               </p>
             )}
@@ -1113,10 +1169,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           </div>
         )}
 
-        {/* M-18 + R10.5.10: 4 类边图例 + community 颜色 — Editorial 极简风
-            R10.5.10 优化: 旧版图例 9 行常驻, 占左下角 ~200x100px, 节点多时
-            挡视线. 改可折叠 — 默认只露 "边 ▾" 标题 (1 行), 点开看 4 色 + 提示.
-            全屏模式下默认展开 (反正空间够, 让用户一眼知道怎么读图). */}
+        {/* Collapsible legend: 4 edge types + community hint + interaction
+            shortcuts. Default collapsed (small footprint in corner); expand
+            to see full key. Auto-expanded in fullscreen where real estate
+            is plentiful. */}
         <div
           className="absolute bottom-2 left-2 text-[10px] font-mono transition-shadow"
           style={{
@@ -1127,6 +1183,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             boxShadow: legendExpanded
               ? '0 2px 10px rgba(0,0,0,0.08)'
               : '0 1px 3px rgba(0,0,0,0.04)',
+            borderRadius: '4px',
           }}
           data-testid="edge-legend"
         >
@@ -1136,10 +1193,10 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
             aria-expanded={legendExpanded}
             className="w-full flex items-center justify-between gap-2 px-2 py-1 transition-colors"
             style={{ color: 'var(--sf-text)' }}
-            title={legendExpanded ? '折叠图例' : '展开图例'}
+            title={legendExpanded ? t('graph.legendCollapse') : t('graph.legendExpand')}
           >
             <span className="font-semibold uppercase tracking-[0.15em] text-[9px]">
-              边类型
+              {t('graph.legend')}
             </span>
             <span
               className="font-display italic text-[10px] leading-none transition-transform"
@@ -1150,15 +1207,12 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
           </button>
           {(legendExpanded || isFullscreen) && (
             <div className="px-2 pb-1.5 space-y-0.5">
-              {/* R10.5.7 P1-3: 色盲友好图例 — 4 类边用 ColorBrewer Set1 (红/蓝/绿/紫)
-                  旧版 3 类边都 ink 黑, 只靠 dasharray 区分 → 色盲用户无法辨识
-                  R10.5.9 落地: 颜色用 CSS 变量 — 主题切换时图例色自动跟随 */}
               <div className="flex items-center gap-1.5">
                 <span
                   className="inline-block w-3 h-px"
                   style={{ background: 'var(--sf-edge-cites)' }}
                 />
-                <span>cites</span>
+                <span>{t('graph.legend.cites')}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span
@@ -1168,7 +1222,7 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
                     borderTop: '1px dashed var(--sf-edge-co-cited)',
                   }}
                 />
-                <span>co-cited</span>
+                <span>{t('graph.legend.coCited')}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span
@@ -1178,22 +1232,22 @@ export function GraphPanel({ graph, selectedPaperId = null, onSelectPaper }: Pro
                     borderTop: '1px dotted var(--sf-edge-same-venue)',
                   }}
                 />
-                <span>same venue</span>
+                <span>{t('graph.legend.sameVenue')}</span>
               </div>
               <div className="flex items-center gap-1.5">
                 <span
                   className="inline-block w-3 h-px"
                   style={{ background: 'var(--sf-edge-author-overlap)' }}
                 />
-                <span>author overlap</span>
+                <span>{t('graph.legend.authorOverlap')}</span>
               </div>
               <div
                 className="pt-0.5 mt-1 border-t"
                 style={{ borderColor: 'var(--sf-border)' }}
               >
-                节点大小 = log(引用数) · 颜色 = 社区
+                {t('graph.legendHint')}
               </div>
-              {INTERACTION_HINTS.map((h) => (
+              {[t('graph.hint.click'), t('graph.hint.drag'), t('graph.hint.zoom')].map((h) => (
                 <div key={h}>{h}</div>
               ))}
             </div>

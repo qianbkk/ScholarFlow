@@ -56,6 +56,7 @@ async def test_search_node_entry_calls_prune_state(monkeypatch):
         "top5_summary_cache": None,
         "constraints": None,
         "empty_result_streak": 0,
+        "thinking_log": {},
     }
 
     # 用 mock 替换 SS/OA 等外部 API, 返空结果, 走完 search_node
@@ -140,6 +141,7 @@ async def test_empty_results_increment_streak(monkeypatch):
         "top5_summary_cache": None,
         "constraints": None,
         "empty_result_streak": 0,  # 初始 0
+        "thinking_log": {},
     }
 
     result = await search_agent.search_node(state)

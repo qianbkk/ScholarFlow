@@ -57,6 +57,10 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     # citation_expander 不调 LLM (只调 SS API 取引文图谱), 所以快照值仍是 iter start;
     # 但为了与 search/synth/rank 4 节点的写入链对齐, 显式 propagate 一次。
     prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
+    # R10.5.55: thinking step. 初始化时报告 plan.
+    from backend.agents._step_helper import _step
+    raw_count = len(state.get("raw_papers") or [])
+    _step(state, "expand_citations", f"🧮 准备引文扩展 · {raw_count} seed papers")
 
     raw_dicts = state.get("raw_papers") or []
     raw: list[Paper] = []
@@ -100,8 +104,10 @@ async def expand_citations_node(state: SearchState) -> SearchState:
             seed_limit = SEED_LIMIT_DEFAULT  # 5  — 中等相关
         else:
             seed_limit = SEED_LIMIT_MIN     # 3  — 低置信度, 保守扩展
+        _step(state, "expand_citations", f"🧮 dynamic seed_limit={seed_limit} (median_rel={median_rel:.1f})")
     else:
         seed_limit = SEED_LIMIT_DEFAULT
+        _step(state, "expand_citations", f"🧮 default seed_limit={seed_limit}")
 
     # R10.5.15 (P1-A 优化 2): 领域成熟度再调整. 成熟领域 (avg_citation > 500)
     # 扩展噪声多 → seed -2 避免扩到老无关论文. 新兴领域 (avg_citation < 30)
@@ -163,6 +169,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
+    _step(state, "expand_citations", f"↩️ 向后扩展 references · {len(backward_tasks)} seeds")
     backward_results = await bounded_gather(
         backward_tasks, label="expand_citations.backward", timeout=60.0,
     )
@@ -175,6 +182,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         )
         for p in top
     ]
+    _step(state, "expand_citations", f"↪️ 向前扩展 citations · {len(forward_tasks)} seeds")
     forward_results = await bounded_gather(
         forward_tasks, label="expand_citations.forward", timeout=60.0,
     )
@@ -213,6 +221,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     # 过滤（必须有摘要） + 去重（DOI-aware）
     all_papers = [p for p in all_papers if p.abstract and len(p.abstract) > 80]
     unique = deduplicate_papers(all_papers)
+    _step(state, "expand_citations", f"🧹 过滤 + 去重 · {len(all_papers)} → {len(unique)}")
 
     # ===== 截断到 MAX_TOTAL_PAPapers 上限：优先保留 raw + 高引扩展 =====
     if len(unique) > MAX_TOTAL_PAPERS:
@@ -236,6 +245,7 @@ async def expand_citations_node(state: SearchState) -> SearchState:
         f"dynamic_seed_limit={seed_limit}, median_rel={median_rel if rel_scores else 'N/A'})"
     )
 
+    _step(state, "expand_citations", f"✅ 引文扩展完成 · {len(unique)} papers")
     return {
         **state,
         "expanded_papers": [p.to_dict() for p in unique],

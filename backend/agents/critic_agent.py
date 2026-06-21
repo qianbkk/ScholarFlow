@@ -6,6 +6,7 @@ import logging
 from typing import Optional
 from backend.models.state import SearchState
 from backend.utils.llm_client import call_llm
+from backend.agents._step_helper import _step  # R10.5.55
 
 logger = logging.getLogger(__name__)
 
@@ -49,10 +50,11 @@ async def critic_review_node(state: SearchState) -> SearchState:
     ranked_papers = state.get("ranked_papers", [])
     if not ranked_papers:
         return state
-    
+    _step(state, "critic", f"🎯 启动 critic review · {len(ranked_papers)} papers")
+
     provider = state.get("provider")
     critic_results = []
-    
+
     logger.info(f"[critic_agent] 开始评审 {len(ranked_papers)} 篇论文")
     
     for i, paper in enumerate(ranked_papers[:10]):  # 限制最多评审前 10 篇
@@ -125,5 +127,6 @@ async def critic_review_node(state: SearchState) -> SearchState:
     # 注意：call_llm 内部已更新 total_cost_usd 和 total_tokens_used
     
     logger.info(f"[critic_agent] 完成评审，{len(critic_results)} 篇论文已评审")
-    
+    _step(state, "critic", f"✅ Critic review complete · {len(critic_results)} adopted")
+
     return updated_state

@@ -335,6 +335,7 @@ async def test_query_decompose_fallback_on_bad_json(monkeypatch):
         "top5_summary_cache": None,
         "constraints": None,
         "empty_result_streak": 0,
+        "thinking_log": {},
     }
 
     result = await query_decomposer.query_decompose_node(state)
@@ -345,6 +346,10 @@ async def test_query_decompose_fallback_on_bad_json(monkeypatch):
         f"Fallback should provide ≥1 sub_query, got {result['sub_queries']}"
     )
     assert result["status"] == "searching"
+    # R10.5.53: 验证思考日志有累积
+    assert "thinking_log" in result
+    assert "query_decompose" in result["thinking_log"]
+    assert len(result["thinking_log"]["query_decompose"]) >= 3
     # call_count == 2: 1 次初次 + 1 次重试
     assert call_count[0] == 2, (
         f"Expected 2 LLM calls (1 initial + 1 retry), got {call_count[0]}"
@@ -395,11 +400,21 @@ async def test_query_decompose_pydantic_success_path(monkeypatch):
         "top5_summary_cache": None,
         "constraints": None,
         "empty_result_streak": 0,
+        "thinking_log": {},
     }
 
     result = await query_decomposer.query_decompose_node(state)
     # 1 次成功, 不 retry
     assert call_count[0] == 1
+    # R10.5.53: 验证思考日志
+    assert "thinking_log" in result
+    assert "query_decompose" in result["thinking_log"]
+    # 成功路径: 至少有 "📥 收到查询", "🔍 分析查询意图", "🧠 调用 LLM",
+    # "✅ LLM 解析成功" 这 4 步
+    log = result["thinking_log"]["query_decompose"]
+    assert any("📥" in s for s in log), f"missing 📥 step in {log}"
+    assert any("🧠" in s for s in log), f"missing 🧠 step in {log}"
+    assert any("✅" in s for s in log), f"missing ✅ step in {log}"
     # 6 sub_queries 上限 (survey) → 截到 6
     assert len(result["sub_queries"]) >= 1
     # constraints 应该从 Pydantic 解析得到, 不走 fallback

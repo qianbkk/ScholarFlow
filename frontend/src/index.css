@@ -1,23 +1,136 @@
 /* =============================================================================
- * ScholarFlow — Editorial Knowledge
- * R10.5.4 视觉重设计: 学术编辑风
+ * ScholarFlow — Editorial Desk Reference
+ * R10.5.54 前端彻底重构
+ *
+ * 视觉语言: 编辑参考书 (Chicago Manual of Style 式的纸墨印刷).
+ * hairline rules + italic serif 标题 + mono 数字. 不创造侧条纹 / 渐变
+ * 文字 / 01/02/03 编号 / tracking eyebrow 反模式.
  *
  * 字体 (Google Fonts):
- *   - Fraunces     (display) 变体衬线, 数字 + 标题 — 学术期刊感
- *   - Newsreader   (body)    长阅读优化衬线 — 综述正文
- *   - IBM Plex Sans (ui)    工程感无衬线 — 按钮 / 控件
- *   - JetBrains Mono (mono)  代码 / IDs / 数值
+ *   - Fraunces      display italic
+ *   - Newsreader    body serif (长阅读)
+ *   - IBM Plex Sans UI sans
+ *   - JetBrains Mono 数字 / ID / 日期
  *
- * 4 套主题 — 全部 paper-and-ink 色系, WCAG AA (对比度 > 4.5:1) 已验:
- *   parchment (light) : #faf6ed / #1c1917 / #c2410c (burnt orange)
- *   kraft     (warm)  : #f4ecd8 / #1c1917 / #9a3412 (terracotta)
- *   midnight  (dark)  : #0d0d0d / #f5efe4 / #f97316 (bright orange)
- *   sage      (eye)   : #e8e4d4 / #1c1917 / #7c2d12 (rust)
+ * 4 套主题 (OKLCH):
+ *   - parchment  暖白 + 烧橙 (light default)
+ *   - kraft      深米 + 橙红
+ *   - midnight   深炭灰 + 亮橙
+ *   - sage       绿灰 + 锈
  * ============================================================================= */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* === OKLCH 主题 ===
+ * 每个主题由一组 OKLCH 值定义, 通过 [data-theme="xxx"] 选择器应用.
+ * tokens.ts 是真相源, 这里只 import 同名变量 — 但因为 tokens.ts 是
+ * .ts 模块, 这里用 oklch() 直写以避免 import 在 CSS 里麻烦. */
+html[data-theme="parchment"] {
+  --sf-bg:          oklch(96% 0.02 80);
+  --sf-surface:     oklch(98% 0.01 80);
+  --sf-surface-alt: oklch(92% 0.02 75);
+  --sf-text:        oklch(22% 0.01 60);
+  --sf-muted:       oklch(48% 0.01 60);
+  --sf-border:      oklch(85% 0.02 70);
+  --sf-accent:      oklch(55% 0.18 40);
+  --sf-accent-soft: oklch(92% 0.04 60);
+  --sf-shadow:      0 1px 2px oklch(85% 0.02 70 / 0.5);
+  /* 4 类边色 (引文图谱), 用 ColorBrewer Set1 思路 */
+  --sf-edge-cites:           oklch(48% 0.20 25);
+  --sf-edge-co-cited:        oklch(45% 0.20 260);
+  --sf-edge-same-venue:      oklch(42% 0.18 145);
+  --sf-edge-author-overlap:  oklch(45% 0.20 305);
+}
+
+html[data-theme="kraft"] {
+  --sf-bg:          oklch(93% 0.03 75);
+  --sf-surface:     oklch(95% 0.025 78);
+  --sf-surface-alt: oklch(89% 0.03 72);
+  --sf-text:        oklch(22% 0.015 60);
+  --sf-muted:       oklch(46% 0.02 60);
+  --sf-border:      oklch(82% 0.03 70);
+  --sf-accent:      oklch(50% 0.17 35);
+  --sf-accent-soft: oklch(88% 0.05 60);
+  --sf-shadow:      0 1px 2px oklch(82% 0.03 70 / 0.5);
+  --sf-edge-cites:           oklch(45% 0.20 25);
+  --sf-edge-co-cited:        oklch(42% 0.20 260);
+  --sf-edge-same-venue:      oklch(40% 0.18 145);
+  --sf-edge-author-overlap:  oklch(42% 0.20 305);
+}
+
+html[data-theme="midnight"] {
+  --sf-bg:          oklch(18% 0.005 60);
+  --sf-surface:     oklch(22% 0.008 60);
+  --sf-surface-alt: oklch(26% 0.012 60);
+  --sf-text:        oklch(94% 0.01 80);
+  --sf-muted:       oklch(68% 0.01 60);
+  --sf-border:      oklch(28% 0.01 60);
+  --sf-accent:      oklch(72% 0.18 50);
+  --sf-accent-soft: oklch(35% 0.10 50);
+  --sf-shadow:      0 1px 2px oklch(0% 0 0 / 0.5);
+  /* 暗底: 边色提亮 */
+  --sf-edge-cites:           oklch(72% 0.20 25);
+  --sf-edge-co-cited:        oklch(72% 0.18 260);
+  --sf-edge-same-venue:      oklch(78% 0.18 145);
+  --sf-edge-author-overlap:  oklch(78% 0.18 305);
+}
+
+html[data-theme="sage"] {
+  --sf-bg:          oklch(85% 0.02 100);
+  --sf-surface:     oklch(88% 0.02 100);
+  --sf-surface-alt: oklch(80% 0.025 100);
+  --sf-text:        oklch(22% 0.015 60);
+  --sf-muted:       oklch(46% 0.02 100);
+  --sf-border:      oklch(74% 0.025 100);
+  --sf-accent:      oklch(48% 0.16 35);
+  --sf-accent-soft: oklch(85% 0.05 60);
+  --sf-shadow:      0 1px 2px oklch(74% 0.025 100 / 0.5);
+  /* 暗绿底: 边色加深 */
+  --sf-edge-cites:           oklch(40% 0.20 25);
+  --sf-edge-co-cited:        oklch(35% 0.20 260);
+  --sf-edge-same-venue:      oklch(28% 0.15 145);
+  --sf-edge-author-overlap:  oklch(40% 0.20 305);
+}
+
+/* === 暗黑模式叠加 (data-dark="true")
+ * 跟 4 套主题正交. 开启后, parchment/kraft/sage 翻深, midnight 保持. */
+html[data-dark="true"][data-theme="parchment"],
+html[data-dark="true"][data-theme="kraft"] {
+  --sf-bg:          oklch(16% 0.008 60);
+  --sf-surface:     oklch(20% 0.01 60);
+  --sf-surface-alt: oklch(24% 0.012 60);
+  --sf-text:        oklch(94% 0.01 80);
+  --sf-muted:       oklch(64% 0.01 60);
+  --sf-border:      oklch(28% 0.01 60);
+  --sf-accent:      oklch(72% 0.18 50);
+  --sf-accent-soft: oklch(35% 0.10 50);
+}
+
+html[data-dark="true"][data-theme="sage"] {
+  --sf-bg:          oklch(20% 0.015 145);
+  --sf-surface:     oklch(24% 0.018 145);
+  --sf-surface-alt: oklch(28% 0.020 145);
+  --sf-text:        oklch(92% 0.01 80);
+  --sf-muted:       oklch(64% 0.02 100);
+  --sf-border:      oklch(32% 0.018 145);
+  --sf-accent:      oklch(68% 0.14 35);
+  --sf-accent-soft: oklch(35% 0.10 50);
+}
+
+/* 兜底: 未指定 data-theme 时, 用 parchment */
+html:not([data-theme]) {
+  --sf-bg:          oklch(96% 0.02 80);
+  --sf-text:        oklch(22% 0.01 60);
+  --sf-muted:       oklch(48% 0.01 60);
+  --sf-border:      oklch(85% 0.02 70);
+  --sf-accent:      oklch(55% 0.18 40);
+  --sf-accent-soft: oklch(92% 0.04 60);
+  --sf-surface:     oklch(98% 0.01 80);
+  --sf-surface-alt: oklch(92% 0.02 75);
+}
+
+/* === Base === */
 html, body, #root {
   height: 100%;
   margin: 0;
@@ -28,122 +141,75 @@ html, body, #root {
   text-rendering: optimizeLegibility;
 }
 
-/* === 4 套主题 — Editorial Knowledge ===
- * R10.5.10 调色:
- *   midnight 不再 #0d0d0d 纯黑, 改 #1a1a1a + #222 浮层 (深夜炭灰, 护眼)
- *   sage 不再 #e8e4d4 偏浅绿, 改 #d4ccb3 暗卡其绿, 让绿边 / 绿背景有明显分层 */
-:root,
-html.theme-parchment {
-  --sf-bg: #faf6ed;            /* 暖米色羊皮纸 */
-  --sf-bg-elev: #f3ecdb;       /* 略深浮层 (dropdown / card) */
-  --sf-text: #1c1917;          /* 深墨水 */
-  --sf-muted: #57534e;         /* 灰墨 */
-  --sf-border: #e7dcc7;        /* 纸边 */
-  --sf-accent: #c2410c;        /* 燃烧橙 (single bold accent) */
-  --sf-accent-soft: #fed7aa;   /* 浅橙背景 (badge / highlight) */
-  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.04),
-               0 4px 12px rgba(28, 25, 23, 0.06);
-  /* === R10.5.9 code-review 落地: GraphPanel 4 类边色升 CSS 变量 ===
-     旧实现硬编码 4 个 hex, midnight 主题看不见蓝, sage 主题绿跟
-     背景色冲. 现在每主题单独微调, 仍走 ColorBrewer Set1 色盲友好
-     调色板, 但跟背景保证 ≥ 3:1 对比度. */
-  --sf-edge-cites: #b91c1c;        /* 红 — 直接引用 (深一点, 浅底更显) */
-  --sf-edge-co-cited: #1d4ed8;     /* 蓝 — 共同引用 */
-  --sf-edge-same-venue: #15803d;   /* 绿 — 同会议 */
-  --sf-edge-author-overlap: #6b21a8; /* 紫 — 共同作者 */
-}
-html.theme-kraft {
-  --sf-bg: #f4ecd8;            /* 牛皮纸 */
-  --sf-bg-elev: #ebe0c4;
-  --sf-text: #1c1917;
-  --sf-muted: #57534e;
-  --sf-border: #d6c5a0;
-  --sf-accent: #9a3412;        /* terracotta */
-  --sf-accent-soft: #fed7aa;
-  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.05),
-               0 4px 14px rgba(28, 25, 23, 0.08);
-  /* kraft 暖底: 边色饱和度 +15%, 跟羊皮色背景拉开 */
-  --sf-edge-cites: #991b1b;
-  --sf-edge-co-cited: #1e40af;
-  --sf-edge-same-venue: #166534;
-  --sf-edge-author-overlap: #581c87;
-}
-html.theme-midnight {
-  /* R10.5.10: 不再 #0d0d0d 纯黑 — 改深夜炭灰 #1c1a1a, 浮层 #25231f (暖偏中性).
-     护眼 (OLED 像素不发光, 长时间阅读不刺眼) + 边色 + 文字对比度都更舒适. */
-  --sf-bg: #1c1a1a;            /* 深夜炭灰 — 不纯黑, 微暖色调 */
-  --sf-bg-elev: #25231f;
-  --sf-text: #f5efe4;          /* cream */
-  --sf-muted: #a8a29e;
-  --sf-border: #3a3835;        /* 浮层分隔, 比纯黑略亮 */
-  --sf-accent: #fb923c;        /* bright orange — 提饱和, 暗底更亮 */
-  --sf-accent-soft: #5a2e0f;
-  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.4),
-               0 4px 14px rgba(0, 0, 0, 0.5);
-  /* 暗底: 边色提亮 (ColorBrewer Set1 light 变体), 蓝紫尤其重要 */
-  --sf-edge-cites: #fb7185;        /* 亮红 */
-  --sf-edge-co-cited: #60a5fa;     /* 亮蓝 */
-  --sf-edge-same-venue: #86efac;   /* 亮绿 */
-  --sf-edge-author-overlap: #c4b5fd; /* 亮紫 */
-}
-html.theme-sage {
-  /* R10.5.10: 不再 #e8e4d4 浅绿 — 改暗卡其 #c8c2a6, 浮层 #b8b294.
-     旧浅绿 + 绿边 (--sf-edge-same-venue) 冲背景, 绿边看不出"同会议".
-     新暗绿让绿/红/蓝/紫 4 边都有明显对比. 仍"护眼" (低饱和暖底). */
-  --sf-bg: #c8c2a6;            /* 暗卡其绿 */
-  --sf-bg-elev: #b8b294;
-  --sf-text: #1f1d18;          /* 略偏暖深, 跟绿底协调 */
-  --sf-muted: #4a4640;
-  --sf-border: #9a947a;        /* 中等分隔线 */
-  --sf-accent: #7c2d12;        /* rust */
-  --sf-accent-soft: #fde68a;
-  --sf-shadow: 0 1px 2px rgba(28, 25, 23, 0.08),
-               0 4px 12px rgba(124, 45, 18, 0.12);
-  /* 暗绿底: 绿边继续加深, 红/蓝/紫饱和度拉满, 4 色分层明显 */
-  --sf-edge-cites: #991b1b;         /* 深红 — 跟绿底对比度最高 */
-  --sf-edge-co-cited: #1e3a8a;      /* 深蓝 */
-  --sf-edge-same-venue: #14532d;    /* 极深绿 — 仍能跟暗绿底区分 */
-  --sf-edge-author-overlap: #581c87; /* 紫 */
-}
-
 body {
   background-color: var(--sf-bg);
   color: var(--sf-text);
-  transition: background-color 300ms ease, color 300ms ease;
-  /* 极轻微纸面纹理 (SVG 噪点, 1.5% 透明度) — 避免纯色平面感 */
-  background-image:
-    radial-gradient(at 20% 10%, rgba(194, 65, 12, 0.04) 0px, transparent 50%),
-    radial-gradient(at 80% 80%, rgba(28, 25, 23, 0.03) 0px, transparent 50%);
-  background-attachment: fixed;
+  font-size: 15px;
+  line-height: 1.55;
+  transition: background-color 200ms ease, color 200ms ease;
+}
+
+#root {
+  display: flex;
+  flex-direction: column;
 }
 
 /* === 字体 utility === */
-.font-display { font-family: 'Fraunces', 'Newsreader', Georgia, serif; }
-.font-body    { font-family: 'Newsreader', 'Fraunces', Georgia, serif; }
-.font-ui      { font-family: 'IBM Plex Sans', -apple-system, sans-serif; }
-.font-mono    { font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace; }
+.font-display { font-family: 'Fraunces', 'Newsreader', Georgia, serif; font-style: italic; font-weight: 600; }
+.font-body    { font-family: 'Newsreader', 'Fraunces', Georgia, serif; font-weight: 400; }
+.font-ui      { font-family: 'IBM Plex Sans', -apple-system, sans-serif; font-weight: 500; }
+.font-mono    { font-family: 'JetBrains Mono', 'Menlo', 'Consolas', monospace; font-weight: 500; }
 
-/* 兼容旧类名 (R10 M-17) */
-.text-themed { color: var(--sf-text); }
-.text-themed-muted { color: var(--sf-muted); }
-
-/* === 入场动画 — staggered reveal (R10.5.4) === */
-@keyframes sf-rise {
-  from { opacity: 0; transform: translateY(8px); }
-  to   { opacity: 1; transform: translateY(0); }
+/* === 滚动条 (Editorial 细线) === */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--sf-border);
+  border-radius: 0;
+  transition: background 150ms ease;
 }
-@keyframes sf-fade {
+::-webkit-scrollbar-thumb:hover { background: var(--sf-muted); }
+
+/* === 选中文字 === */
+::selection {
+  background-color: var(--sf-accent-soft);
+  color: var(--sf-text);
+}
+
+/* === 焦点环 — 细线 + 偏移 === */
+*:focus-visible {
+  outline: 1.5px solid var(--sf-accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* === 唯一允许动效: pipeline tick pulse (running) ===
+ * 其它动效全部移除: 无 stagger reveal / 无 section fade / 无 shimmer. */
+@keyframes sf-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
+}
+
+@keyframes sf-fade-in {
   from { opacity: 0; }
-  to   { opacity: 1; }
+  to { opacity: 1; }
 }
-.sf-rise {
-  animation: sf-rise 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
+
+.sf-fade-in {
+  animation: sf-fade-in 200ms ease both;
 }
-.sf-rise-d1 { animation-delay: 60ms; }
-.sf-rise-d2 { animation-delay: 120ms; }
-.sf-rise-d3 { animation-delay: 180ms; }
-.sf-rise-d4 { animation-delay: 240ms; }
-.sf-fade { animation: sf-fade 320ms ease both; }
+
+.sf-pulse {
+  animation: sf-pulse 1.2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
 
 /* === Report 报告正文 — Newsreader 长阅读排版 === */
 .report-body {
@@ -152,14 +218,15 @@ body {
   line-height: 1.75;
   color: var(--sf-text);
   font-feature-settings: "kern", "liga", "onum";
+  max-width: 65ch;
 }
 .report-body > *:first-child { margin-top: 0; }
 .report-body > *:last-child  { margin-bottom: 0; }
 .report-body h1 {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 600;
-  font-size: 2rem;
-  line-height: 1.15;
+  font-size: 1.85rem;
+  line-height: 1.2;
   letter-spacing: -0.02em;
   margin-top: 0;
   margin-bottom: 1.25rem;
@@ -168,12 +235,11 @@ body {
 .report-body h2 {
   font-family: 'Fraunces', Georgia, serif;
   font-weight: 600;
-  font-size: 1.5rem;
-  line-height: 1.2;
+  font-size: 1.35rem;
+  line-height: 1.25;
   letter-spacing: -0.015em;
   margin-top: 2.25rem;
   margin-bottom: 0.75rem;
-  /* 学术期刊: 标题底部双线 (印刷感) */
   border-bottom: 1px solid var(--sf-border);
   padding-bottom: 0.4rem;
 }
@@ -182,11 +248,9 @@ body {
   font-weight: 600;
   font-size: 0.85rem;
   line-height: 1.3;
-  text-transform: uppercase;
-  letter-spacing: 0.12em;
-  margin-top: 2rem;
+  margin-top: 1.5rem;
   margin-bottom: 0.5rem;
-  color: var(--sf-accent);
+  color: var(--sf-text);
 }
 .report-body p {
   margin: 0 0 1rem 0;
@@ -209,8 +273,6 @@ body {
   left: -0.85rem;
   color: var(--sf-accent);
   font-weight: 700;
-  font-size: 1.2em;
-  line-height: 1.2;
 }
 .report-body ol {
   list-style: decimal;
@@ -234,7 +296,7 @@ body {
   font-size: 0.85em;
   padding: 0.1em 0.35em;
   border-radius: 2px;
-  background-color: var(--sf-bg-elev);
+  background-color: var(--sf-surface-alt);
   color: var(--sf-accent);
   border: 1px solid var(--sf-border);
 }
@@ -243,8 +305,8 @@ body {
   font-size: 0.85em;
   line-height: 1.55;
   padding: 1rem 1.25rem;
-  border-radius: 4px;
-  background-color: var(--sf-bg-elev);
+  border-radius: 2px;
+  background-color: var(--sf-surface-alt);
   border: 1px solid var(--sf-border);
   overflow-x: auto;
   margin: 1.25rem 0;
@@ -260,8 +322,9 @@ body {
   font-size: 1.05em;
   line-height: 1.6;
   margin: 1.5rem 0;
-  padding: 0.5rem 1.25rem;
-  border-left: 3px solid var(--sf-accent);
+  padding: 0.5rem 0;
+  border-top: 1px solid var(--sf-border);
+  border-bottom: 1px solid var(--sf-border);
   color: var(--sf-muted);
 }
 .report-body hr {
@@ -284,110 +347,95 @@ body {
 .report-body th {
   font-family: 'IBM Plex Sans', sans-serif;
   font-weight: 600;
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-size: 0.78rem;
   color: var(--sf-muted);
   border-bottom: 2px solid var(--sf-text);
 }
 
-/* === 滚动条 (Editorial 细线) === */
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: var(--sf-border);
-  border-radius: 0;
-  transition: background 150ms ease;
-}
-::-webkit-scrollbar-thumb:hover { background: var(--sf-muted); }
-
-/* === 选中文字 (Editorial 强调色) === */
-::selection {
-  background-color: var(--sf-accent-soft);
-  color: var(--sf-text);
-}
-
-/* === 焦点环 — 学术期刊风的细线 + 偏移 === */
-*:focus-visible {
-  outline: 1.5px solid var(--sf-accent);
-  outline-offset: 2px;
-  border-radius: 2px;
-}
-
-/* === R10.5.5: 跨组件论文聚焦 — 报告内锚点高亮 === */
-/* 报告末尾的 paper_anchors 表, 选中论文的对应行加左侧色条 + 软底色 */
+/* === 论文锚点 (R10.5.5 cross-component 引用高亮) === */
 .report-body [data-paper-id] {
   cursor: pointer;
   transition: background-color 150ms ease;
 }
 .report-body [data-paper-id]:hover {
-  background-color: var(--sf-bg-elev);
+  background-color: var(--sf-surface-alt);
 }
 .report-body [data-paper-id][data-sf-selected] {
-  background-color: var(--sf-accent-soft) !important;
-  box-shadow: inset 3px 0 0 var(--sf-accent);
+  background-color: var(--sf-accent-soft);
 }
 
-/* === R10.5.40 (Agent 1): 暗黑模式 (data-theme="dark") ===
- * 与 4 套 Editorial 主题 (theme-midnight / sage / kraft / parchment) 正交.
- * 用户级别 opt-in 开关: 开启后, 4 套 Editorial 主题均渲染为暗底色.
- * 复用了午夜主题 (#1c1a1a 深夜炭灰) 配色避免另起炉灶, 但保留 Editorial
- * 变量名 (--sf-bg / --sf-text / --sf-accent / --sf-border) 让组件无需改动.
- *
- * 实现说明:
- *   - App.tsx 启动时根据 useLocalStorage('sf-dark-mode') 设 data-theme.
- *   - 数据结构: <html data-theme="dark"> 覆盖所有 theme-* 类下的 --sf-*.
- *   - 与午夜 (theme-midnight) 的区别: 用户主动切换, 持久化在 localStorage;
- *     midnight 是 4 套主题之一. data-theme="dark" 一键把当前 Editorial 主题
- *     变成暗色.
- *   - 边色 (--sf-edge-*) 用 midnight 主题的值, 暗底四色边色对比度好. */
-html[data-theme="dark"] {
-  --sf-bg: #0d0d0d;
-  --sf-bg-elev: #1c1a1a;
-  --sf-text: #f5efe4;
-  --sf-muted: #a8a29e;
-  --sf-border: #2e2c29;
-  --sf-accent: #fb923c;
-  --sf-accent-soft: #5a2e0f;
-  --sf-shadow: 0 1px 2px rgba(0, 0, 0, 0.5),
-               0 4px 14px rgba(0, 0, 0, 0.6);
-  /* 暗底边色: 跟 4 套主题中 midnight 同套, 颜色饱和度高, 跟 #0d0d0d 拉开 */
-  --sf-edge-cites: #fb7185;
-  --sf-edge-co-cited: #60a5fa;
-  --sf-edge-same-venue: #86efac;
-  --sf-edge-author-overlap: #c4b5fd;
+/* === 表格 utility === */
+.sf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
 }
-
-/* data-theme="dark" 时, body 背景去掉纸面纹理 (暗底纹理噪声太抢眼) */
-html[data-theme="dark"] body {
-  background-image: none;
-}
-
-/* === R10.5.40 (Agent 1): InlinePaperCard + PipelineStrip 样式 ===
- * 复用现有 --sf-* 变量, 不引入新变量名 (除 --sf-pipeline-status 一组局部
- * status 色, 仅在 PipelineStrip 内使用). */
-.sf-inline-paper-card {
-  /* 跟 Editorial 报告风格一致: 学术期刊脚注卡片 */
-  border-left: 3px solid var(--sf-accent);
-  background-color: var(--sf-bg-elev);
-  border-top: 1px solid var(--sf-border);
-  border-right: 1px solid var(--sf-border);
+.sf-table th, .sf-table td {
+  text-align: left;
+  padding: 8px 12px;
   border-bottom: 1px solid var(--sf-border);
 }
-
-.sf-inline-paper-card .sf-abstract-preview {
-  /* 240 字符截断 + 渐变淡出 */
-  display: -webkit-box;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+.sf-table th {
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--sf-muted);
 }
 
-/* PipelineStrip: 8 节点状态指示色 (新引入 CSS 变量, Agent 3 文档化) */
-.sf-pipeline-strip {
-  --sf-pipeline-status-pending: var(--sf-border);
-  --sf-pipeline-status-running: var(--sf-accent);
-  --sf-pipeline-status-done: var(--sf-accent);
-  --sf-pipeline-status-error: #dc2626;
+/* === Button utility === */
+.sf-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--sf-border);
+  background-color: transparent;
+  color: var(--sf-text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: border-color 100ms ease, background-color 100ms ease, color 100ms ease;
+}
+.sf-btn:hover {
+  border-color: var(--sf-accent);
+  color: var(--sf-accent);
+}
+.sf-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.sf-btn-primary {
+  background-color: var(--sf-accent);
+  color: var(--sf-bg);
+  border-color: var(--sf-accent);
+}
+.sf-btn-primary:hover {
+  background-color: var(--sf-text);
+  border-color: var(--sf-text);
+  color: var(--sf-bg);
+}
+
+/* === Input utility === */
+.sf-input {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--sf-border);
+  background-color: var(--sf-bg);
+  color: var(--sf-text);
+  font-family: 'IBM Plex Sans', sans-serif;
+  font-size: 14px;
+  border-radius: 2px;
+  transition: border-color 100ms ease;
+}
+.sf-input:hover { border-color: var(--sf-muted); }
+.sf-input:focus { outline: none; border-color: var(--sf-accent); }
+
+/* === Hairline rule === */
+.sf-hr {
+  border: none;
+  border-top: 1px solid var(--sf-border);
+  margin: 0;
 }

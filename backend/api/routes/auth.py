@@ -27,11 +27,14 @@ from backend.auth.dependencies import (
     issue_key_for_email,
     issue_key_for_email_with_status,  # R10.5.25: 返 (key, rotated) 让前端警觉 Session DoS
     _hash_password,  # R10.5.28: 新注册 / 改密码 走 PBKDF2
+    _generate_key,  # R10.5.55: /auth/revoke 重新生成 key
+    _hash_key,  # R10.5.55: /auth/revoke 哈希新 key
     verify_password,  # R10.5.28: 登录校验密码
     _read_user_password,  # R10.5.28: 查 user 密码 hash
     _write_user_password,  # R10.5.28: 写 user 密码 hash
     # _register_user 已迁出, register/login 改用 issue_key_for_email. P1-2 移除死导入.
 )
+from backend.utils.cache import _connect_with_wal  # R10.5.55: /auth/revoke DB 访问
 from backend.utils.network import get_real_ip
 
 logger = logging.getLogger(__name__)
@@ -204,6 +207,13 @@ async def register(
     if not result:
         raise HTTPException(status_code=400, detail="email 格式无效")
     api_key, rotated = result
+    # R10.5.55: register 严格化 — 已注册邮箱报 409 (而非默默轮换 key).
+    # 旧行为导致前端分不清"注册成功" vs "轮换 key", 用户误以为 key 长期不变.
+    if rotated:
+        raise HTTPException(
+            status_code=409,
+            detail="该邮箱已注册, 请直接 Login (不要重新 Register, 否则会轮换你的 key).",
+        )
     # R10.5.17: user_id 派生改用单源 helper (跟 audit log 一致).
     from backend.utils.user_id import hash_user_id
     user_id = hash_user_id(req.email)
@@ -572,4 +582,47 @@ async def issue_stream_token(user: User = Depends(get_current_user)) -> StreamTo
     return StreamTokenResponse(
         token=_new_stream_token(user.user_id),
         expires_in=_STREAM_TOKEN_TTL_SEC,
+    )
+
+
+# ===== R10.5.55: 用户自助轮换 API Key =====
+@router.post("/revoke", response_model=AuthResponse)
+async def revoke_key(
+    user: User = Depends(get_current_user),
+) -> AuthResponse:
+    """用户自助轮换 API key. 旧 key 立即失效, 返新 key.
+
+    R10.5.55 取代 R10.5.28 注释里提到的 /auth/revoke 端点 (该注释指过).
+    鉴权依赖 get_current_user 要求 X-API-Key header 或 sf_session_id cookie.
+    """
+    # 1) 反查 display_name (从 user_id 不可逆推 email, 但 display_name 可查表)
+    conn = _connect_with_wal("auth")
+    try:
+        row = conn.execute(
+            "SELECT display_name FROM users WHERE user_id = ?",
+            (user.user_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    # sqlite3.Row 如果 row_factory 设置了; tuple fallback. 取首列.
+    display_name = row[0] if row else user.user_id
+
+    # 2) 直接 regenerate 给 user_id (绕过 issue_key_for_email_with_status 需 email 参数)
+    new_key = _generate_key()
+    new_hash = _hash_key(new_key)
+    conn = _connect_with_wal("auth")
+    try:
+        conn.execute(
+            "UPDATE users SET api_key_hash = ? WHERE user_id = ?",
+            (new_hash, user.user_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    logger.info(f"[auth/revoke] KEY ROTATED for user_id={user.user_id[:8]}***")
+    return AuthResponse(
+        user_id=user.user_id,
+        display_name=display_name,
+        api_key=new_key,
+        key_rotated=True,
     )
