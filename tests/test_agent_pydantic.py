@@ -289,15 +289,15 @@ async def test_parse_with_retry_async_both_fail():
     assert call_count[0] == 2
 
 
-# ===== 13. query_decompose_node 集成测试 (故意给坏 JSON) =====
+# ===== 13. query_decompose_node 集成测试 (R10.5.59b: LLM 模式禁止兜底) =====
 
 @pytest.mark.asyncio
-async def test_query_decompose_fallback_on_bad_json(monkeypatch):
-    """[R10.5.47] query_decompose_node 收到坏 JSON, Pydantic 校验失败, 走 fallback.
+async def test_query_decompose_raises_in_llm_mode_on_bad_json(monkeypatch):
+    """[R10.5.59b] query_decompose_node LLM 模式 + 坏 JSON → raise RuntimeError.
 
-    旧实现: _extract_json_object 提取坏 JSON, sub_queries 走 _fallback_decompose.
-    新实现: Pydantic ValidationError 1 次重试, 再失败 _fallback_decompose.
-    测试重点: 不崩溃, 有 sub_queries 返回, constraints 是兜底.
+    旧实现: Pydantic 校验失败 2 次后走 _fallback_decompose 兜底.
+    新实现: LLM 模式下禁止离线兜底, 立即 raise RuntimeError 让上游透传
+    真实失败原因 (用户能看到 LLM provider 配置错误 / 网络问题 / 预算耗尽).
     """
     from backend.agents import query_decomposer
     from backend.utils import llm_client as llm_mod
@@ -307,14 +307,11 @@ async def test_query_decompose_fallback_on_bad_json(monkeypatch):
     async def fake_call_llm(prompt, **kwargs):
         call_count[0] += 1
         if call_count[0] == 1:
-            # 第一次: 故意给坏 JSON
             return "{ not valid json garbage", {"model": "test", "tokens": 10, "cost": 0.001}
         else:
-            # 第二次 (retry): 还给坏 JSON, 强制走 fallback
             return "still not valid", {"model": "test", "tokens": 10, "cost": 0.001}
 
     monkeypatch.setattr(query_decomposer, "call_llm", fake_call_llm)
-    # Pydantic 解析在 query_decomposer 模块内部, 不需要 monkeypatch 其他
 
     state = {
         "original_query": "test query",
@@ -336,21 +333,67 @@ async def test_query_decompose_fallback_on_bad_json(monkeypatch):
         "constraints": None,
         "empty_result_streak": 0,
         "thinking_log": {},
+        "runtime_mode": "llm",  # R10.5.59b: LLM 模式禁止离线兜底
+    }
+
+    # R10.5.59b: LLM 模式 + LLM 失败必 raise RuntimeError
+    with pytest.raises(RuntimeError, match="LLM 解析失败.*禁止离线兜底"):
+        await query_decomposer.query_decompose_node(state)
+
+
+@pytest.mark.asyncio
+async def test_query_decompose_fallback_in_local_mode(monkeypatch):
+    """[R10.5.59b] query_decompose_node local 模式 + LLM 失败 → _fallback_decompose 兜底.
+
+    local 模式用于离线演示, 仍允许离线兜底分解 (跟 LLM 模式行为不同).
+    """
+    from backend.agents import query_decomposer
+    from backend.utils import llm_client as llm_mod
+
+    call_count = [0]
+
+    async def fake_call_llm(prompt, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return "{ not valid json garbage", {"model": "test", "tokens": 10, "cost": 0.001}
+        else:
+            return "still not valid", {"model": "test", "tokens": 10, "cost": 0.001}
+
+    monkeypatch.setattr(query_decomposer, "call_llm", fake_call_llm)
+
+    state = {
+        "original_query": "test query",
+        "sub_queries": [],
+        "raw_papers": [],
+        "expanded_papers": [],
+        "ranked_papers": [],
+        "iteration": 0,
+        "max_iterations": 3,
+        "total_tokens_used": 0,
+        "total_cost_usd": 0.0,
+        "budget_limit_usd": 2.0,
+        "model_usage": {},
+        "status": "decomposing",
+        "error": None,
+        "provider": "kimi",
+        "request_id": "test",
+        "top5_summary_cache": None,
+        "constraints": None,
+        "empty_result_streak": 0,
+        "thinking_log": {},
+        "runtime_mode": "local",  # local 模式允许兜底
     }
 
     result = await query_decomposer.query_decompose_node(state)
 
-    # 验证: 不崩溃, 有 sub_queries (从 fallback), 状态为 searching
+    # local 模式下 LLM 失败 → 兜底分解
     assert "sub_queries" in result
     assert len(result["sub_queries"]) >= 1, (
-        f"Fallback should provide ≥1 sub_query, got {result['sub_queries']}"
+        f"local 模式 fallback 应提供 ≥1 sub_query, got {result['sub_queries']}"
     )
     assert result["status"] == "searching"
-    # R10.5.53: 验证思考日志有累积
     assert "thinking_log" in result
     assert "query_decompose" in result["thinking_log"]
-    assert len(result["thinking_log"]["query_decompose"]) >= 3
-    # call_count == 2: 1 次初次 + 1 次重试
     assert call_count[0] == 2, (
         f"Expected 2 LLM calls (1 initial + 1 retry), got {call_count[0]}"
     )
