@@ -80,6 +80,21 @@ tests/e2e_*.py
 *.diff
 校赛材料/
 
+# ===== R10.5.91: 比赛汇报演示稿 (slides/) 本地保留, 不入仓 =====
+# 包含 cobalt-grid HTML deck + Q&A 预案 + 截图, 仅供答辩现场使用.
+# 体积大 + 含团队占位符 + 比赛专属内容, 不属于开源代码范畴.
+slides/
+
+# ===== R10.5.91: .env.bak 是前端 API Key 编辑端点 (R10.5.59b) 自动备份 =====
+# 包含真实 provider API keys, 绝不入仓. .env 本身也已在 ignore 列表 (line 30+).
+.env.bak
+
+# ===== R10.5.91: 第三方模板库 (vendor/) 本地保留, 不入仓 =====
+# beautiful-html-templates 是 32 个 3rd party HTML 模板 (~10MB),
+# 只为本次生成演示稿临时下载, 不属于项目自有代码.
+# frontend-slides 技能已在 .claude/ 整体 ignore 中.
+vendor/
+
 # ===== 标准开源仓库标配 (入仓) =====
 # README.md / LICENSE / VERSION / CHANGELOG.md / CONTRIBUTING.md
 # / CODE_OF_CONDUCT.md / SECURITY.md / .env.example 全部保留入仓

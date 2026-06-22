@@ -207,10 +207,81 @@ ROUTER_QUALITY_THRESHOLD_PAPERS = int(os.getenv("ROUTER_QUALITY_THRESHOLD_PAPERS
 ROUTER_BUDGET_SAFETY_MARGIN = float(os.getenv("ROUTER_BUDGET_SAFETY_MARGIN", "0.3"))
 
 
+def _list_provider_keys(provider: str) -> list[str]:
+    """列出 provider 在 .env / os.environ 中的所有可用 API key alias 值。
+
+    R10.5.59c 修复 (用户实测: 前端保存 minimax-2 alias 后无法在搜索时使用):
+      旧实现 get_provider_config 只看 PROVIDER_API_KEY 单值, 忽略 alias key
+      (PROVIDER_API_KEY_<ALIAS>). 用户在前端配置 "minimax-2" alias, .env 写入
+      MiniMax_API_KEY_2, 但 llm_client 仍读 MiniMax_API_KEY, 第二个 key 完全失效.
+      新实现: 列出所有 PROVIDER_API_KEY[_<SUFFIX>] 非空值, llm_client 失败时
+      按顺序轮询下一个 (round-robin / failover).
+
+    Alias 解析规则 (与 config.py::_env_var_for 一致):
+      - 'primary' / '1' / 'default' / '' → 写入 PROVIDER_API_KEY (无后缀)
+      - 其他 alias (e.g. 'minimax-2', 'fallback', 'prod-east') →
+        PROVIDER_API_KEY_<ALIAS_UPPER> (e.g. MiniMax_API_KEY_2)
+
+    Returns:
+        list[str] — key 值列表, primary 在前.  空 list = provider 无任何 key.
+    """
+    base_map = {
+        "minimax": "MiniMax_API_KEY",
+        "kimi":    "KIMI_API_KEY",
+        "glm":     "GLM_API_KEY",
+        "anthropic": "ANTHROPIC_API_KEY",
+    }
+    base = base_map.get(provider)
+    if not base:
+        return []
+
+    # 收集所有 PROVIDER_API_KEY[_<SUFFIX>] 形式 env var
+    candidates: list[tuple[str, str]] = []  # (alias, key_value)
+    seen_keys: set[str] = set()
+
+    # 1) primary (无后缀) 一定排第一
+    primary_val = _getenv_ci(base)
+    if primary_val:
+        candidates.append(("primary", primary_val))
+        seen_keys.add(base)
+
+    # 2) 扫 os.environ 找所有 <BASE>_<SUFFIX> 非空 key
+    for env_var in list(os.environ.keys()):
+        if env_var in seen_keys:
+            continue
+        if env_var == base or env_var.startswith(base + "_"):
+            val = os.environ.get(env_var, "").strip()
+            if not val:
+                continue
+            # 提取 alias (去掉 BASE_ 前缀)
+            suffix = env_var[len(base) + 1:] if env_var.startswith(base + "_") else ""
+            alias = suffix.lower() if suffix else "primary"
+            candidates.append((alias, val))
+            seen_keys.add(env_var)
+
+    # 3) 同时扫 _DOTENV (避免 os.environ 没 merge 时漏掉 — 跨平台安全)
+    for env_var, val in (_DOTENV or {}).items():
+        if env_var in seen_keys:
+            continue
+        if env_var == base or env_var.startswith(base + "_"):
+            v = (val or "").strip().strip('"').strip("'")
+            if not v:
+                continue
+            suffix = env_var[len(base) + 1:] if env_var.startswith(base + "_") else ""
+            alias = suffix.lower() if suffix else "primary"
+            candidates.append((alias, v))
+            seen_keys.add(env_var)
+
+    # primary 排第一, 其余按 alias 字母序
+    candidates.sort(key=lambda x: (0 if x[0] == "primary" else 1, x[0]))
+    return [val for _, val in candidates]
+
+
 def get_provider_config(
     provider: str | None = None,
     *,
     strict: bool = True,
+    alias_index: int = 0,
 ) -> dict:
     """
     返回当前 provider 的 base_url / api_key / model / fast_model 字典。
@@ -227,49 +298,48 @@ def get_provider_config(
           真实错误信息, 而非"用 kimi 跑出莫名其妙结果"
         - /providers 端点: 显式 strict=False 列举所有合法 provider
           (含未启用 / 未配 key)
+
+    R10.5.59c 扩展:
+      - 新增 alias_index 参数, 默认 0 (primary). llm_client 失败时可传入 1/2
+        切换到 PROVIDER_API_KEY_2 / PROVIDER_API_KEY_3 等 alias.
+      - 新增 api_keys 字段返回所有 alias 值列表, 供 llm_client 轮询.
     """
     provider = (provider or LLM_PROVIDER).lower()
 
-    configs = {
-        "minimax": {
-            "base_url": MiniMax_BASE_URL,
-            "api_key": MiniMax_API_KEY,
-            "model": MiniMax_MODEL,
-            "fast_model": MiniMax_FAST_MODEL,
-            "auth_type": "bearer",
-            "enabled": bool(MiniMax_API_KEY),
-        },
-        "kimi": {
-            "base_url": KIMI_BASE_URL,
-            "api_key": KIMI_API_KEY,
-            "model": KIMI_MODEL,
-            "fast_model": KIMI_FAST_MODEL,
-            "auth_type": "bearer",
-            "enabled": bool(KIMI_API_KEY),
-        },
-        "glm": {
-            "base_url": GLM_BASE_URL,
-            "api_key": GLM_API_KEY,
-            "model": GLM_MODEL,
-            "fast_model": GLM_FAST_MODEL,
-            "auth_type": "bearer",
-            "enabled": bool(GLM_API_KEY),
-        },
-        "anthropic": {
-            "base_url": ANTHROPIC_BASE_URL,
-            "api_key": ANTHROPIC_API_KEY,
-            "model": ANTHROPIC_MODEL,
-            "fast_model": ANTHROPIC_FAST_MODEL,
-            "auth_type": "x-api-key",
-            "enabled": bool(ANTHROPIC_API_KEY),
-        },
+    base_urls = {
+        "minimax":   MiniMax_BASE_URL,
+        "kimi":      KIMI_BASE_URL,
+        "glm":       GLM_BASE_URL,
+        "anthropic": ANTHROPIC_BASE_URL,
     }
-    if provider not in configs:
+    models = {
+        "minimax":   (MiniMax_MODEL,   MiniMax_FAST_MODEL),
+        "kimi":      (KIMI_MODEL,      KIMI_FAST_MODEL),
+        "glm":       (GLM_MODEL,       GLM_FAST_MODEL),
+        "anthropic": (ANTHROPIC_MODEL, ANTHROPIC_FAST_MODEL),
+    }
+
+    if provider not in base_urls:
         if strict:
             raise ValueError(
                 f"unknown LLM provider: {provider!r} "
-                f"(known: {sorted(configs.keys())})"
+                f"(known: {sorted(base_urls.keys())})"
             )
-        # strict=False: 旧回退行为, 仅 /providers 端点等列举场景使用
-        return configs["kimi"]
-    return configs[provider]
+        # strict=False: 回退到 minimax
+        provider = "minimax"
+
+    api_keys = _list_provider_keys(provider)
+    main_key = api_keys[alias_index] if alias_index < len(api_keys) else (api_keys[0] if api_keys else "")
+    model, fast_model = models[provider]
+
+    return {
+        "provider": provider,
+        "base_url": base_urls[provider],
+        "api_key": main_key,
+        "api_keys": api_keys,  # 全部 alias key, 供 llm_client 轮询
+        "alias_index": alias_index,
+        "model": model,
+        "fast_model": fast_model,
+        "auth_type": "x-api-key" if provider == "anthropic" else "bearer",
+        "enabled": bool(main_key),
+    }
