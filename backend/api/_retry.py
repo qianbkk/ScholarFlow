@@ -85,6 +85,13 @@ async def _get_with_retry(
                     backoff = retry_after
                 else:
                     backoff = _RETRY_DELAYS[min(attempt, len(_RETRY_DELAYS) - 1)]
+                # P10 (P1-5 性能): 立即 record_failure 让 ss_breaker (threshold=1)
+                # 立即进入 OPEN 状态, 60s 内所有 SS 调用直接 fallback mock,
+                # 不阻塞整个 pipeline. 旧实现: 等 4 attempts 用完才 record 一次
+                # (P0-4 修复), 期间浪费 30s+ 在重试退避.
+                if breaker is not None and not breaker_recorded_failure:
+                    breaker._record_failure()
+                    breaker_recorded_failure = True
                 if attempt < len(_RETRY_DELAYS):
                     logger.warning(
                         "%s retry %d/3 for %s (status=%d, backoff=%.1fs)",
@@ -93,12 +100,6 @@ async def _get_with_retry(
                     )
                     await asyncio.sleep(backoff)
                     continue
-                # 已用完所有 attempt, 整请求失败一次. P0-4 fix:
-                # 仅在所有重试都失败后 record 一次 (旧实现每次都记
-                # 导致 1 次请求 3 次重试超时直接熔断, 过于敏感).
-                if breaker is not None and not breaker_recorded_failure:
-                    breaker._record_failure()
-                    breaker_recorded_failure = True
                 return resp
             if breaker is not None:
                 breaker._record_success()

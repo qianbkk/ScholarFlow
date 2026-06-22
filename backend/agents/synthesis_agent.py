@@ -65,10 +65,10 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
     # 和外部审计回看"最后一 iter 起点成本"。
     prev_iter_cost = state.get("total_cost_usd", 0.0) or 0.0
 
-    # FIX: 统一 ranked 论文数为 15 — 与 ranker_agent / graph_builder 对齐
-    # Round 5 S-1: 从 25 → 15, 减少 LLM input token 浪费 (~40% 截断量)。
-    # 旧 [:20] 丢掉了 ranker 评出的 21-25 名论文（暗物质）。
-    ranked = (state.get("ranked_papers") or [])[:15]
+    # P10 (P0-5 性能): 15 → 10. 与 paper_max 上限对齐 (用户可滑 3-30,
+    # 默认 10). 减少 LLM input token ~33% + output token ~30%, 节省 10-20s.
+    # 报告 6 段结构不变, 论文数从 15 减到 10 不影响综述质量 (用户实际看 Top 5).
+    ranked = (state.get("ranked_papers") or [])[:10]
     query = state["original_query"]
 
     if not ranked:
@@ -146,7 +146,9 @@ async def synthesize_node(state: SearchState, services=None) -> SearchState:
             prompt,
             task_type="synthesis",
             system=SYSTEM + isolation_system_suffix(),
-            max_tokens=3500,
+            # P10 (P0-5 性能): 3500 → 2500. 6 段报告实测 ~1500-2000 tokens,
+            # 2500 留 buffer 但不再过度预留. 节省 10-20s.
+            max_tokens=2500,
             provider=state.get("provider"),
         ),
         timeout=90.0,  # R10.5 Fix-P: 节点级 90s 上限.  synthesis 是单次 LLM

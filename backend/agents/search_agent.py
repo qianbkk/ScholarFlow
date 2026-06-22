@@ -29,7 +29,10 @@ from backend.agents._step_helper import _step
 logger = logging.getLogger(__name__)
 
 # 单批 gather 并发上限常量 (per-call, 不再是 module singleton)
-_SEARCH_BATCH_LIMIT = 4
+# P10 (P0-4 性能): 4 → 6. SS 免费版 100 req/5min (≈20 req/min), 4 → 6 后
+# 短时 burst 触发 429 概率略增, 但 _get_with_retry 退避兜底 + 4 桶限流
+# 总速率不变 (per-batch + 模块级 Semaphore 二级限流). 节省 10-20s.
+_SEARCH_BATCH_LIMIT = 6
 
 # R10.5.39 Phase 1.1: 多源检索. 默认启用 arXiv/Crossref/PubMed, 走环境变量
 # SCHOLARFLOW_SOURCES 关掉. 例如 SCHOLARFLOW_SOURCES=ss,oa 关 arXiv 等.
@@ -93,6 +96,15 @@ async def search_node(state: SearchState) -> SearchState:
     # Fix-F (R10.5): per-call semaphore, 每个 search_node 独立 4-slot 桶
     batch_semaphore = asyncio.Semaphore(_SEARCH_BATCH_LIMIT)
 
+    # P10 (P1-2 性能): 跨 refine iter 的 sub_query → result 缓存.
+    # 旧实现: refine 每次重新调 5 source, 即使 query 跟之前完全一样也不复用.
+    # 新实现: cache 存到 state["_ss_cache"] dict, refine→search 回环时透传,
+    # 同 (query, source) 第二次直接返缓存, 不发 HTTP 请求.
+    # 命中率跟 refine 触发数强相关: 0 refine → 0% / 1 refine → 50-80% / 2+ refine → 80%+.
+    # per-request 隔离: state["_ss_cache"] 是 state 的一部分, 不会跨 user 共享.
+    _sq_cache: dict = state.get("_ss_cache") or {}
+    state["_ss_cache"] = _sq_cache  # 显式写回, 防止 setdefault 偶发丢
+
     # R10.5.39 Phase 1.1: 多源检索. 每个子查询并发 5 个源 (默认全部启用).
     # SS/OA 限流 15/10 (Round 6 S2), arXiv/Crossref/PubMed 各 10 (polite 间隔).
     # Round 2 PERF-004: 通过 _throttled_search 走 Semaphore(4) 限流，避免 429
@@ -101,10 +113,24 @@ async def search_node(state: SearchState) -> SearchState:
     # is to log it at the gather site (debug level) — full per-source error
     # attribution requires refactoring bounded_gather to accept (name, coro)
     # pairs, which is out of scope here.
+    # P10 (P1-2 性能): state["_ss_cache"] 跨 iter 复用 (query, source) → result.
+    # 命中直接返缓存 list (不重新 HTTP). 命中率跟 refine iter 数强相关.
     tasks_with_source: list[tuple[str, object]] = []
     for q in sub_queries:
         for source_name, coro in _get_search_coros(q, limit=10):
-            tasks_with_source.append((source_name, _throttled_search(coro, batch_semaphore)))
+            cache_key = (q.lower().strip(), source_name)
+            if cache_key in _sq_cache:
+                # 缓存命中: 用一个立即返回的 coroutine 替代真实 HTTP 调用
+                async def _cached(_key=cache_key):
+                    return list(_sq_cache[_key])
+                tasks_with_source.append((source_name, _cached()))
+            else:
+                # 未命中: 走真实 HTTP, gather 后回写 cache
+                async def _uncached(_c=coro, _key=cache_key):
+                    result = await _c
+                    _sq_cache[_key] = result
+                    return result
+                tasks_with_source.append((source_name, _throttled_search(_uncached(), batch_semaphore)))
     tasks = [t for _, t in tasks_with_source]
     source_names = [n for n, _ in tasks_with_source]
     # R10.5.55: 按 source 分别 _step() 报告检索状态.

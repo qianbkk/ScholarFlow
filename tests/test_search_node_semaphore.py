@@ -109,18 +109,18 @@ async def test_search_node_caps_semantic_scholar_concurrency(monkeypatch):
     assert "raw_papers" in result
     assert result["status"] == "expanding"
 
-    # CRITICAL: peak concurrent SS calls must be <= 4 (matching citation_expander)
-    assert ss_peak <= 4, (
-        f"PERF-004 FAIL: search_node has no Semaphore. "
-        f"Peak concurrent semantic_scholar calls = {ss_peak} (expected <= 4). "
-        f"With 6 sub_queries: 6 SS + 6 OA = 12 concurrent calls would saturate "
-        f"upstream APIs."
+    # CRITICAL: peak concurrent SS calls must be <= 6 (P10 _SEARCH_BATCH_LIMIT)
+    # P10 性能优化: 4 → 6 允许短时 burst, _get_with_retry 退避兜底 429.
+    assert ss_peak <= 6, (
+        f"PERF-004 FAIL: search_node Semaphore 不正确. "
+        f"Peak concurrent semantic_scholar calls = {ss_peak} (expected <= 6). "
+        f"With 6 sub_queries: 6 SS + 6 OA = 12 concurrent calls 会被 Semaphore 限到 6."
     )
     # Also: all 6 sub-queries should have been called
     assert ss_calls == 6, f"expected 6 SS calls (one per sub_query), got {ss_calls}"
 
 
-# ===== 2) Peak concurrent total (SS + OA) <= 4 =====
+# ===== 2) Peak concurrent total (SS + OA) <= 6 =====
 
 @pytest.mark.asyncio
 async def test_search_node_caps_total_concurrency(monkeypatch):
@@ -153,9 +153,11 @@ async def test_search_node_caps_total_concurrency(monkeypatch):
     state = _build_state(num_sub_queries=8)
     await search_node(state)
 
-    assert total_peak <= 4, (
+    # P10: total concurrent peak <= 6 (P10 _SEARCH_BATCH_LIMIT, was 4)
+    assert total_peak <= 6, (
         f"PERF-004 FAIL: total concurrent API calls peaked at {total_peak}. "
-        f"Expected <= 4 (matching citation_expander._CITATION_SEMAPHORE)."
+        f"Expected <= 6 (P10 _SEARCH_BATCH_LIMIT, 旧 4). "
+        f"过高会触发 SS 429 限流, _get_with_retry 退避兜底浪费 token."
     )
 
 
@@ -174,8 +176,8 @@ def test_search_agent_configures_per_call_semaphore():
         "应改用 per-call Semaphore + 模块常量限流值."
     )
     assert limit <= 8, (
-        f"PERF-004 FAIL: _SEARCH_BATCH_LIMIT={limit} 过高, 建议 <=4 "
-        f"(对齐 citation_expander._CITATION_BATCH_LIMIT)."
+        f"PERF-004 FAIL: _SEARCH_BATCH_LIMIT={limit} 过高, 建议 <=6 "
+        f"(P10: 4 → 6, 允许短时 burst, _get_with_retry 退避兜底 SS 429)."
     )
     # _throttled_search 现在接收 semaphore 参数 (per-call)
     import inspect

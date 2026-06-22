@@ -247,14 +247,17 @@ async def rank_node(state: SearchState) -> SearchState:
             f"(skipped {len(papers_already_scored)} already scored, Round 2 PERF-006)"
         )
 
-    # 分批（每批 10 篇）— 只对 papers_to_score 调 LLM; 空列表 = 0 token
-    BATCH_SIZE = 10
+    # 分批（每批 20 篇）— 只对 papers_to_score 调 LLM; 空列表 = 0 token
+    # P10 (P0-3 性能): BATCH_SIZE 10 → 20, 35 篇 → 2 批 (原 4 批).
+    # 同步 Semaphore 3 → 5, 2 批完全并行 (vs 串行等 2-3 批). 节省 15-20s.
+    # 风险: 大 batch prompt 长 (~6400 chars vs 3200), LLM context 仍富余.
+    BATCH_SIZE = 20
     batches = [papers_to_score[i:i+BATCH_SIZE] for i in range(0, len(papers_to_score), BATCH_SIZE)]
 
     # ===== PERF: 合并相关性 + 一致性 单次 LLM 调用（节省 50% token）=====
     # 旧版：每篇论文 × 2 次调用 (relevance + consistency)
     # 新版：每批 × 1 次调用，同时返回两个分数
-    semaphore = asyncio.Semaphore(3)
+    semaphore = asyncio.Semaphore(5)
     # 透传用户选择的 LLM provider — 5 个 agent 节点中此处最复杂
     # （需要把 provider 传进 _combined_batch → _score_papers_combined_batch → call_llm）
     rank_provider = state.get("provider")

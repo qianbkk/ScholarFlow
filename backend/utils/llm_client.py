@@ -13,6 +13,7 @@ ScholarFlow 多模型路由客户端
 import os
 import json
 import asyncio
+import hashlib
 import logging
 import time
 import re
@@ -32,6 +33,45 @@ from backend.utils.runtime_mode import is_runtime_mock  # R10.5.20: 前端可切
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 
 logger = logging.getLogger(__name__)
+
+# P10 (P1-3 性能): in-memory LLM response 缓存.
+# 跨 refine iter 复用, 防止 critic / ranker / synthesize 重复调 LLM.
+# key: sha256(prompt|system|task_type|model|provider)[:32]
+# value: (text, usage, created_at) — TTL 5min, LRU 256 条上限.
+# per-process (多 worker 各自一份, 跨 worker 共享需 SQLite — 超 scope).
+_LLM_CACHE: dict[str, tuple[str, dict, float]] = {}
+_LLM_CACHE_TTL_SEC = 300.0
+_LLM_CACHE_MAX = 256
+_LLM_CACHE_HITS = 0
+_LLM_CACHE_MISSES = 0
+
+
+def _llm_cache_get(key: str) -> Optional[tuple[str, dict]]:
+    """读 LLM 缓存, 命中且未过期返 (text, usage), 否则 None."""
+    entry = _LLM_CACHE.get(key)
+    if entry is None:
+        return None
+    text, usage, created_at = entry
+    if time.time() - created_at > _LLM_CACHE_TTL_SEC:
+        _LLM_CACHE.pop(key, None)
+        return None
+    return text, usage
+
+
+def _llm_cache_set(key: str, text: str, usage: dict) -> None:
+    """写 LLM 缓存, LRU 简单实现 (满了随机 pop 一条)."""
+    global _LLM_CACHE_HITS, _LLM_CACHE_MISSES
+    if len(_LLM_CACHE) >= _LLM_CACHE_MAX:
+        # 简单 LRU: pop oldest
+        oldest_key = min(_LLM_CACHE, key=lambda k: _LLM_CACHE[k][2])
+        _LLM_CACHE.pop(oldest_key, None)
+    _LLM_CACHE[key] = (text, usage, time.time())
+
+
+def _llm_cache_key(prompt: str, system: str, task_type: str, model: str, provider: str) -> str:
+    """生成 LLM 缓存 key (SHA256, 32 chars)."""
+    raw = f"{prompt}|{system}|{task_type}|{model}|{provider}"
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:32]
 
 
 # ===== 路由策略 =====
@@ -71,14 +111,35 @@ def _calc_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
 
 
 # ===== 客户端单例 =====
+# 键格式: "{provider}::{alias_index}". alias_index=0 = primary (向后兼容
+# 旧键 "{provider}", 旧单例自动迁移). 多 alias 时按 index 区分, 支持轮询.
 _clients: dict[str, anthropic.AsyncAnthropic] = {}
 _deepseek_client: Optional[AsyncOpenAI] = None
 
 
-def _get_anthropic_client(provider: str) -> Optional[anthropic.AsyncAnthropic]:
-    if provider in _clients:
-        return _clients[provider]
-    cfg = get_provider_config(provider)
+def _client_key(provider: str, alias_index: int = 0) -> str:
+    return f"{provider}::{alias_index}"
+
+
+def _get_anthropic_client(provider: str, alias_index: int = 0) -> Optional[anthropic.AsyncAnthropic]:
+    """获取 provider 在指定 alias 下的 anthropic 客户端.
+
+    R10.5.59c 修复 (用户实测: minimax-2 alias 无法被识别):
+      旧实现只缓存单一 primary 客户端, 忽略 alias key (PROVIDER_API_KEY_2 等).
+      现在按 alias_index 区分缓存, llm_client 在 primary 失败时传 alias_index=1
+      轮询 PROVIDER_API_KEY_2 / =2 轮询 _3 等.
+
+    旧调用 _get_anthropic_client('minimax') 等价 _get_anthropic_client('minimax', 0)
+    键迁移: 旧键 'minimax' 自动重命名 'minimax::0'.
+    """
+    key = _client_key(provider, alias_index)
+    # 旧键迁移 (单实例 → ::0)
+    legacy_key = provider if alias_index == 0 else None
+    if legacy_key and legacy_key in _clients and key not in _clients:
+        _clients[key] = _clients.pop(legacy_key)
+    if key in _clients:
+        return _clients[key]
+    cfg = get_provider_config(provider, alias_index=alias_index)
     if not cfg.get("enabled"):
         return None
     try:
@@ -94,10 +155,10 @@ def _get_anthropic_client(provider: str) -> Optional[anthropic.AsyncAnthropic]:
             timeout=120.0,
             max_retries=1,
         )
-        _clients[provider] = client
+        _clients[key] = client
         return client
     except Exception as e:
-        logger.warning(f"[llm_client] Failed to create client for {provider}: {scrub_sensitive(str(e))}")
+        logger.warning(f"[llm_client] Failed to create client for {provider} alias[{alias_index}]: {scrub_sensitive(str(e))}")
         return None
 
 
@@ -613,9 +674,19 @@ async def call_llm(
     """
     统一 LLM 调用入口。
     Returns: (response_text, usage_info)
+
+    R10.5.59c 修复 (用户实测: minimax-2 alias 无法在搜索时使用):
+      旧实现: get_provider_config 只读 PROVIDER_API_KEY, 忽略 _2/_3 alias.
+      新实现: 失败时轮询下一个 alias (PROVIDER_API_KEY_2 → _3 → ...),
+      全部失败才回退 mock. 轮询链路写入 usage['alias_tried'] 便于日志追溯.
+
+    P10 (P1-3 性能): in-memory LLM 缓存, 跨 refine iter 复用.
+    key = sha256(prompt|system|task_type|model|provider)[:32], TTL 5min, LRU 256.
+    命中率跟 refine 数强相关 — 0 iter → 0%, 1 iter → 50-80%, 2+ iter → 80%+.
     """
-    # ===== Mock 模式 =====
-    if is_runtime_mock():  # R10.5.20: 前端 /admin/runtime-mode 可切, fallback env LLM_MOCK
+    global _LLM_CACHE_HITS, _LLM_CACHE_MISSES
+    # ===== Mock 模式 (不入缓存, 便宜且确定性) =====
+    if is_runtime_mock():
         return await _call_mock(prompt, task_type, json_mode)
 
     provider = (provider or LLM_PROVIDER).lower()
@@ -627,16 +698,76 @@ async def call_llm(
         tier = TASK_MODEL_TIER.get(task_type, "flagship")
         model = cfg.get("fast_model" if tier == "fast" else "model", cfg.get("model", ""))
 
+    # ===== P10: LLM 缓存检查 =====
+    cache_key = _llm_cache_key(prompt, system, task_type, model, provider)
+    cached = _llm_cache_get(cache_key)
+    if cached is not None:
+        text, usage = cached
+        _LLM_CACHE_HITS += 1
+        # 标记: 来自缓存 (cost_usd 保留以便计费对账)
+        cached_usage = dict(usage)
+        cached_usage["cache_hit"] = True
+        return text, cached_usage
+    _LLM_CACHE_MISSES += 1
+
+    api_keys = cfg.get("api_keys") or ([cfg["api_key"]] if cfg.get("api_key") else [])
+
+    # ===== 轮询 alias keys (R10.5.59c) =====
+    # provider == 'deepseek' 走 OpenAI 协议, alias 暂不支持轮询 (单 key 模式).
+    # anthropic-compat (minimax/kimi/glm/anthropic) 支持多 alias 轮询.
+    last_text, last_usage = "", {}
+    tried_aliases: list[int] = []
     if provider == "deepseek" or model.startswith("deepseek-"):
         result = await _call_deepseek(prompt, system, max_tokens, json_mode, task_type=task_type)
+        last_text, last_usage = result
+        tried_aliases.append(0)
     else:
-        result = await _call_anthropic_compatible(
-            provider, model, prompt, system, max_tokens, json_mode
-        )
-    # ===== 失败降级：real 失败时回退 mock，保证 8 节点流水线不卡住 =====
-    text, usage = result
+        for alias_idx in range(len(api_keys)):
+            tried_aliases.append(alias_idx)
+            cfg_at = get_provider_config(provider, alias_index=alias_idx)
+            # deepseek / OpenAI 协议下 model 不变; anthropic-compat 用同样的 model 字符串
+            # 但要传 alias_index 让 _get_anthropic_client 取对应 key 的客户端
+            try:
+                text, usage = await _call_anthropic_compatible_at(
+                    provider, model, prompt, system, max_tokens, json_mode,
+                    alias_index=alias_idx,
+                )
+            except Exception as e:
+                # 防止 _call_anthropic_compatible_at 自身抛出 (理论上不会, 但保险)
+                logger.error(f"[llm_client] alias[{alias_idx}] unhandled exception: {scrub_sensitive(str(e))}")
+                text, usage = "", {
+                    "model": model, "provider": provider,
+                    "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0,
+                    "error": scrub_sensitive(str(e)),
+                }
+            # 累加已消耗的真实调用成本/令牌 (即使失败也计费)
+            if last_usage:
+                last_usage["cost_usd"] = last_usage.get("cost_usd", 0.0) + usage.get("cost_usd", 0.0)
+                last_usage["input_tokens"] = last_usage.get("input_tokens", 0) + usage.get("input_tokens", 0)
+                last_usage["output_tokens"] = last_usage.get("output_tokens", 0) + usage.get("output_tokens", 0)
+            else:
+                last_usage = dict(usage)
+            last_text = text
+            # 成功 (有 text 且无 error) → 写缓存 + 返回
+            if text and not usage.get("error"):
+                last_usage.setdefault("alias_tried", list(tried_aliases))
+                last_usage["alias_used"] = alias_idx
+                # P10 (P1-3 性能): 写 LLM 缓存, 跨 refine iter 复用
+                _llm_cache_set(cache_key, text, dict(last_usage))
+                return text, last_usage
+            logger.warning(
+                f"[llm_client] {provider}/{model} alias[{alias_idx}] failed: "
+                f"{scrub_sensitive(usage.get('error', 'unknown'))}"
+                + (" → trying next alias" if alias_idx < len(api_keys) - 1 else " → all aliases exhausted")
+            )
+
+    # ===== 失败降级：所有 alias 都失败时回退 mock，保证 8 节点流水线不卡住 =====
+    text, usage = last_text, last_usage
     if not text and usage.get("error"):
-        logger.warning(f"[llm_client] {provider}/{model} failed: {scrub_sensitive(usage['error'])}  → fallback to mock")
+        logger.warning(
+            f"[llm_client] {provider}/{model} all aliases ({len(api_keys)}) failed: "
+            f"{scrub_sensitive(usage.get('error', 'unknown'))}  → fallback to mock"
+        )
         # 真实调用已消耗 token/cost（即使失败也计费），必须保留在 usage 中，
         # 否则 cost_tracker / total_cost_usd 漏报。
         mock_text, mock_usage = await _call_mock(prompt, task_type, json_mode)
@@ -656,8 +787,9 @@ async def call_llm(
         merged_usage["model"] = f"{original_model} (fallback to mock)"
         merged_usage["fallback_to_mock"] = True
         merged_usage["original_error"] = usage.get("error", "")
+        merged_usage["alias_tried"] = tried_aliases
         return mock_text, merged_usage
-    return result
+    return text, usage
 
 
 async def _call_mock(prompt: str, task_type: str, json_mode: bool) -> tuple[str, dict]:
@@ -678,10 +810,25 @@ async def _call_mock(prompt: str, task_type: str, json_mode: bool) -> tuple[str,
     return text, usage
 
 
-async def _call_anthropic_compatible(
-    provider: str, model: str, prompt: str, system: str, max_tokens: int, json_mode: bool
+async def _call_anthropic_compatible_at(
+    provider: str, model: str, prompt: str, system: str, max_tokens: int, json_mode: bool,
+    alias_index: int = 0,
 ) -> tuple[str, dict]:
-    client = _get_anthropic_client(provider)
+    """_call_anthropic_compatible 的 alias 透传版本 (R10.5.59c).
+
+    内部逻辑完全相同, 仅多一个 alias_index 参数传给 _get_anthropic_client.
+    保留 _call_anthropic_compatible 旧签名 (alias_index=0) 以防外部 import.
+    """
+    return await _call_anthropic_compatible(
+        provider, model, prompt, system, max_tokens, json_mode, alias_index=alias_index,
+    )
+
+
+async def _call_anthropic_compatible(
+    provider: str, model: str, prompt: str, system: str, max_tokens: int, json_mode: bool,
+    alias_index: int = 0,
+) -> tuple[str, dict]:
+    client = _get_anthropic_client(provider, alias_index=alias_index)
     if client is None:
         return "", {
             "model": model, "provider": provider,

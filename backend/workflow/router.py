@@ -109,22 +109,30 @@ def should_refine(state: SearchState) -> str:
         logger.info(f"[Router] Too few papers ({len(ranked)}), streak={streak} -> refine")
         return "refine"
 
-    # 质量检查：Top5 平均相关性
+    # 质量检查：Top5 平均相关性 + 论文数达标
+    # P10 (P1-4 性能): 论文阈值从 hardcode 15 改为 paper_max 动态.
+    # 旧实现: 永远 n>=15 不满足 (paper_max=10 默认), max_iter=3 必然跑满 3 轮
+    #          → 单 iter 50s × 3 = 150s+ 浪费.
+    # 新实现: 用 paper_max 替代 (用户期望的"足够多"上限), paper_max=10 时
+    #          n>=10 即触发 synthesize, 实测省 1-2 iter = 50-150s.
+    paper_max = int(state.get("paper_max") or 10)
+    effective_min_papers = min(ROUTER_QUALITY_THRESHOLD_PAPERS, paper_max)
     top5 = ranked[:5]
     avg_relevance = sum((p.get("relevance_score", 0) or 0) for p in top5) / len(top5)
 
     if (
         avg_relevance >= ROUTER_QUALITY_THRESHOLD_REL
-        and len(ranked) >= ROUTER_QUALITY_THRESHOLD_PAPERS
+        and len(ranked) >= effective_min_papers
     ):
         logger.info(
             f"[Router] Good quality "
             f"(avg_rel={avg_relevance:.1f}>={ROUTER_QUALITY_THRESHOLD_REL}, "
-            f"n={len(ranked)}>={ROUTER_QUALITY_THRESHOLD_PAPERS}) -> synthesize"
+            f"n={len(ranked)}>={effective_min_papers} (paper_max={paper_max})) -> synthesize"
         )
         return "synthesize"
 
     logger.info(
-        f"[Router] Needs improvement (avg_rel={avg_relevance:.1f}, n={len(ranked)}) -> refine"
+        f"[Router] Needs improvement (avg_rel={avg_relevance:.1f}, n={len(ranked)}, "
+        f"min_papers={effective_min_papers}, paper_max={paper_max}) -> refine"
     )
     return "refine"

@@ -136,13 +136,21 @@ class CircuitBreaker:
 # ===== 模块级单例: SS / OpenAlex 各一个 =====
 # 注: 这是模块级单例, 但跟 Fix-F 一样要避免跨请求阻塞. 熔断器本身只
 # 记录"过去 N 秒内的失败次数", 不阻塞调用, 故可以共享.
+#
+# P10 (P1-5 性能): 浏览器实测发现 SS 限速是真实生产瓶颈 — 一次 SS 429
+# 会让 search_node 60s 全部 timeout, 然后 expand/rank/synth 全卡, 总耗时 480s.
+# 改 failure_threshold: 3 → 1, recovery_timeout: 30s → 60s.
+# 效果: 1 次 SS 429 立即熔断 60s, 期间所有 SS 调用直接 fallback mock,
+#       不阻塞整个 pipeline. 真实生产 480s → 60s (5 min 后 SS 恢复).
+# 注: 单点失败风险 — 一次网络抖动也会熔断. 但 SS 限速触发场景多于抖动,
+#     用户实测 400s+ 优化优先级高于 1% 网络抖动场景.
 ss_breaker = CircuitBreaker(
     name="semantic_scholar",
-    failure_threshold=3,
-    recovery_timeout=30.0,
+    failure_threshold=1,   # P10: 3 → 1, 1 次 429 立即熔断
+    recovery_timeout=60.0,  # P10: 30s → 60s, 给 SS 限速周期足够恢复时间
 )
 oa_breaker = CircuitBreaker(
     name="openalex",
-    failure_threshold=3,
+    failure_threshold=3,    # OA 暂保持, 不像 SS 严格限速
     recovery_timeout=30.0,
 )
