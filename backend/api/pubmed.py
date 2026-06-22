@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os as _os
 from typing import Any
 
 import httpx
@@ -29,6 +30,41 @@ ESEARCH = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
 ESUMMARY = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
 _PUBMED_LOCK = asyncio.Lock()
 _LAST_PUBMED_TS = 0.0
+
+# P10 (P2-3 性能): 共享 module-level httpx client, 跟 SS/OA/arxiv/crossref 对齐.
+_DISABLE_POOL = _os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
+_client: httpx.AsyncClient | None = None
+_temporary_clients: set[httpx.AsyncClient] = set()
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _DISABLE_POOL:
+        c = httpx.AsyncClient(timeout=15.0)
+        _temporary_clients.add(c)
+        return c
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
+    return _client
+
+
+async def close_client() -> None:
+    """FastAPI shutdown: 释放连接池."""
+    global _client
+    for c in list(_temporary_clients):
+        if not c.is_closed:
+            await c.aclose()
+    _temporary_clients.clear()
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
 
 
 async def _throttle_pubmed() -> None:
@@ -45,18 +81,20 @@ async def _throttle_pubmed() -> None:
 async def _esearch(query: str, retmax: int) -> list[str]:
     await _throttle_pubmed()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(
-                ESEARCH,
-                params={
-                    "db": "pubmed",
-                    "term": query,
-                    "retmax": min(retmax, 20),
-                    "retmode": "json",
-                },
-            )
-            r.raise_for_status()
-            data = r.json()
+        # P10 (P2-3 性能): 共享 client, 跟 SS/OA/arxiv/crossref 对齐.
+        client = _get_client()
+        r = await client.get(
+            ESEARCH,
+            params={
+                "db": "pubmed",
+                "term": query,
+                "retmax": min(retmax, 20),
+                "retmode": "json",
+            },
+            timeout=15.0,
+        )
+        r.raise_for_status()
+        data = r.json()
     except Exception as exc:
         logger.warning(f"[pubmed] esearch failed: {type(exc).__name__}: {scrub_sensitive(str(exc))}")
         return []
@@ -132,13 +170,15 @@ async def _esummary(pmids: list[str]) -> list[Paper]:
         return []
     await _throttle_pubmed()
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(
-                ESUMMARY,
-                params={"db": "pubmed", "id": ",".join(pmids), "retmode": "json"},
-            )
-            r.raise_for_status()
-            data = r.json()
+        # P10 (P2-3 性能): 共享 client.
+        client = _get_client()
+        r = await client.get(
+            ESUMMARY,
+            params={"db": "pubmed", "id": ",".join(pmids), "retmode": "json"},
+            timeout=15.0,
+        )
+        r.raise_for_status()
+        data = r.json()
     except Exception as exc:
         logger.warning(f"[pubmed] esummary failed: {type(exc).__name__}: {scrub_sensitive(str(exc))}")
         return []

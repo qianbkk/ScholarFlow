@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os as _os
 from typing import Any
 
 import httpx
@@ -25,6 +26,45 @@ logger = logging.getLogger(__name__)
 CROSSREF_API = "https://api.crossref.org/works"
 _CROSSREF_LOCK = asyncio.Lock()
 _LAST_CROSSREF_TS = 0.0
+
+# P10 (P2-3 性能): 共享 module-level httpx client, 跟 SS/OA/arxiv 对齐.
+_DISABLE_POOL = _os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
+_client: httpx.AsyncClient | None = None
+_temporary_clients: set[httpx.AsyncClient] = set()
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _DISABLE_POOL:
+        c = httpx.AsyncClient(
+            timeout=15.0,
+            headers={"User-Agent": "ScholarFlow/1.0 (mailto:qianbkk@example.com)"},
+        )
+        _temporary_clients.add(c)
+        return c
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=15.0,
+            headers={"User-Agent": "ScholarFlow/1.0 (mailto:qianbkk@example.com)"},
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
+    return _client
+
+
+async def close_client() -> None:
+    """FastAPI shutdown: 释放连接池."""
+    global _client
+    for c in list(_temporary_clients):
+        if not c.is_closed:
+            await c.aclose()
+    _temporary_clients.clear()
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
 
 
 async def _throttle_crossref() -> None:
@@ -108,16 +148,15 @@ async def search_papers(query: str, limit: int = 10) -> list[Paper]:
 
     await _throttle_crossref()
     try:
-        async with httpx.AsyncClient(
+        # P10 (P2-3 性能): 共享 client, 跟 SS/OA/arxiv 对齐.
+        client = _get_client()
+        r = await client.get(
+            CROSSREF_API,
+            params={"query.bibliographic": query, "rows": min(limit, 20)},
             timeout=15.0,
-            headers={"User-Agent": "ScholarFlow/1.0 (mailto:qianbkk@example.com)"},
-        ) as client:
-            r = await client.get(
-                CROSSREF_API,
-                params={"query.bibliographic": query, "rows": min(limit, 20)},
-            )
-            r.raise_for_status()
-            data = r.json()
+        )
+        r.raise_for_status()
+        data = r.json()
     except Exception as exc:
         logger.warning(f"[crossref] query failed: {type(exc).__name__}: {scrub_sensitive(str(exc))}")
         return []

@@ -183,10 +183,11 @@ async def expand_citations_node(state: SearchState) -> SearchState:
     _step(state, "expand_citations", f"↪️ 向前扩展 citations · {len(forward_tasks)} seeds")
 
     # 旧: 串行 await backward, 再 await forward
-    # 新: 一次 gather, total timeout 60s (跟单 gather 一样, 但两个 gather 并行)
+    # 新: 一次 gather, total timeout 30s (跟单 gather 一样, 但两个 gather 并行)
+    # P10 (P2-2 fail-fast): 60s → 30s, fail-fast 配合 P1-5 SS 熔断
     backward_results, forward_results = await asyncio.gather(
-        bounded_gather(backward_tasks, label="expand_citations.backward", timeout=60.0),
-        bounded_gather(forward_tasks, label="expand_citations.forward", timeout=60.0),
+        bounded_gather(backward_tasks, label="expand_citations.backward", timeout=30.0),
+        bounded_gather(forward_tasks, label="expand_citations.forward", timeout=30.0),
     )
 
     # ===== 关键修复：构建 seed -> refs 反向映射（写回 Paper.references）=====

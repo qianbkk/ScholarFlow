@@ -365,6 +365,16 @@ async def lifespan(app: FastAPI):
     # 关闭：释放 httpx 连接池
     await _ss_mod.close_client()
     await _oa_mod.close_client()
+    # P10 (P2-3): arxiv/crossref/pubmed 也加了 module-level _client, 一起 close
+    try:
+        from backend.api import arxiv as _arxiv_mod
+        from backend.api import crossref as _crossref_mod
+        from backend.api import pubmed as _pubmed_mod
+        await _arxiv_mod.close_client()
+        await _crossref_mod.close_client()
+        await _pubmed_mod.close_client()
+    except Exception as e:
+        logger.warning(f"[lifespan] extra client close failed (non-fatal): {e}")
     logger.info("[lifespan] HTTP clients closed")
 
 

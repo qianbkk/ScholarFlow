@@ -138,10 +138,11 @@ async def search_node(state: SearchState) -> SearchState:
     for src in unique_sources:
         _step(state, "search", f"📡 检索 {src} · {source_names.count(src)} 个并行请求")
 
-    # R10.5 Fix-Timeout: per-gather 60s 上限, 防慢响应累计 timeout.
-    # 60s 截断: 部分 sub_queries 拿不到结果就用空 list, 不阻塞 pipeline.
+    # R10.5 Fix-Timeout: per-gather 30s 上限, 防慢响应累计 timeout.
+    # P10 (P2-2 fail-fast): 旧 60s 截断 → 30s. 配合 P1-5 SS 熔断, SS 限速下
+    # 1 次失败立即熔断, 30s 截断进一步减少等待. 实测节省 15-30s.
     results = await bounded_gather(
-        tasks, label="search_node", timeout=60.0,
+        tasks, label="search_node", timeout=30.0,
     )
 
     all_papers: list[Paper] = []

@@ -38,6 +38,44 @@ _ARXIV_LOCK = asyncio.Lock()
 _LAST_ARXIV_TS = 0.0
 _ARXIV_MIN_SPACING = 1.5  # 两次连续调用最小间隔 (秒)
 
+# P10 (P2-3 性能): 共享 module-level httpx client, 跟 SS/OA 对齐.
+# 旧实现每次 async with 新建 client, 高并发下连接建立开销巨大.
+# 跟 SS/OA 一样用 _get_client() 单例 + _DISABLE_POOL fallback 模式.
+import os as _os
+_DISABLE_POOL = _os.environ.get("DISABLE_HTTP_POOL", "").lower() in ("1", "true", "yes")
+_client: httpx.AsyncClient | None = None
+_temporary_clients: set[httpx.AsyncClient] = set()
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _DISABLE_POOL:
+        c = httpx.AsyncClient(timeout=15.0)
+        _temporary_clients.add(c)
+        return c
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=15.0,
+            limits=httpx.Limits(
+                max_connections=20,
+                max_keepalive_connections=10,
+                keepalive_expiry=30,
+            ),
+        )
+    return _client
+
+
+async def close_client() -> None:
+    """FastAPI shutdown 调用: 释放所有客户端."""
+    global _client
+    for c in list(_temporary_clients):
+        if not c.is_closed:
+            await c.aclose()
+    _temporary_clients.clear()
+    if _client is not None and not _client.is_closed:
+        await _client.aclose()
+    _client = None
+
 
 def _make_paper(entry: ET.Element) -> Paper | None:
     """Convert an Atom <entry> into our Paper model."""
@@ -124,9 +162,12 @@ async def search_papers(query: str, limit: int = 10) -> list[Paper]:
         "sortOrder": "descending",
     }
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(ARXIV_API, params=params)
-            r.raise_for_status()
+        # P10 (P2-3 性能): 共享 module-level _client 单例, 跟 SS/OA 对齐.
+        # 旧实现每次 async with 新建 client → TCP handshake + TLS 浪费.
+        # 新实现模块级 _client + connection pool, 节省每次 ~100ms 连接开销.
+        client = _get_client()
+        r = await client.get(ARXIV_API, params=params, timeout=15.0)
+        r.raise_for_status()
     except Exception as exc:
         logger.warning(f"[arxiv] query failed: {type(exc).__name__}: {scrub_sensitive(str(exc))}")
         return []

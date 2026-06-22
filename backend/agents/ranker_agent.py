@@ -150,7 +150,9 @@ Respond with JSON only, mapping paper index to BOTH scores:
         max_tokens=600,
         task_type="fast_score",
         provider=provider,
-        timeout=60.0,
+        # P10 (P2-2 fail-fast): 60s → 30s. ranker LLM 调 35 篇通常 5-15s,
+        # 30s 足够, 超时 fallback (per-paper) 即可.
+        timeout=30.0,
         retry_suffix=(
             "⚠️ 上一轮 JSON 解析失败. 必须输出**严格符合 schema 的 JSON 对象**, "
             "key 是 1-based 论文编号 (字符串), value 是 {\"relevance\": <0-10>, "
