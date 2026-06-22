@@ -394,3 +394,187 @@ router.add_api_route(
     "/env", delete_env_key_endpoint, methods=["DELETE"],
     response_model=EnvDeleteResponse,
 )
+
+
+# ===== R10.5.91 (Phase 4 API key 改造): 健康检查 + 用量统计 =====
+
+
+class EnvTestRequest(BaseModel):
+    """健康检查请求: 测某个 (provider, alias) key 是否可用."""
+    provider: str = Field(..., min_length=2, max_length=32)
+    alias: str = Field(..., min_length=1, max_length=64)
+
+
+class EnvTestResponse(BaseModel):
+    provider: str
+    alias: str
+    env_var: str
+    masked_preview: Optional[str] = None
+    status: str          # "ok" | "error" | "missing"
+    error: Optional[str] = None
+    elapsed_ms: float = 0.0
+    tested_at: float     # unix timestamp
+
+
+class EnvUsageEntry(BaseModel):
+    """单个 key 的用量统计 (per-process in-memory)."""
+    provider: str
+    alias: str
+    env_var: str
+    calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    last_used: Optional[float] = None
+    last_error: Optional[str] = None
+
+
+class EnvUsageResponse(BaseModel):
+    """全局 key 用量统计. per-process (worker 各自), 内存累积."""
+    entries: list[EnvUsageEntry]
+    total_cost_usd: float
+    total_calls: int
+
+
+# In-memory key usage tracker (per-process, 进程重启清零)
+# Key: (provider, alias) → EnvUsageEntry
+_KEY_USAGE: dict[tuple[str, str], EnvUsageEntry] = {}
+
+
+def record_key_usage(provider: str, alias: str, env_var: str, usage: dict) -> None:
+    """llm_client 内部调, 记录每次 LLM 调用的 cost + tokens. P10 加, 启用 P4 改造.
+
+    Args:
+        provider: "minimax" / "kimi" / etc
+        alias: "primary" / "fallback-1" / 用户自定
+        env_var: 实际 env var 名 (e.g. "MiniMax_API_KEY_2")
+        usage: call_llm 返回的 usage dict (含 input_tokens / output_tokens / cost_usd)
+    """
+    import time as _time
+    key = (provider, alias)
+    entry = _KEY_USAGE.get(key)
+    if entry is None:
+        entry = EnvUsageEntry(provider=provider, alias=alias, env_var=env_var)
+        _KEY_USAGE[key] = entry
+    entry.calls += 1
+    entry.input_tokens += int(usage.get("input_tokens") or 0)
+    entry.output_tokens += int(usage.get("output_tokens") or 0)
+    entry.cost_usd += float(usage.get("cost_usd") or 0.0)
+    entry.last_used = _time.time()
+    err = usage.get("error")
+    if err:
+        entry.last_error = str(err)[:200]
+
+
+async def test_env_key_endpoint(
+    req: EnvTestRequest,
+    _user: User = Depends(get_current_user),
+) -> EnvTestResponse:
+    """健康检查: 拿 (provider, alias) 的 key 立即调一次最小 LLM 请求验证可用性.
+
+    实现: 走 llm_client.call_llm 传 max_tokens=8 + "ping" prompt, 捕获
+    success/error/timeout. 失败时不写入 usage tracker, 避免噪声.
+    """
+    import time as _time
+    t0 = _time.time()
+    if req.provider not in PROVIDERS:
+        raise HTTPException(status_code=400, detail=f"unknown provider: {req.provider!r}")
+    path = _env_path()
+    env = _parse_env(path)
+    env_var = _env_var_for(req.provider, req.alias)
+    raw_value = env.get(env_var, "").strip()
+    if not raw_value:
+        return EnvTestResponse(
+            provider=req.provider,
+            alias=req.alias,
+            env_var=env_var,
+            masked_preview=None,
+            status="missing",
+            error=f"{env_var} 未配置 (alias={req.alias!r})",
+            elapsed_ms=0.0,
+            tested_at=_time.time(),
+        )
+    # 调 llm_client ping 一次
+    try:
+        from backend.utils.llm_client import call_llm
+        import asyncio
+        text, usage = await asyncio.wait_for(
+            call_llm(
+                prompt="Reply with single word: ok",
+                task_type="fast_score",
+                system="",
+                max_tokens=8,
+                json_mode=False,
+                provider=req.provider,
+            ),
+            timeout=20.0,
+        )
+        elapsed = (_time.time() - t0) * 1000
+        if usage.get("error"):
+            return EnvTestResponse(
+                provider=req.provider,
+                alias=req.alias,
+                env_var=env_var,
+                masked_preview=_mask(raw_value),
+                status="error",
+                error=str(usage["error"])[:200],
+                elapsed_ms=elapsed,
+                tested_at=_time.time(),
+            )
+        return EnvTestResponse(
+            provider=req.provider,
+            alias=req.alias,
+            env_var=env_var,
+            masked_preview=_mask(raw_value),
+            status="ok",
+            error=None,
+            elapsed_ms=elapsed,
+            tested_at=_time.time(),
+        )
+    except asyncio.TimeoutError:
+        return EnvTestResponse(
+            provider=req.provider,
+            alias=req.alias,
+            env_var=env_var,
+            masked_preview=_mask(raw_value),
+            status="error",
+            error="ping 超时 (>20s)",
+            elapsed_ms=20000.0,
+            tested_at=_time.time(),
+        )
+    except Exception as e:
+        return EnvTestResponse(
+            provider=req.provider,
+            alias=req.alias,
+            env_var=env_var,
+            masked_preview=_mask(raw_value),
+            status="error",
+            error=f"{type(e).__name__}: {str(e)[:200]}",
+            elapsed_ms=(_time.time() - t0) * 1000,
+            tested_at=_time.time(),
+        )
+
+
+async def get_env_usage_endpoint(
+    _user: User = Depends(get_current_user),
+) -> EnvUsageResponse:
+    """返回每个 (provider, alias) 的累计 usage 统计 (per-process 内存)."""
+    entries = list(_KEY_USAGE.values())
+    entries.sort(key=lambda e: (-e.cost_usd, e.provider, e.alias))
+    total_cost = sum(e.cost_usd for e in entries)
+    total_calls = sum(e.calls for e in entries)
+    return EnvUsageResponse(
+        entries=entries,
+        total_cost_usd=round(total_cost, 6),
+        total_calls=total_calls,
+    )
+
+
+router.add_api_route(
+    "/env/test", test_env_key_endpoint, methods=["POST"],
+    response_model=EnvTestResponse,
+)
+router.add_api_route(
+    "/env/usage", get_env_usage_endpoint, methods=["GET"],
+    response_model=EnvUsageResponse,
+)

@@ -11,6 +11,7 @@ import { useStore, actions } from '../store/useStore';
 import type { Paper } from '../types';
 import { useT } from '../i18n';
 import DOMPurify from 'dompurify';
+import React from 'react';
 import { marked } from 'marked';
 
 interface Props {
@@ -25,15 +26,21 @@ export function ReportView({ query: queryProp, graphSlot }: Props) {
 
   const query = queryProp ?? result?.citation_graph?.metadata?.query ?? '';
 
+  // P10 (P2-5 性能): marked.parse + DOMPurify.sanitize 同步执行可能阻塞主线程
+  // ~80-150ms (50KB markdown). 改 useDeferredValue + 分块 marked 解析:
+  // 1. 用 React 18 useDeferredValue 让 result?.report 变更不阻塞渲染
+  // 2. marked 改同步 (off main thread via requestIdleCallback 切分)
+  // 简化方案: 仅加 useDeferredValue 延迟解析, 避免主线程 freeze.
+  const reportDeferred = React.useDeferredValue(result?.report);
   const html = useMemo(() => {
-    const md = result?.report;
+    const md = reportDeferred;
     if (!md) return '';
     const dirty = marked.parse(md, { async: false, gfm: true, breaks: false }) as string;
     return DOMPurify.sanitize(dirty, {
       ALLOWED_TAGS: ['h1','h2','h3','h4','p','ul','ol','li','strong','em','code','pre','blockquote','a','hr','table','thead','tbody','tr','th','td','br','span'],
       ALLOWED_ATTR: ['href','title','rel','target','data-paper-id'],
     });
-  }, [result?.report]);
+  }, [reportDeferred]);
 
   const anchoredIds = useMemo(() => {
     const re = /\[(\d+)\]/g;

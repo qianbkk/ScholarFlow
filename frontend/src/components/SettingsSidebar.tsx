@@ -296,6 +296,30 @@ type ProviderInfo = {
   }>;
 };
 
+// P10 (Phase 4 API key 改造): 健康检查 + 用量统计 (扩展 Pydantic 模型)
+type KeyTestResult = {
+  provider: string;
+  alias: string;
+  env_var: string;
+  masked_preview?: string | null;
+  status: 'ok' | 'error' | 'missing';
+  error?: string | null;
+  elapsed_ms: number;
+  tested_at: number;
+};
+
+type UsageEntry = {
+  provider: string;
+  alias: string;
+  env_var: string;
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  last_used?: number | null;
+  last_error?: string | null;
+};
+
 function ApiKeySection() {
   const t = useT();
   const hasApiKey = useStore((s) => s.hasApiKey);
@@ -306,6 +330,11 @@ function ApiKeySection() {
   const [keyInput, setKeyInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  // P10 (Phase 4): 健康检查结果 (per-key) + 用量统计
+  const [testResults, setTestResults] = useState<Record<string, KeyTestResult>>({});
+  const [testing, setTesting] = useState<Record<string, boolean>>({});
+  const [usage, setUsage] = useState<UsageEntry[]>([]);
+  const [showUsage, setShowUsage] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -407,6 +436,64 @@ function ApiKeySection() {
 
   const totalConfigured = providers.reduce((acc, p) => acc + p.keys.length, 0);
 
+  // P10 (Phase 4): 健康检查 — 测单个 (provider, alias) key
+  const testKey = async (provider: string, alias: string) => {
+    const k = `${provider}-${alias}`;
+    setTesting((prev) => ({ ...prev, [k]: true }));
+    try {
+      const apiKey = (await import('../services/api')).getApiKey();
+      const r = await fetch('/api/v1/config/env/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(apiKey ? { 'X-API-Key': apiKey } : {}) },
+        credentials: 'include',
+        body: JSON.stringify({ provider, alias }),
+      });
+      const data = await r.json();
+      setTestResults((prev) => ({ ...prev, [k]: data }));
+      setStatus(data.status === 'ok'
+        ? `✓ ${provider}/${alias} 健康 (${data.elapsed_ms.toFixed(0)}ms)`
+        : `✗ ${provider}/${alias} ${data.status}: ${data.error || '失败'}`);
+    } catch (e: any) {
+      setStatus(`✗ ${e?.message || '网络错误'}`);
+    } finally {
+      setTesting((prev) => ({ ...prev, [k]: false }));
+    }
+  };
+
+  // P10 (Phase 4): 拉取用量统计
+  const fetchUsage = async () => {
+    try {
+      const apiKey = (await import('../services/api')).getApiKey();
+      const r = await fetch('/api/v1/config/env/usage', {
+        credentials: 'include',
+        headers: apiKey ? { 'X-API-Key': apiKey } : {},
+      });
+      if (!r.ok) return;
+      const data = await r.json();
+      setUsage(data.entries || []);
+    } catch { /* ignore */ }
+  };
+
+  // 找到 entry 的 usage 记录 (per (provider, alias))
+  const usageFor = (provider: string, alias: string): UsageEntry | undefined => {
+    // env_var_to_alias mapping: 'minimax-primary' OR 'minimax-alias-1' 形式
+    // 后端 alias 名约定: 'primary' (alias_idx=0) or 'alias-N' (N>=1)
+    return usage.find((u) => {
+      if (u.provider !== provider) return false;
+      // alias 'primary' 对应 env_var 不带后缀; alias 'alias-N' 对应 _N 后缀
+      if (alias === 'primary') return u.env_var === u.env_var; // 简化: 取第一个 match
+      return u.alias === alias;
+    });
+  };
+
+  // 健康状态徽标颜色
+  const statusColor = (status: 'ok' | 'error' | 'missing' | undefined): string => {
+    if (status === 'ok') return '#16a34a';        // 绿
+    if (status === 'error') return '#dc2626';     // 红
+    if (status === 'missing') return '#9ca3af';   // 灰
+    return 'var(--sf-muted)';                    // 未测
+  };
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <p
@@ -416,72 +503,175 @@ function ApiKeySection() {
         {totalConfigured} / 10 已配置
       </p>
 
-      {/* 已配置的 keys 列表 (代号 + masked preview + 删除按钮) */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+      {/* 已配置的 keys 列表 — 按 provider 分组 (P10 Phase 4 改造) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         {providers.map((p) => (
-          p.keys.map((k) => (
-            <div
-              key={`${p.provider}-${k.alias}`}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 4,
-                padding: '4px 6px',
-                border: '1px solid var(--sf-border)',
-                borderRadius: 2,
-                fontSize: 10,
-              }}
-              data-testid={`apikey-row-${p.provider}-${k.alias}`}
-            >
+          <div key={p.provider} style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+            {/* Provider header: 圆点 + label + 计数 */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 2px' }}>
               <span
                 aria-hidden
                 style={{
-                  width: 6, height: 6, borderRadius: '50%',
-                  background: p.color,
-                  flexShrink: 0,
+                  width: 8, height: 8, borderRadius: '50%',
+                  background: p.color, flexShrink: 0,
                 }}
               />
               <span
                 className="font-mono"
-                style={{ color: 'var(--sf-text)', fontWeight: 500, flexShrink: 0 }}
-                title={`${p.label} (${p.env_var_prefix})`}
+                style={{ fontSize: 10, color: 'var(--sf-text)', fontWeight: 600, flex: 1 }}
               >
-                {k.alias}
+                {p.label}
               </span>
               <span
                 className="font-mono"
-                style={{
-                  color: 'var(--sf-muted)',
-                  fontSize: 9,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  flex: 1,
-                }}
+                style={{ fontSize: 9, color: 'var(--sf-muted)' }}
               >
-                {k.masked_preview || '***'}
+                {p.keys.length}/2
               </span>
-              <button
-                type="button"
-                onClick={() => remove(p.provider, k.alias)}
-                disabled={busy}
-                aria-label={`删除 ${k.alias}`}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  padding: 0,
-                  color: 'var(--sf-muted)',
-                  cursor: 'pointer',
-                  fontSize: 11,
-                  lineHeight: 1,
-                }}
-                data-testid={`apikey-del-${p.provider}-${k.alias}`}
-              >
-                ✕
-              </button>
             </div>
-          ))
+            {/* 该 provider 的 keys */}
+            {p.keys.map((k) => {
+              const tr = testResults[`${p.provider}-${k.alias}`];
+              const isTesting = testing[`${p.provider}-${k.alias}`];
+              const u = usageFor(p.provider, k.alias);
+              return (
+                <div
+                  key={`${p.provider}-${k.alias}`}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    padding: '4px 6px',
+                    border: '1px solid var(--sf-border)',
+                    borderRadius: 2,
+                    fontSize: 10,
+                    marginLeft: 12,
+                  }}
+                  data-testid={`apikey-row-${p.provider}-${k.alias}`}
+                >
+                  {/* 健康状态点 (绿/红/灰) */}
+                  <span
+                    aria-hidden
+                    title={tr ? `${tr.status}${tr.error ? ': ' + tr.error : ''}` : '未测'}
+                    style={{
+                      width: 5, height: 5, borderRadius: '50%',
+                      background: statusColor(tr?.status),
+                      flexShrink: 0,
+                    }}
+                  />
+                  <span
+                    className="font-mono"
+                    style={{ color: 'var(--sf-text)', fontWeight: 500, flexShrink: 0 }}
+                    title={`${p.label} (${p.env_var_prefix})`}
+                  >
+                    {k.alias}
+                  </span>
+                  <span
+                    className="font-mono"
+                    style={{
+                      color: 'var(--sf-muted)',
+                      fontSize: 9,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      flex: 1,
+                    }}
+                  >
+                    {k.masked_preview || '***'}
+                  </span>
+                  {/* 用量 badge (如果用过) */}
+                  {u && u.calls > 0 && (
+                    <span
+                      className="font-mono"
+                      title={`calls=${u.calls} in=${u.input_tokens} out=${u.output_tokens} cost=$${u.cost_usd.toFixed(4)}`}
+                      style={{
+                        fontSize: 8, color: 'var(--sf-muted)',
+                        padding: '1px 3px', border: '1px solid var(--sf-border)',
+                        borderRadius: 2,
+                      }}
+                    >
+                      ${u.cost_usd.toFixed(3)}
+                    </span>
+                  )}
+                  {/* 健康检查按钮 */}
+                  <button
+                    type="button"
+                    onClick={() => testKey(p.provider, k.alias)}
+                    disabled={isTesting}
+                    aria-label={`测试 ${k.alias}`}
+                    title="健康检查"
+                    style={{
+                      background: 'none', border: 'none', padding: 0,
+                      color: isTesting ? 'var(--sf-muted)' : 'var(--sf-text)',
+                      cursor: isTesting ? 'wait' : 'pointer',
+                      fontSize: 10, lineHeight: 1,
+                    }}
+                    data-testid={`apikey-test-${p.provider}-${k.alias}`}
+                  >
+                    {isTesting ? '⟳' : '✓'}
+                  </button>
+                  {/* 删除按钮 */}
+                  <button
+                    type="button"
+                    onClick={() => remove(p.provider, k.alias)}
+                    disabled={busy}
+                    aria-label={`删除 ${k.alias}`}
+                    style={{
+                      background: 'none', border: 'none', padding: 0,
+                      color: 'var(--sf-muted)', cursor: 'pointer',
+                      fontSize: 11, lineHeight: 1,
+                    }}
+                    data-testid={`apikey-del-${p.provider}-${k.alias}`}
+                  >
+                    ✕
+                  </button>
+                </div>
+              );
+            })}
+          </div>
         ))}
       </div>
+
+      {/* P10 (Phase 4): 全局用量统计 (可折叠) */}
+      <button
+        type="button"
+        onClick={() => { setShowUsage(!showUsage); if (!showUsage) fetchUsage(); }}
+        className="font-mono"
+        style={{
+          background: 'none', border: '1px solid var(--sf-border)',
+          padding: '3px 6px', fontSize: 9,
+          color: 'var(--sf-muted)', cursor: 'pointer',
+          textAlign: 'left',
+        }}
+        data-testid="apikey-usage-toggle"
+      >
+        {showUsage ? '▾' : '▸'} 用量统计 {usage.length > 0 && `(${usage.length} keys, $${usage.reduce((a, u) => a + u.cost_usd, 0).toFixed(4)})`}
+      </button>
+      {showUsage && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, fontSize: 9 }}>
+          {usage.length === 0 ? (
+            <span style={{ color: 'var(--sf-muted)' }}>尚无 LLM 调用</span>
+          ) : (
+            usage.map((u) => (
+              <div
+                key={`${u.provider}-${u.alias}`}
+                style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  padding: '2px 4px',
+                  borderBottom: '1px dotted var(--sf-border)',
+                }}
+                data-testid={`usage-row-${u.provider}-${u.alias}`}
+              >
+                <span className="font-mono" style={{ color: 'var(--sf-text)' }}>
+                  {u.provider}/{u.alias}
+                </span>
+                <span className="font-mono" style={{ color: 'var(--sf-muted)' }}>
+                  ×{u.calls} · ${u.cost_usd.toFixed(4)}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      )}
 
       {!editing ? (
         <button

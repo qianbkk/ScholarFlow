@@ -754,6 +754,15 @@ async def call_llm(
                 last_usage["alias_used"] = alias_idx
                 # P10 (P1-3 性能): 写 LLM 缓存, 跨 refine iter 复用
                 _llm_cache_set(cache_key, text, dict(last_usage))
+                # P10 (P4 API key 改造): 记录 key usage (per-process),
+                # 让 /api/v1/config/env/usage 端点能展示 per-key 统计.
+                try:
+                    from backend.api.routes.config import record_key_usage
+                    alias_name = "primary" if alias_idx == 0 else f"alias-{alias_idx}"
+                    env_var_name = f"{provider.upper()}_API_KEY" if alias_idx == 0 else f"{provider.upper()}_API_KEY_{alias_idx}"
+                    record_key_usage(provider, alias_name, env_var_name, last_usage)
+                except Exception:
+                    pass  # 不让 usage 跟踪影响 LLM 调用
                 return text, last_usage
             logger.warning(
                 f"[llm_client] {provider}/{model} alias[{alias_idx}] failed: "
