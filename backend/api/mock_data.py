@@ -785,7 +785,7 @@ _PAPER_URL_MAP: dict[str, str] = {
     "ss_010_toolformer":     "https://arxiv.org/abs/2302.04761",
     "ss_011_codex":          "https://arxiv.org/abs/2107.03374",
     "ss_012_codegen":        "https://arxiv.org/abs/2203.07814",
-    "ss_013_humaneval":      "https://github.com/openai/human-eval",  # P3-7 fix (深度审计 §P3-7): HumanEval 是 Codex 论文里的 benchmark, 没有独立 arxiv. 旧实现指向 Codex 论文, 点击 HumanEval 卡片却打开 Codex 页面造成混淆. 改指 HumanEval 官方 GitHub 仓库.
+    "ss_013_humaneval":      "https://github.com/openai/human-eval",  # HumanEval 是 Codex 论文里的 benchmark, 无独立 arxiv
     "ss_014_maddpg":         "https://arxiv.org/abs/1706.02275",
     "ss_015_emergent":       "https://arxiv.org/abs/2009.01041",
     "ss_016_marl_survey":    "https://arxiv.org/abs/2108.12255",

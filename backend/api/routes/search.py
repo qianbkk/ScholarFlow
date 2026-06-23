@@ -239,9 +239,8 @@ async def search(
                 state_dict={}, elapsed=0.0, from_cache=True, cached_payload=cached_response
             )
 
-        # R9 清理: 删 BudgetExceededError 死代码后,这里原本的 try/except
-        # (用来在 graph 抛 BudgetExceededError 时返回 budget_exceeded 状态)
-        # 已无意义,改为无 try 直接 await — 异常由外层 except Exception 兜底
+        # budget 超限异常由外层 except Exception 兜底 (graph 抛 BudgetExceededError
+        # 已转成 SSE budget_exceeded event, 这里只处理真异常).
         req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
         _in_flight_searches[req_id] = asyncio_task

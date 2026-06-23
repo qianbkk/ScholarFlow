@@ -46,20 +46,10 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 import ipaddress
 
-# R10.5 Fix-P0-Audit-1.2: get_real_ip 已迁移到 backend.utils.network
-# (health.py / search.py 反向 import main 会形成循环依赖).
-# 这里保留向后兼容 alias, 内部委托给新实现, 后续 BACKLOG.md R-011 (R11) 可直接删除.
-from backend.utils.network import get_real_ip as _get_real_ip_impl
-
-
-def get_real_ip(request: Request) -> str:
-    """R10.5 Fix-N (审计 PPP §4.1): 反向代理后读 X-Forwarded-For 真实 IP.
-
-    委托给 backend.utils.network.get_real_ip (R10.5 Fix-P0-Audit-1.2
-    抽出避免循环导入). 保留 main.py 内副本是为了向后兼容
-    `from backend.main import get_real_ip` 之类的旧引用.
-    """
-    return _get_real_ip_impl(request)
+# 反向代理后真实 IP 提取 (含 TRUSTED_PROXIES 白名单防 XFF 伪造).
+# R10.5.96 (BACKLOG D 隐性条目): 删 main.py:55-62 向后兼容 alias,
+# utils.network 是权威源, 不再保留转发壳.
+from backend.utils.network import get_real_ip
 
 from backend.workflow.graph import search_graph
 from backend.api import semantic_scholar as _ss_mod

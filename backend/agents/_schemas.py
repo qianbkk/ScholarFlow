@@ -257,10 +257,3 @@ async def parse_with_retry_async(
             f"[{log_tag}] retry 仍失败, 走 fallback. err={type(second_exc).__name__}: {str(second_exc)[:200]}"
         )
         return None, final_usage
-
-
-# ===== R10.5.51 cleanup: 删 sync try_parse_with_retry (25 行) =====
-# 旧版同步版, R10.5.47 早期同步版, 已被 async parse_with_retry_async 取代.
-# 留过 fallback 但实际项目没用到 (生产都走 parse_with_retry_async).
-# 旧 tests/test_agent_pydantic.py:198 等 4 处调用也迁到 async 路径 (见测试 commit).
-# 历史 commit (R10.5.47): 引入; (R10.5.51): 标记 deprecated; (本清理): 删.
