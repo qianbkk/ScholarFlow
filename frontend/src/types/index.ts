@@ -1,3 +1,16 @@
+// R10.5.93: 立场 + 研究类型字面量类型 (从 v2 借鉴, 增强类型安全)
+export type Stance = 'supporting' | 'contrasting' | 'neutral' | 'mixed' | 'unsure';
+export type StudyType =
+  | 'rct'
+  | 'meta-analysis'
+  | 'systematic-review'
+  | 'review'
+  | 'survey'
+  | 'method'
+  | 'case-study'
+  | 'empirical'
+  | 'other';
+
 export interface Paper {
   paper_id: string;
   title: string;
@@ -20,12 +33,9 @@ export interface Paper {
   // 之前 backend 已写入但前端类型没声明, paper.is_fallback 永远是 undefined.
   is_fallback?: boolean;
   // R10.5.93 (升级 1/3/4): stance_classifier 节点写入, 借鉴 Scite/Consensus/Elicit.
-  // stance: "supporting" | "contrasting" | "neutral" | "mixed" | "unsure"
-  // study_type: "rct" | "meta-analysis" | "systematic-review" | "review" |
-  //             "survey" | "method" | "case-study" | "empirical" | "other"
   // key_quote: ≤300 字关键引用 (从 abstract 抽取)
-  stance?: string;
-  study_type?: string;
+  stance?: Stance | string;
+  study_type?: StudyType | string;
   key_quote?: string;
 }
 

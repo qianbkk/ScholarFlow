@@ -41,6 +41,19 @@ html[data-theme="parchment"] {
   --sf-edge-co-cited:        oklch(45% 0.20 260);
   --sf-edge-same-venue:      oklch(42% 0.18 145);
   --sf-edge-author-overlap:  oklch(45% 0.20 305);
+  /* R10.5.94 (从 v2 借鉴): 5 种 stance CSS 变量 + 4px 间距 scale */
+  --sf-stance-supporting:    oklch(48% 0.12 145);
+  --sf-stance-supporting-bg: color-mix(in oklch, oklch(48% 0.12 145) 10%, transparent);
+  --sf-stance-contrasting:   oklch(48% 0.16 25);
+  --sf-stance-contrasting-bg: color-mix(in oklch, oklch(48% 0.16 25) 10%, transparent);
+  --sf-stance-neutral:       oklch(48% 0.01 60);
+  --sf-stance-neutral-bg:    color-mix(in oklch, oklch(48% 0.01 60) 10%, transparent);
+  --sf-stance-mixed:         oklch(52% 0.13 75);
+  --sf-stance-mixed-bg:      color-mix(in oklch, oklch(52% 0.13 75) 10%, transparent);
+  --sf-stance-unsure:        oklch(55% 0.005 60);
+  /* 4px base spacing scale */
+  --sf-sp-1: 4px; --sf-sp-2: 8px; --sf-sp-3: 12px; --sf-sp-4: 16px;
+  --sf-sp-6: 24px; --sf-sp-8: 32px; --sf-sp-12: 48px;
 }
 
 html[data-theme="kraft"] {

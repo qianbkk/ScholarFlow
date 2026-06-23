@@ -216,23 +216,46 @@ export function ReportView({ query: queryProp, graphSlot }: Props) {
           marginBottom: 16,
         }}
       >
-        <button
-          type="button"
-          onClick={() => actions.setView('search')}
-          className="font-mono"
-          style={{
-            background: 'none',
-            border: 'none',
-            padding: 0,
-            fontSize: 11,
-            letterSpacing: '0.08em',
-            textTransform: 'uppercase',
-            color: 'var(--sf-muted)',
-            cursor: 'pointer',
-          }}
-        >
-          ← {t('report.backSearch')}
-        </button>
+        {/* R10.5.94 (从 v2 借鉴): 一行放 "← 返回 Search" + "打开 Graph →" */}
+        <div style={{ display: 'flex', gap: 16, alignItems: 'center' }}>
+          <button
+            type="button"
+            onClick={() => actions.setView('search')}
+            className="font-mono"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--sf-muted)',
+              cursor: 'pointer',
+            }}
+          >
+            ← {t('report.backSearch')}
+          </button>
+          {/* R10.5.94: 报告 → 图谱 一键跳转 (R10.5.59 阶段 3 GraphPage 是单独 tab,
+              但很多场景下用户报告看完就想去图, 显式入口 UX 更好) */}
+          <button
+            type="button"
+            onClick={() => actions.setView('graph')}
+            className="font-mono"
+            data-testid="report-to-graph"
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              fontSize: 11,
+              letterSpacing: '0.08em',
+              textTransform: 'uppercase',
+              color: 'var(--sf-accent)',
+              cursor: 'pointer',
+            }}
+          >
+            打开 Graph →
+          </button>
+        </div>
         <nav
           aria-label={t('report.download')}
           style={{ display: 'flex', gap: 12, fontSize: 12 }}

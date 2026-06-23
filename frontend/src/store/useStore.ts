@@ -432,6 +432,24 @@ function dispatchSSE(payload: SSEEvent): void {
           recentSearches: nextRecent,
         };
       });
+      // R10.5.94 (从 v2 借鉴): 持久化最后一次 report 到 localStorage,
+      // 让直接 URL 访问 (例如 /refresh / bookmark) 能复用 result.
+      // 只存 latest 一个, 避免 localStorage 膨胀 (search payload 通常 50-200KB).
+      try {
+        const last = payload.result as any;
+        if (last) {
+          localStorage.setItem(
+            'sf-last-result',
+            JSON.stringify({
+              query: state.lastSubmittedQuery,
+              ts: Date.now(),
+              result: last,
+            }),
+          );
+        }
+      } catch {
+        // quota exceeded — silently drop
+      }
       break;
     }
   }
