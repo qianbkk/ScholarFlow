@@ -251,6 +251,9 @@ def test_search_agent_respects_sources_env_var(monkeypatch):
     importlib.reload(backend.agents.search_agent)
     coros = backend.agents.search_agent._get_search_coros("test", limit=5)
     names = [n for n, _ in coros]
+    # R10.5.95 (审计 P2-5): coros 是待运行 coroutine, 显式 close 防 GC 警告
+    for _, c in coros:
+        c.close()
     assert names == ["ss", "oa"]
 
     # Force all 5
@@ -258,6 +261,8 @@ def test_search_agent_respects_sources_env_var(monkeypatch):
     importlib.reload(backend.agents.search_agent)
     coros = backend.agents.search_agent._get_search_coros("test", limit=5)
     names = [n for n, _ in coros]
+    for _, c in coros:
+        c.close()
     assert names == ["ss", "oa", "arxiv", "crossref", "pubmed"]
 
     # Single source
@@ -265,6 +270,8 @@ def test_search_agent_respects_sources_env_var(monkeypatch):
     importlib.reload(backend.agents.search_agent)
     coros = backend.agents.search_agent._get_search_coros("test", limit=5)
     names = [n for n, _ in coros]
+    for _, c in coros:
+        c.close()
     assert names == ["arxiv"]
 
     # Restore default for next tests

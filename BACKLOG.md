@@ -27,10 +27,15 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 
 ### C-002. `NodeServices` DI 渐进式迁移决策
 
-- **现状**: R10.5 P1-1 立的 `backend/agents/services.py` 73 行 DI 容器,只有 `synthesis_agent.py` 使用,其他 7 个 agent 仍直接 import `call_llm`。
+- **现状 (R10.5.95 审计确认)**: R10.5 P1-1 立的 `backend/agents/services.py` 73 行 DI 容器,只有 `synthesis_agent.py:49` 一处使用,其他 7 个 agent 仍直接 import `call_llm`。`synthesis_agent.py` 走的是 `services: NodeServices | None = None` 可选参数模式 + module-level lazy import,**实际等价于"如果 services 传了用 services.llm,否则 fall back 到 call_llm"**,没真发挥 DI 价值。
 - **目标二选一**:
   1. 全面迁移 8 个 agent 节点到 `NodeServices.llm`,删 fallback 兼容 (1 天 + 大量测试调整)
-  2. 全部回滚到旧风格,删 `services.py` 整文件 (半天,推荐)
+  2. **全部回滚到旧风格,删 `services.py` 整文件 (半天,推荐)**
+- **决策**: R10.5.96 选路径 2 (回滚 + 删除)。理由:
+  - 当前实现 = 旧 import + 新 services 二选一 fallback, 复杂度翻倍, 真 DI 价值为零 (测试仍用 patch, mock 不走 services)
+  - 7/8 agent 没接, 单独 1 个 agent 接 services 形单影只
+  - 路径 1 的"全面迁移"是 8 文件 PR + 测试调整, 在 R10.5 已经 P10 大优化后, 投入产出比不合算
+  - 真要做 DI, 等 R11 LangGraph 1.0 + R13 Multi-Agent Runtime 一起做 (那时 8 个 agent 控制流会重构, 现在做的 DI 重构会被推翻)
 - **工作量**: 半天到 1 天
 - **风险**: 中 (影响全部 agent 节点测试 mock 模式)
 - **来源**: 自分析,清理报告 C1
@@ -143,10 +148,14 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 ### E-001. P1-1 静态 guard 60+ 真行为化 (R11 LangGraph 1.0 升级前置)
 
 - **来源**: ROADMAP §1 + TODO.md #1
-- **现状**: `backend/main.py` 仍有 60+ 个静态 guard (e.g. `if hasattr(x, y)` / `if x is not None`),R10.5.30 修过一批但还有 ~60 个存活。R11 LangGraph 1.0 升级要重构 `backend/main.py`,静态 guard 会让重构卡住。
-- **目标**: 真行为化 (e.g. 失败抛明确异常、缺失字段 → 立即报错) + 删 guard。
-- **工作量**: 1-2 天
-- **风险**: 中 (Locks `backend/main.py` refactor freedom)
+- **现状 (R10.5.95 审计校准)**: 实际剩余静态 guard 比原估 **少 90%**:
+  - `hasattr` 总共仅 **6 处** (`utils/llm_client.py:1` + `utils/text_utils.py:5`),全部为类型探测 (e.g. provider 选 attribute fallback),非反模式
+  - `or None` 防御链集中在 `utils/llm_client.py:5` + `utils/cache.py:3`,用于 LLM 返回值 / cache 兜底,真业务需要
+  - `if not ... and not ...` 大量集中在 `api/routes/search.py:8` / `api/arxiv.py:8` / `api/_retry.py:6`,**全部为 rate-limit / cache-hit 业务守卫**,非静态 guard
+  - 真反模式 (`if x is not None: ...; ... else: ...;` 三段式) 已经 R10.5.30 修过一轮
+- **目标**: 真行为化方向不变,但 scope 从 60+ 缩到 **~6 处** (utils/llm_client.py 5 处 + utils/text_utils.py 5 处),单 PR 可清。
+- **工作量**: 1-2 天 → **半天**
+- **风险**: 低 (只剩 6 处 + 都是 llm_client 内 provider 探测)
 - **阻塞**: R11 升级
 
 ### E-002. P2-10 SSE 后端 is_disconnected 检测

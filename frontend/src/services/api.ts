@@ -93,14 +93,24 @@ export function setApiKey(key: string | null): void {
   }
 }
 
+/**
+ * 纯函数: 返回当前 API Key 的 header 字典 (无副作用).
+ * R10.5.95 (审计 P1-B): 原实现把 _resetIdleTimer 副作用塞进读函数,
+ * 让 "authHeaders" 听起来像纯函数实际却会重置 30 分钟闲置计时器.
+ * 现在拆 touchAuth() 给调用方显式调, 便于测试 + 调试.
+ */
 function authHeaders(): Record<string, string> {
   const key = getApiKey();
-  // R10.5.29 (code-review): 每次 API 调用都 touch timer, 避免"用户活跃使用却被登出".
-  // 旧版 _resetIdleTimer 只在 setApiKey 调用, 长会话后 30 分钟到 → key 被清 →
-  // 401, 用户被突然登出. 改进: 任何 authHeaders() 调用 (即任何 /api/v1/* fetch)
-  // 都视作"用户活动", 重置 30 分钟窗口.
-  if (key) _resetIdleTimer();
   return key ? { 'X-API-Key': key } : {};
+}
+
+/**
+ * 显式标记"用户活跃", 重置 30 分钟闲置计时器.
+ * 任何调 authHeaders() 的 fetch 调用方都应紧跟一次 touchAuth(),
+ * 避免"用户活跃使用却被登出" (R10.5.29 code-review 修过的回归).
+ */
+function touchAuth(): void {
+  if (getApiKey()) _resetIdleTimer();
 }
 
 export interface ProviderInfo {
@@ -129,6 +139,7 @@ export interface ProvidersResponse {
 }
 
 export async function fetchProviders(): Promise<ProvidersResponse> {
+  touchAuth();
   const resp = await fetch(`${API_BASE}/providers`, {
     headers: { ...authHeaders() },
   });
@@ -145,6 +156,7 @@ export async function searchPapers(
   maxIterations: number = 3,
   provider?: string
 ): Promise<SearchResult> {
+  touchAuth();
   const body: Record<string, unknown> = { query, budget, max_iterations: maxIterations };
   if (provider) body.provider = provider;
   const resp = await fetch(`${API_BASE}/search`, {
@@ -165,6 +177,7 @@ export async function searchPapers(
 }
 
 export async function healthCheck(): Promise<{ status: string; service: string; version: string }> {
+  touchAuth();
   const resp = await fetch(`${API_BASE}/health`, {
     headers: { ...authHeaders() },
   });
@@ -181,6 +194,7 @@ export interface RuntimeModeInfo {
 }
 
 export async function fetchRuntimeMode(): Promise<RuntimeModeInfo> {
+  touchAuth();
   const resp = await fetch(`${API_BASE}/admin/runtime-mode`, {
     headers: { ...authHeaders() },
   });
@@ -189,6 +203,7 @@ export async function fetchRuntimeMode(): Promise<RuntimeModeInfo> {
 }
 
 export async function setRuntimeMode(mode: RuntimeMode): Promise<RuntimeModeInfo> {
+  touchAuth();
   const resp = await fetch(`${API_BASE}/admin/runtime-mode`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
@@ -386,6 +401,7 @@ export async function callAgent(
   agent: 'summarize' | 'critique',
   req: AgentPaperRequest
 ): Promise<AgentPaperResponse> {
+  touchAuth();
   const resp = await fetch(`${API_BASE}/agents/${agent}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },

@@ -178,7 +178,9 @@ async def _write_search_caches(
 
 # Round 6 M2: in-flight search task table — 让 /search/cancel 真能停 in-flight pipeline
 # key: request_id (string, FastAPI middleware 注入), value: asyncio.Task wrapping search_graph.ainvoke
-_in_flight_searches: dict[str, "asyncio.Event | asyncio.Task"] = {}
+# R10.5.95 (审计 P2-1): 注释 "asyncio.Event | asyncio.Task" 误, 实际只存 Task.
+# Event 是早期设计备选, 落地后没用到. 修注释避免误导后续维护者.
+_in_flight_searches: dict[str, "asyncio.Task"] = {}
 # R10.5.19 (Q.txt #3): GC 字典, 记录每个 in_flight 注册时间, 让 _periodic_in_flight_gc
 # 删超期 entry (异常路径跳过 finally 时的兜底).
 _in_flight_searches_age: dict[str, float] = {}

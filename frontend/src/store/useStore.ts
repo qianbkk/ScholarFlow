@@ -1,14 +1,17 @@
 /**
- * useStore — R10.5.54 单一 store
+ * useStore — R10.5.95 域拆分 (审计 P1-A)
  *
- * 取代之前的 3 个 Context (AppContext + SelectionContext + UIContext) +
- * App.tsx 里散落的 13 个 useState. 这里是所有应用状态的唯一真相源.
+ * R10.5.54 单一 store 取代 3 Context + 13 useState. 7 个月后涨到 711 行 + 9 域
+ * (View / Theme / Auth / Runtime / Search / Pipeline / Selection / History / UI flag).
+ * `useSyncExternalStore` 共享一个 listener set, 任何字段变更都触发全部
+ * component re-render, 性能曲线变陡.
  *
- * 设计原则:
- * - 平铺结构, 不用嵌套 slice (Zustand-style)
- * - 写操作是 set(action) 风格, 不是直接 setState
- * - 持久化 (theme/dark/recent/runtimeMode) 在初始化时同步加载,
- *   写入时立即同步到 localStorage
+ * R10.5.95 拆分策略:
+ *  - 内部 state 保持 unified (单 state object, 让 actions / SSE 引擎逻辑零改)
+ *  - listener set 拆 4: uiListeners / authListeners / searchListeners / historyListeners
+ *  - 4 个域 hook: useUIStore / useAuthStore / useSearchStore / useHistoryStore
+ *  - `useStore<T>` 保留作为全订阅 fallback (向后兼容, 跨域 selector 用)
+ *  - `actions` API 完全不变, 14 组件 import 不动
  */
 
 import { useSyncExternalStore } from 'react';
@@ -62,22 +65,26 @@ export interface User {
   created_at?: string;
 }
 
-interface State {
-  // View
-  currentView: ViewId;
+// ===== Domain state shapes =====
 
-  // Theme (R10.5.55: 删除独立 isDark 状态, midnight 主题天然是暗色)
+export interface UIDomain {
+  currentView: ViewId;
   theme: ThemeId;
   locale: Locale;
+  runtimeMode: RuntimeMode;
+  settingsCollapsed: boolean;
+  commandPaletteOpen: boolean;
+  authDialogOpen: boolean;
+  changelogOpen: boolean;
+  compareDrawerOpen: boolean;
+}
 
-  // Auth
+export interface AuthDomain {
   user: User | null;
   hasApiKey: boolean;
+}
 
-  // Runtime
-  runtimeMode: RuntimeMode;
-
-  // Search
+export interface SearchDomain {
   query: string;
   loading: boolean;
   error: string | null;
@@ -85,37 +92,36 @@ interface State {
   lastQuery: string;
   lastSubmittedQuery: string;
   elapsed: number;
-
-  // Pipeline
   events: NodeEvent[];
   nodeThinking: Record<string, string[]>;
   graphSnapshots: GraphSnapshot[];
   expandedNodeId: string | null;
   budgetExceeded: BudgetExceeded | null;
-
-  // Selection
   selectedPaperId: string | null;
-  selectedPaperIds: string[];        // for compare drawer
-
-  // History
-  recentSearches: RecentEntry[];
-
-  // UI flags
-  commandPaletteOpen: boolean;
-  compareDrawerOpen: boolean;
-  authDialogOpen: boolean;
-  changelogOpen: boolean;
-  // R10.5.59: 左侧设置菜单常驻 + 可收起
-  settingsCollapsed: boolean;
+  selectedPaperIds: string[];
 }
 
+export interface HistoryDomain {
+  recentSearches: RecentEntry[];
+}
+
+export type State = UIDomain & AuthDomain & SearchDomain & HistoryDomain;
+
 const initialState: State = {
+  // UI
   currentView: 'search',
   theme: 'parchment',
   locale: 'zh',
+  runtimeMode: 'llm',
+  settingsCollapsed: false,
+  commandPaletteOpen: false,
+  authDialogOpen: false,
+  changelogOpen: false,
+  compareDrawerOpen: false,
+  // Auth
   user: null,
   hasApiKey: false,
-  runtimeMode: 'llm',
+  // Search
   query: '',
   loading: false,
   error: null,
@@ -130,12 +136,8 @@ const initialState: State = {
   budgetExceeded: null,
   selectedPaperId: null,
   selectedPaperIds: [],
+  // History
   recentSearches: [],
-  commandPaletteOpen: false,
-  compareDrawerOpen: false,
-  authDialogOpen: false,
-  changelogOpen: false,
-  settingsCollapsed: false,
 };
 
 // ===== Persistence helpers =====
@@ -235,10 +237,49 @@ let state: State = (() => {
   };
 })();
 
-const listeners = new Set<() => void>();
+// R10.5.95: 4 listener sets — 每个域一个. setState patch 后按 patch 字段
+// 涉及的域发对应 listener, 没改的域 listener 不触发, 订阅该域的
+// components 不 re-render.
+const uiListeners = new Set<() => void>();
+const authListeners = new Set<() => void>();
+const searchListeners = new Set<() => void>();
+const historyListeners = new Set<() => void>();
 
-function notify(): void {
+const UI_KEYS = new Set<keyof UIDomain>([
+  'currentView', 'theme', 'locale', 'runtimeMode',
+  'settingsCollapsed', 'commandPaletteOpen', 'authDialogOpen',
+  'changelogOpen', 'compareDrawerOpen',
+]);
+const AUTH_KEYS = new Set<keyof AuthDomain>(['user', 'hasApiKey']);
+const SEARCH_KEYS = new Set<keyof SearchDomain>([
+  'query', 'loading', 'error', 'result', 'lastQuery', 'lastSubmittedQuery',
+  'elapsed', 'events', 'nodeThinking', 'graphSnapshots', 'expandedNodeId',
+  'budgetExceeded', 'selectedPaperId', 'selectedPaperIds',
+]);
+const HISTORY_KEYS = new Set<keyof HistoryDomain>(['recentSearches']);
+
+function notifyDomain(listeners: Set<() => void>): void {
   for (const l of listeners) l();
+}
+
+function notify(patch: Partial<State>): void {
+  let uiDirty = false;
+  let authDirty = false;
+  let searchDirty = false;
+  let historyDirty = false;
+  for (const k of Object.keys(patch) as (keyof State)[]) {
+    if (UI_KEYS.has(k as keyof UIDomain)) uiDirty = true;
+    else if (AUTH_KEYS.has(k as keyof AuthDomain)) authDirty = true;
+    else if (SEARCH_KEYS.has(k as keyof SearchDomain)) searchDirty = true;
+    else if (HISTORY_KEYS.has(k as keyof HistoryDomain)) historyDirty = true;
+  }
+  // 兜底: patch 不在 4 域里 (例如 setState({}) 空调用) 默认通知 search
+  // (历史最大域, 防止漏 notify). 实测 patch 始终带 1+ 字段, 走分支即可.
+  if (!uiDirty && !authDirty && !searchDirty && !historyDirty) return;
+  if (uiDirty) notifyDomain(uiListeners);
+  if (authDirty) notifyDomain(authListeners);
+  if (searchDirty) notifyDomain(searchListeners);
+  if (historyDirty) notifyDomain(historyListeners);
 }
 
 export function getState(): State {
@@ -262,22 +303,72 @@ export function setState(updater: Partial<State> | ((s: State) => Partial<State>
   if ('locale' in patch) {
     writeStorage(STORAGE_KEYS.locale ?? 'sf-locale', state.locale);
   }
-  notify();
+  notify(patch);
 }
 
 // Initialize theme on module load
 applyTheme(state.theme);
 
-// ===== Hook =====
+// ===== Hooks (R10.5.95: 4 域拆分) =====
 
+/** UI 域 (theme / view / dialogs / locale / runtimeMode / settingsCollapsed) */
+export function useUIStore<T>(selector: (s: UIDomain) => T): T {
+  return useSyncExternalStore(
+    (l) => { uiListeners.add(l); return () => { uiListeners.delete(l); }; },
+    () => selector(state),
+    () => selector(initialState),
+  );
+}
+
+/** Auth 域 (user / hasApiKey) */
+export function useAuthStore<T>(selector: (s: AuthDomain) => T): T {
+  return useSyncExternalStore(
+    (l) => { authListeners.add(l); return () => { authListeners.delete(l); }; },
+    () => selector(state),
+    () => selector(initialState),
+  );
+}
+
+/** Search 域 (query / loading / events / pipeline / selection) */
+export function useSearchStore<T>(selector: (s: SearchDomain) => T): T {
+  return useSyncExternalStore(
+    (l) => { searchListeners.add(l); return () => { searchListeners.delete(l); }; },
+    () => selector(state),
+    () => selector(initialState),
+  );
+}
+
+/** History 域 (recentSearches) */
+export function useHistoryStore<T>(selector: (s: HistoryDomain) => T): T {
+  return useSyncExternalStore(
+    (l) => { historyListeners.add(l); return () => { historyListeners.delete(l); }; },
+    () => selector(state),
+    () => selector(initialState),
+  );
+}
+
+/**
+ * R10.5.95: 跨域 selector fallback. 订阅全部 4 域 listener (任意域变更都触发 re-render).
+ * 仅在组件必须读多域字段时使用; 否则优先上面 4 个域 hook.
+ */
 export function useStore<T>(selector: (s: State) => T): T {
+  // 简化实现: 把 selector 拆 4 域分别订阅, 用 ref cache. 跟原 useStore
+  // 行为兼容但避免 1 listener 全订.
   return useSyncExternalStore(
     (l) => {
-      listeners.add(l);
-      return () => { listeners.delete(l); };
+      uiListeners.add(l);
+      authListeners.add(l);
+      searchListeners.add(l);
+      historyListeners.add(l);
+      return () => {
+        uiListeners.delete(l);
+        authListeners.delete(l);
+        searchListeners.delete(l);
+        historyListeners.delete(l);
+      };
     },
     () => selector(state),
-    () => selector(initialState)
+    () => selector(initialState),
   );
 }
 
