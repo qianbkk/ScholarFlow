@@ -114,9 +114,10 @@ NODE_NAME_TO_STEP = {
     "expand_citations": 2,
     "rank": 3,
     "refine": 4,            # 可能循环多次（每次都映射到第 5 步）
-    "synthesize": 5,
-    "build_graph": 6,
-    "track_cost": 7,
+    "classify_papers": 5,   # R10.5.93: stance/study_type/quote 分类
+    "synthesize": 6,
+    "build_graph": 7,
+    "track_cost": 8,
 }
 
 

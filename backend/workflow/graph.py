@@ -12,6 +12,8 @@ from backend.agents.synthesis_agent import synthesize_node
 from backend.agents.graph_builder import build_graph_node
 from backend.agents.cost_tracker import track_cost_node
 from backend.agents.critic_agent import critic_review_node
+# R10.5.93 (升级 1/2/3/4): stance_classifier 节点, 跟 critic_review 串联
+from backend.agents.stance_classifier import classify_papers_node
 from backend.workflow.router import should_refine
 
 
@@ -24,6 +26,8 @@ def build_search_graph():
     graph.add_node("expand_citations", expand_citations_node)
     graph.add_node("rank", rank_node)
     graph.add_node("refine", query_refine_node)
+    # R10.5.93: classify_papers 插入到 rank → critic_review 之间
+    graph.add_node("classify_papers", classify_papers_node)
     graph.add_node("critic_review", critic_review_node)
     graph.add_node("synthesize", synthesize_node)
     graph.add_node("build_graph", build_graph_node)
@@ -37,17 +41,19 @@ def build_search_graph():
 
     # 条件分支：优化 or 进入评审/合成流程
     # Phase 3: Critic Agent 红蓝对抗 - 在 rank 之后、synthesize 之前进行独立评审
-    # 如果需要 refine，则回到 search；否则进入 critic_review → synthesize
+    # R10.5.93: 升级后变成 rank → classify_papers → critic_review → synthesize
+    # 如果需要 refine，则回到 search；否则进入 classify_papers → critic_review
     graph.add_conditional_edges(
         "rank",
         should_refine,
-        {"refine": "refine", "synthesize": "critic_review"},
+        {"refine": "refine", "synthesize": "classify_papers"},
     )
 
     # 迭代回路
     graph.add_edge("refine", "search")
 
-    # Critic 评审后进入合成
+    # R10.5.93: classify → critic → synthesize
+    graph.add_edge("classify_papers", "critic_review")
     graph.add_edge("critic_review", "synthesize")
     graph.add_edge("synthesize", "build_graph")
     graph.add_edge("build_graph", "track_cost")
@@ -97,6 +103,14 @@ NODE_METADATA = {
         "default_model": "claude-3-5-sonnet",
         "description": "基于上一轮结果优化查询策略",
         "icon": "refine",
+    },
+    # R10.5.93: 立场 / 类型 / 引用 分类节点 (Scite + Consensus + Elicit 借鉴)
+    "classify_papers": {
+        "display_name": "立场分类",
+        "model_tier": "balanced",
+        "default_model": "gpt-4o-mini",
+        "description": "标注每篇论文立场 (支持/反对) + 研究类型 + 关键引用",
+        "icon": "tag",
     },
     "synthesize": {
         "display_name": "综述生成",

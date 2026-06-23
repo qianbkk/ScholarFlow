@@ -83,6 +83,8 @@ def make_initial_state(
         "score_threshold": 8.0 if runtime_mode == "llm" else 0.0,
         # 记录是否已尝试放宽 (一次放宽机会, 防止无限循环)
         "score_relaxed": False,
+        # R10.5.93 (升级 1/2): stance_classifier 节点输出, 节点跑前 None.
+        "stance_summary": None,
     }
     if not include_expanded_ids:
         out.pop("expanded_paper_ids", None)
@@ -143,6 +145,11 @@ class PaperResult(BaseModel):
     authority_score: float = 0.0
     consistency_score: float = 0.0
     final_score: float = 0.0
+    # R10.5.93 (升级 1/3/4): stance + study_type + key_quote, 由 stance_classifier
+    # 节点填入, 前端 PaperList / SearchSummary / ReportView 读取.
+    stance: str = ""
+    study_type: str = ""
+    key_quote: str = ""
 
 
 # R10.5.32 (F7): CommandPalette /summarize + /critique 端点的 Pydantic 模型.
@@ -194,6 +201,9 @@ class SearchResponse(BaseModel):
     # 能看到"我这次查询被识别成 NeurIPS 2022 后 论文", 调试用. 字段全部
     # Optional, 兜底时整字段 None.
     constraints: Optional[dict] = None
+    # R10.5.93 (升级 1/2): stance_classifier 输出的聚合结果, 供前端
+    # ConsensusMeter 显示. 字段 Optional, 节点未跑 / 失败时 None.
+    stance_summary: Optional[dict] = None
 
 
 def _build_search_response(
@@ -264,6 +274,8 @@ def _build_search_response(
         ris=papers_to_ris(ranked[:25]) if ranked else "",
         # R10.5.14 (P0-A): constraints 透传
         constraints=state_dict.get("constraints"),
+        # R10.5.93 (升级 1/2): stance_summary 透传
+        stance_summary=state_dict.get("stance_summary"),
         # R10.5.28 (CD.txt 隐性问题修复): 告诉前端这次结果走 mock 还是 real.
         # 跟 _resolve_provider + runtime_mode 三态联动: 优先 state_dict 里的
         # runtime_mode (search_graph 节点会注入), 兜底读 runtime_mode 进程级

@@ -111,3 +111,9 @@ class SearchState(TypedDict):
     # _step_queue 在节点完成时合并进 thinking_log 并清空, 保持原有 observability.
     # 这是 LangGraph 0.2+ astream stream_mode="updates" 的标准 pattern.
     _step_queue: Optional[list]
+
+    # R10.5.93 (升级 1/2/3/4): stance_classifier 节点输出, 供前端 ConsensusMeter
+    # 显示. dict 形态: {total, counts: {supporting:N, contrasting:N, ...},
+    #   type_counts: {rct:N, ...}, majority_stance, summary}
+    # 字段 Optional, 没跑 stance_classifier 节点时 None.
+    stance_summary: Optional[dict]
