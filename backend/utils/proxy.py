@@ -7,6 +7,7 @@ PERF-002 / B-002 修复：
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import socket
 from functools import lru_cache
@@ -44,8 +45,22 @@ def _detect_proxy() -> str | None:
 
 @lru_cache(maxsize=1)
 def get_proxy() -> str | None:
-    """进程内只探测一次。"""
+    """进程内只探测一次。
+
+    sync 版本. lifespan 启动期调用 (run_in_executor 已 offload, 不阻塞事件循环).
+    测试 reset_cache() 后可重探测.
+    """
     return _detect_proxy()
+
+
+async def aget_proxy() -> str | None:
+    """async 版本 (R10.5.96 F-010): 给 async 上下文 (openalex / semantic_scholar
+    的 _get_client) 调用, 探测阶段 offload 到线程池, 命中 lru_cache 后纯 dict 查.
+
+    收益: 冷启动第一请求不再阻塞事件循环 0.25s. lifespan 已预热 (run_in_executor),
+    实际只影响"lifespan 还没跑完 + 请求已到达"的微小竞态, 但代码语义更干净.
+    """
+    return await asyncio.to_thread(get_proxy)
 
 
 def reset_cache() -> None:

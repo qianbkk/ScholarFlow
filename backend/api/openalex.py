@@ -14,7 +14,7 @@ from backend.models.paper import Paper
 from backend.api.mock_data import get_mock_papers, get_all_mock_papers
 from backend.api._retry import _get_with_retry  # Round N SIMPLIFY: 抽到共享 helper
 from backend.utils.circuit_breaker import CircuitOpenError, oa_breaker  # Fix-X8
-from backend.utils.proxy import get_proxy  # PERF-002 / B-002
+from backend.utils.proxy import aget_proxy  # R10.5.96 (F-010): async 版探测, 探测 offload 线程池
 from backend.utils.scrub import scrub_sensitive  # VULN-004
 # Round 6 SIMPLIFY: 抽 log_throttle 到 utils, 消除 SS/OA 重复 _should_log 实现 (26 行)
 from backend.utils.log_throttle import should_log
@@ -34,17 +34,22 @@ _client: httpx.AsyncClient | None = None
 _temporary_clients: set[httpx.AsyncClient] = set()
 
 
-def _get_client() -> httpx.AsyncClient:
+async def _get_client() -> httpx.AsyncClient:
+    """async 版 (R10.5.96 F-010): proxy 探测 await aget_proxy, 不阻塞事件循环.
+
+    lifespan 启动期已 run_in_executor 预热, 命中 lru_cache 时 aget_proxy 几乎瞬返.
+    """
     global _client
+    proxy = await aget_proxy()
     if _DISABLE_POOL:
         # 回滚模式：每次新建 client（无连接池），记录以便 close 时释放
-        c = httpx.AsyncClient(timeout=TIMEOUT, proxy=get_proxy())
+        c = httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy)
         _temporary_clients.add(c)
         return c
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
             timeout=TIMEOUT,
-            proxy=get_proxy(),
+            proxy=proxy,
             limits=httpx.Limits(
                 max_connections=20,
                 max_keepalive_connections=10,
@@ -143,7 +148,7 @@ async def search_papers(query: str, limit: int = 50) -> list[Paper]:
         return all_papers[:limit]
 
     try:
-        client = _get_client()
+        client = await _get_client()
         resp = await _get_with_retry(
             client,
             f"{BASE_URL}/works",
