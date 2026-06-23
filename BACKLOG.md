@@ -25,20 +25,18 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 - **风险**: 中(e2e 测试需要重跑,跨 worker 部署需 smoke test)
 - **来源**: TODO.md #6 (R10.5.40 review)
 
-### C-002. `NodeServices` DI 渐进式迁移决策
+### C-002. ~~`NodeServices` DI 渐进式迁移决策~~ ✅ 已完成 (R10.5.96)
 
-- **现状 (R10.5.95 审计确认)**: R10.5 P1-1 立的 `backend/agents/services.py` 73 行 DI 容器,只有 `synthesis_agent.py:49` 一处使用,其他 7 个 agent 仍直接 import `call_llm`。`synthesis_agent.py` 走的是 `services: NodeServices | None = None` 可选参数模式 + module-level lazy import,**实际等价于"如果 services 传了用 services.llm,否则 fall back 到 call_llm"**,没真发挥 DI 价值。
-- **目标二选一**:
-  1. 全面迁移 8 个 agent 节点到 `NodeServices.llm`,删 fallback 兼容 (1 天 + 大量测试调整)
-  2. **全部回滚到旧风格,删 `services.py` 整文件 (半天,推荐)**
-- **决策**: R10.5.96 选路径 2 (回滚 + 删除)。理由:
-  - 当前实现 = 旧 import + 新 services 二选一 fallback, 复杂度翻倍, 真 DI 价值为零 (测试仍用 patch, mock 不走 services)
+- **历史**: R10.5 P1-1 立的 `backend/agents/services.py` 73 行 DI 容器,只有 `synthesis_agent.py` 一处使用,其他 7 个 agent 仍直接 import `call_llm`。`synthesis_agent.py` 走的是 `services: NodeServices | None = None` 可选参数模式 + module-level lazy import,**实际等价于"如果 services 传了用 services.llm,否则 fall back 到 call_llm"**,没真发挥 DI 价值。
+- **R10.5.96 决策**: 选 BACKLOG C-002 路径 2 — **回滚 + 删除**。
+- **落地**:
+  - 删除 `backend/agents/services.py` (73 行)
+  - `synthesis_agent.synthesize_node(state, services=None)` → `synthesize_node(state)`, 内部直接 `call_llm` 调用
+  - 无测试受影响 (测试用 `patch.object` 不走 services)
+- **理由**:
+  - 当前实现 = 旧 import + 新 services 二选一 fallback, 复杂度翻倍, 真 DI 价值为零
   - 7/8 agent 没接, 单独 1 个 agent 接 services 形单影只
-  - 路径 1 的"全面迁移"是 8 文件 PR + 测试调整, 在 R10.5 已经 P10 大优化后, 投入产出比不合算
-  - 真要做 DI, 等 R11 LangGraph 1.0 + R13 Multi-Agent Runtime 一起做 (那时 8 个 agent 控制流会重构, 现在做的 DI 重构会被推翻)
-- **工作量**: 半天到 1 天
-- **风险**: 中 (影响全部 agent 节点测试 mock 模式)
-- **来源**: 自分析,清理报告 C1
+  - 真要做 DI, 等 R11 LangGraph 1.0 + R13 Multi-Agent Runtime 一起做
 
 ### C-003. `backend/main.py` 体积拆分为 `app.py` + `lifespan.py`
 
@@ -247,12 +245,14 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 - **工作量**: 1 周
 - **风险**: 中 (涉及 R10.5.43 的 SQLite 方案回滚)
 
-#### F-010. P3-10 代理探测改 async (0.25s 阻塞冷启动)
+#### F-010. ~~P3-10 代理探测改 async (0.25s 阻塞冷启动)~~ ✅ 已完成 (R10.5.96)
 
-- **现状**: `backend/api/routes/admin.py` 的代理探测 sync 阻塞 ~0.25s。
-- **目标**: 改 `httpx.AsyncClient` 异步探测,不阻塞 startup。
-- **工作量**: 15 行
-- **风险**: 低
+- **现状 (校准)**: 实际阻塞点在 `backend/api/openalex.py:41` + `semantic_scholar.py:48` 的 `_get_client()` 里调 `get_proxy()` — 不在 admin.py (admin.py 不做代理探测). 同步 proxy 探测在 async context 里会阻塞事件循环 0.25s.
+- **R10.5.96 落地**:
+  - `backend/utils/proxy.py` 加 `async def aget_proxy()` (offload 到 `asyncio.to_thread`)
+  - `openalex._get_client()` + `semantic_scholar._get_client()` 改 async, 内部 `await aget_proxy()`
+  - 3 处调用点 (`semantic_scholar.py` 108/182/250) 改 `await _get_client()`
+- **收益**: lifespan 已预热 (run_in_executor), 真阻塞只剩"lifespan 未完 + 请求先到"的极小竞态, 但代码语义干净, 冷启动第一请求不再阻塞事件循环.
 
 #### F-011. P3-11 mock synthesis regex 改 LLM JSON (消除 `**[Paper i]**` 脆弱)
 
@@ -398,8 +398,7 @@ A 类 (立即删除) 和 B 类 (短期重构) 已在新提交中执行完毕,不
 | `frontend/src/components/LoginDialog.tsx:282` | HttpOnly+SameSite cookie R11+ | R-011 |
 | `frontend/src/components/GraphPanel.tsx:14` | MAX_FRONTEND_NODES 防御 R11+ | R-011 |
 | `frontend/src/hooks/useSearch.ts:294` | SSE 续传 R11+ checkpointer | R-011 |
-| `backend/agents/services.py:2,4,32` | DI 渐进式 (AAA.txt P1-1) | C-002 |
-| `backend/agents/synthesis_agent.py:49` | services 可选参数 P1-1 | C-002 |
+| `backend/agents/synthesis_agent.py:49` | services 可选参数 P1-1 | ~~C-002 (R10.5.96 已删)~~ |
 | `backend/api/openalex.py:75,140` | D4 P1-1 | C-002 |
 | `backend/utils/audit_log.py:2,17,119` | P1-12 审计 | (已合并进 E-001 系列) |
 | `backend/__init__.py:2` | P3-11 fix | F-011 |
