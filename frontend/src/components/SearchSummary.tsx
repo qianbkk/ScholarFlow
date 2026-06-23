@@ -5,10 +5,15 @@
  * 只显示: 报告标题 (从 Markdown 一级标题抽) + Top 5 论文 + 跳到报告按钮.
  *
  * 用户跑完查询后看到概要, 决定是否要看完整报告.
+ *
+ * R10.5.93 (升级 1/2/5): 插入 ConsensusMeter 显示立场聚合 (Consensus.app 风格) +
+ * RelatedPapersPanel 显示相关论文 (Research Rabbit 风格).
  */
 import { useMemo } from 'react';
 import { useStore, actions } from '../store/useStore';
 import { useT } from '../i18n';
+import { ConsensusMeter } from './ConsensusMeter';
+import { RelatedPapersPanel } from './RelatedPapersPanel';
 import type { Paper } from '../types';
 
 function extractTitle(md: string): string {
@@ -24,11 +29,13 @@ function extractTitle(md: string): string {
 export function SearchSummary() {
   const result = useStore((s) => s.result);
   const loading = useStore((s) => s.loading);
+  const selectedPaperId = useStore((s) => s.selectedPaperId);
   const t = useT();
 
   const title = useMemo(() => extractTitle(result?.report ?? ''), [result]);
   const papers: Paper[] = result?.ranked_papers ?? [];
   const top5 = papers.slice(0, 5);
+  const graph = result?.citation_graph ?? null;
 
   if (!result || loading) return null;
 
@@ -75,6 +82,9 @@ export function SearchSummary() {
           {title}
         </h2>
       )}
+
+      {/* R10.5.93 (升级 1/2): 立场聚合 meter (Consensus.app 风格) */}
+      <ConsensusMeter summary={result.stance_summary ?? null} />
 
       {/* Top 5 */}
       {top5.length > 0 && (
@@ -150,6 +160,12 @@ export function SearchSummary() {
       >
         {t('summary.viewReport')} →
       </button>
+
+      {/* R10.5.93 (升级 5): Related papers 面板 (Research Rabbit 风格) */}
+      <RelatedPapersPanel
+        graph={graph}
+        selectedPaperId={selectedPaperId ?? null}
+      />
     </section>
   );
 }

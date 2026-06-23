@@ -19,6 +19,29 @@ export interface Paper {
   // Round 2 MEDIUM-001+PERF-005: 标识此论文是否来自 mock fallback 数据.
   // 之前 backend 已写入但前端类型没声明, paper.is_fallback 永远是 undefined.
   is_fallback?: boolean;
+  // R10.5.93 (升级 1/3/4): stance_classifier 节点写入, 借鉴 Scite/Consensus/Elicit.
+  // stance: "supporting" | "contrasting" | "neutral" | "mixed" | "unsure"
+  // study_type: "rct" | "meta-analysis" | "systematic-review" | "review" |
+  //             "survey" | "method" | "case-study" | "empirical" | "other"
+  // key_quote: ≤300 字关键引用 (从 abstract 抽取)
+  stance?: string;
+  study_type?: string;
+  key_quote?: string;
+}
+
+// R10.5.93 (升级 1/2): stance_classifier 节点输出的聚合, 供前端 ConsensusMeter 显示.
+export interface StanceSummary {
+  total: number;
+  counts: {
+    supporting: number;
+    contrasting: number;
+    neutral: number;
+    mixed: number;
+    unsure: number;
+  };
+  type_counts: Record<string, number>;
+  majority_stance: string;
+  summary: string;
 }
 
 export interface GraphNode {
@@ -97,6 +120,10 @@ export interface SearchResult {
   // R10.5 P0: BibTeX / RIS 导出字符串, 一键导入 Zotero / Mendeley / EndNote
   bibtex?: string;
   ris?: string;
+  // R10.5.93 (升级 1/2): stance 聚合, 供前端 ConsensusMeter.
+  stance_summary?: StanceSummary | null;
+  // R10.5.14: query_decomposer 抽出的结构化约束 (debug 用)
+  constraints?: Record<string, unknown> | null;
 }
 
 export interface SearchState {
