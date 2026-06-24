@@ -15,7 +15,7 @@ const LOCALES: { id: Locale; label: string; short: string }[] = [
   { id: 'en', label: 'English', short: 'EN' },
 ];
 
-export function SettingsSidebar() {
+export function SettingsSidebar({ effectiveCollapsed }: { effectiveCollapsed?: boolean }) {
   const collapsed = useStore((s) => s.settingsCollapsed);
   const theme = useStore((s) => s.theme);
   const locale = useStore((s) => s.locale);
@@ -23,7 +23,10 @@ export function SettingsSidebar() {
   const hasApiKey = useStore((s) => s.hasApiKey);
   const t = useT();
 
-  const width = collapsed ? 48 : 220;
+  // R10.5.98 (impeccable audit P2): 移动端通过 effectiveCollapsed prop 强制收起,
+  // store 的 settingsCollapsed 只反映用户手动选择.
+  const isCollapsed = effectiveCollapsed ?? collapsed;
+  const width = isCollapsed ? 48 : 220;
 
   return (
     <aside
@@ -43,7 +46,7 @@ export function SettingsSidebar() {
         overflowX: 'hidden',
       }}
       data-testid="settings-sidebar"
-      data-collapsed={collapsed ? 'true' : 'false'}
+      data-collapsed={isCollapsed ? 'true' : 'false'}
     >
       {/* Toggle header */}
       <button
@@ -79,8 +82,8 @@ export function SettingsSidebar() {
         </span>
       </button>
 
-      {/* Sections */}
-      {!collapsed && (
+      {/* Sections — 移动端收起时也隐藏 (effectiveCollapsed 强制) */}
+      {!isCollapsed && (
         <div style={{ padding: '12px 12px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
           {/* Language */}
           <Section title={t('sidebar.language')}>

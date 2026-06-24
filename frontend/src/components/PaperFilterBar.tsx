@@ -23,12 +23,13 @@ interface Props {
 }
 
 // 立场选项 (跟 PaperList.STANCE_STYLE + ConsensusMeter 对齐)
+// R10.5.98 (impeccable audit P2): 颜色用 --sf-stance-* CSS vars, 4 主题自动适配.
 const STANCE_OPTIONS: Array<{ key: string; label: string; emoji: string; color: string }> = [
   { key: 'all',         label: '全部',   emoji: '·', color: 'var(--sf-muted)' },
-  { key: 'supporting',  label: '支持',   emoji: '✓', color: '#15803d' },
-  { key: 'contrasting', label: '反对',   emoji: '✗', color: '#b91c1c' },
-  { key: 'mixed',       label: '混合',   emoji: '≈', color: '#b45309' },
-  { key: 'neutral',     label: '中性',   emoji: '·', color: '#78716c' },
+  { key: 'supporting',  label: '支持',   emoji: '✓', color: 'var(--sf-stance-supporting)' },
+  { key: 'contrasting', label: '反对',   emoji: '✗', color: 'var(--sf-stance-contrasting)' },
+  { key: 'mixed',       label: '混合',   emoji: '≈', color: 'var(--sf-stance-mixed)' },
+  { key: 'neutral',     label: '中性',   emoji: '·', color: 'var(--sf-stance-neutral)' },
 ];
 
 // study_type 选项 (Elicit 风格)

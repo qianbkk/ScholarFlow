@@ -66,7 +66,10 @@ export default function App() {
   }, []);
 
   // Layout: 左侧 SettingsSidebar (220 / 48 wide) + 主体内容 (marginLeft 偏移)
-  const sidebarWidth = settingsCollapsed ? 48 : 220;
+  // R10.5.98 (impeccable audit P2): viewport < 768px 时强制收起, 避免挤压主内容.
+  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
+  const effectiveCollapsed = settingsCollapsed || isMobile;
+  const sidebarWidth = effectiveCollapsed ? 48 : 220;
 
   return (
     <div
@@ -78,7 +81,7 @@ export default function App() {
         color: 'var(--sf-text)',
       }}
     >
-      <SettingsSidebar />
+      <SettingsSidebar effectiveCollapsed={effectiveCollapsed} />
 
       {/* 主内容区, 左边距让出 SettingsSidebar */}
       <div

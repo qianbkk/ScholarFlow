@@ -32,12 +32,13 @@ interface Props {
 }
 
 // R10.5.93: 立场徽标 (跟 PaperList 对齐)
+// R10.5.98 (impeccable audit P2): 颜色 + bg 用 --sf-stance-* vars, 4 主题自动适配.
 const STANCE_BADGE: Record<string, { label: string; emoji: string; color: string; bg: string }> = {
-  supporting:  { label: '支持',   emoji: '✓', color: '#15803d', bg: 'rgba(21, 161, 67, 0.1)' },
-  contrasting: { label: '反对',   emoji: '✗', color: '#b91c1c', bg: 'rgba(185, 28, 28, 0.1)' },
-  mixed:       { label: '混合',   emoji: '≈', color: '#b45309', bg: 'rgba(180, 83, 9, 0.1)' },
-  neutral:     { label: '中性',   emoji: '·', color: '#78716c', bg: 'rgba(120, 113, 108, 0.1)' },
-  unsure:      { label: '未分类', emoji: '?', color: '#a8a29e', bg: 'transparent' },
+  supporting:  { label: '支持',   emoji: '✓', color: 'var(--sf-stance-supporting)',     bg: 'var(--sf-stance-supporting-bg)' },
+  contrasting: { label: '反对',   emoji: '✗', color: 'var(--sf-stance-contrasting)',    bg: 'var(--sf-stance-contrasting-bg)' },
+  mixed:       { label: '混合',   emoji: '≈', color: 'var(--sf-stance-mixed)',          bg: 'var(--sf-stance-mixed-bg)' },
+  neutral:     { label: '中性',   emoji: '·', color: 'var(--sf-stance-neutral)',        bg: 'var(--sf-stance-neutral-bg)' },
+  unsure:      { label: '未分类', emoji: '?', color: 'var(--sf-stance-unsure)',         bg: 'transparent' },
 };
 
 // R10.5.93: 6 段 tab 配置 (跟 synthesis_agent prompt 的 6 个 ## 标题对齐)

@@ -444,7 +444,14 @@ body {
   transition: border-color 100ms ease;
 }
 .sf-input:hover { border-color: var(--sf-muted); }
+/* R10.5.98 (impeccable audit P1): 改 :focus-visible 而非 :focus.
+   鼠标点击不显示环 (正确), 键盘 Tab 才显示 (WCAG 2.4.7 Focus Visible). */
 .sf-input:focus { outline: none; border-color: var(--sf-accent); }
+.sf-input:focus-visible {
+  outline: 1.5px solid var(--sf-accent);
+  outline-offset: 2px;
+  border-color: var(--sf-accent);
+}
 
 /* === Hairline rule === */
 .sf-hr {

@@ -17,12 +17,13 @@ interface Props {
 }
 
 // 立场颜色 (跟 PaperList.STANCE_STYLE 对齐)
+// R10.5.98 (impeccable audit P2): 用 --sf-stance-* CSS vars, 4 主题自动适配.
 const STANCE_COLORS = {
-  supporting: '#15803d',
-  contrasting: '#b91c1c',
-  mixed: '#b45309',
-  neutral: '#78716c',
-  unsure: '#a8a29e',
+  supporting: 'var(--sf-stance-supporting)',
+  contrasting: 'var(--sf-stance-contrasting)',
+  mixed: 'var(--sf-stance-mixed)',
+  neutral: 'var(--sf-stance-neutral)',
+  unsure: 'var(--sf-stance-unsure)',
 } as const;
 
 const STANCE_LABELS = {
