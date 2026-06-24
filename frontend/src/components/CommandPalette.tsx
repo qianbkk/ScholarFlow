@@ -66,6 +66,19 @@ export function CommandPalette({ cycleTheme, cancelSearch }: Props) {
     if (sel >= filtered.length) setSel(0);
   }, [filtered.length, sel]);
 
+  // R10.5.99 (impeccable verify): groups useMemo 必须在 if (!open) return null 之前.
+  // 旧版 open=false 时提前 return, 跳过此 useMemo, 打开后 hooks 数量变化触发
+  // React "Rendered more hooks" 错误.
+  const groups = useMemo(() => {
+    const m = new Map<string, Command[]>();
+    for (const c of filtered) {
+      const g = c.group || '';
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(c);
+    }
+    return Array.from(m.entries());
+  }, [filtered]);
+
   if (!open) return null;
 
   const run = (c: Command) => {
@@ -85,17 +98,6 @@ export function CommandPalette({ cycleTheme, cancelSearch }: Props) {
       run(filtered[sel]);
     }
   };
-
-  // 按 group 分组
-  const groups = useMemo(() => {
-    const m = new Map<string, Command[]>();
-    for (const c of filtered) {
-      const g = c.group || '';
-      if (!m.has(g)) m.set(g, []);
-      m.get(g)!.push(c);
-    }
-    return Array.from(m.entries());
-  }, [filtered]);
 
   // 把 sel 转成 flat 索引用于高亮
   let runningIdx = -1;

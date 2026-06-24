@@ -4,7 +4,7 @@
  * 5 tabs (查询/报告/图谱/历史/关于) + 左侧 SettingsSidebar (常驻可收起)
  * + 命令面板 + 认证对话框 + 更新日志 modal + 对比 drawer.
  */
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { useStore, actions, getState } from './store/useStore';
 import type { ThemeId } from './lib/tokens';
 import { TopNav } from './components/TopNav';
@@ -24,6 +24,18 @@ export default function App() {
   const currentView = useStore((s) => s.currentView);
   const settingsCollapsed = useStore((s) => s.settingsCollapsed);
   const t = useT();
+
+  // R10.5.99 (impeccable audit verify): viewport 状态需要监听 resize 才能在
+  // 拖窗口 / 旋转时正确重渲. 原版只读 innerWidth, resize 后没反应.
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  );
+  useEffect(() => {
+    const mql = window.matchMedia('(max-width: 768px)');
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mql.addEventListener('change', onChange);
+    return () => mql.removeEventListener('change', onChange);
+  }, []);
 
   // Cycle theme helper
   const cycleTheme = useCallback(() => {
@@ -67,7 +79,6 @@ export default function App() {
 
   // Layout: 左侧 SettingsSidebar (220 / 48 wide) + 主体内容 (marginLeft 偏移)
   // R10.5.98 (impeccable audit P2): viewport < 768px 时强制收起, 避免挤压主内容.
-  const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
   const effectiveCollapsed = settingsCollapsed || isMobile;
   const sidebarWidth = effectiveCollapsed ? 48 : 220;
 
