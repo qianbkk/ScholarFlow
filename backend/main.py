@@ -37,18 +37,16 @@ from typing import Optional
 # 让 uvicorn 直接启动时也能找到 backend 包
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.exceptions import RequestValidationError
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 import ipaddress
 
 # 反向代理后真实 IP 提取 (含 TRUSTED_PROXIES 白名单防 XFF 伪造).
-# R10.5.96 (BACKLOG D 隐性条目): 删 main.py:55-62 向后兼容 alias,
-# utils.network 是权威源, 不再保留转发壳.
+# utils.network 是权威源, main.py 不再保留转发 alias.
 from backend.utils.network import get_real_ip
 
 from backend.workflow.graph import search_graph

@@ -22,7 +22,7 @@ const API_BASE = '/api/v1';
 // (3) /auth/revoke 端点用户可一键轮换 key (R10.5.28); (4) 自动闲置超时
 // 30 分钟 (setTimeout-based, 关浏览器后失效).
 // R11+ 计划: 改用 HttpOnly+SameSite=Strict cookie + CSRF token.
-// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化. 详见 BACKLOG.md D 节.
+// R10.5.51 cleanup: 改用 STORAGE_KEYS 中央化.
 import { STORAGE_KEYS } from '../lib/storageKeys';
 const STORED_KEY = STORAGE_KEYS.apiKey;
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000;  // 30 分钟无活动自动清 key
@@ -95,9 +95,8 @@ export function setApiKey(key: string | null): void {
 
 /**
  * 纯函数: 返回当前 API Key 的 header 字典 (无副作用).
- * R10.5.95 (审计 P1-B): 原实现把 _resetIdleTimer 副作用塞进读函数,
- * 让 "authHeaders" 听起来像纯函数实际却会重置 30 分钟闲置计时器.
- * 现在拆 touchAuth() 给调用方显式调, 便于测试 + 调试.
+ * 原实现把 _resetIdleTimer 副作用塞进读函数, 让 "authHeaders" 听起来像
+ * 纯函数实际却会重置 30 分钟闲置计时器. 拆 touchAuth() 给调用方显式调.
  */
 function authHeaders(): Record<string, string> {
   const key = getApiKey();

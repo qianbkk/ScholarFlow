@@ -54,12 +54,16 @@ def get_proxy() -> str | None:
 
 
 async def aget_proxy() -> str | None:
-    """async 版本 (R10.5.96 F-010): 给 async 上下文 (openalex / semantic_scholar
-    的 _get_client) 调用, 探测阶段 offload 到线程池, 命中 lru_cache 后纯 dict 查.
+    """async 版本: 给 async 上下文 (openalex / semantic_scholar 的 _get_client) 调用.
 
-    收益: 冷启动第一请求不再阻塞事件循环 0.25s. lifespan 已预热 (run_in_executor),
-    实际只影响"lifespan 还没跑完 + 请求已到达"的微小竞态, 但代码语义更干净.
+    Fast path: 缓存已 warm 时直接读 (lru_cache 的 dict 读, O(1) 无线程切换).
+    Slow path: cache 未填 (冷启动 lifespan 未预热完 + 请求到达) 才走 asyncio.to_thread.
+
+    设计取舍: 若总是 to_thread, warm 路径每次都付线程池调度 + future 唤醒开销,
+    但实际收益只剩"lifespan 未完 + 请求到达"极小竞态. fast path 让稳态零开销.
     """
+    if get_proxy.cache_info().currsize > 0:
+        return get_proxy()
     return await asyncio.to_thread(get_proxy)
 
 

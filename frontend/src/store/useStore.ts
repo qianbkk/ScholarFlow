@@ -1,12 +1,11 @@
 /**
- * useStore — R10.5.95 域拆分 (审计 P1-A)
+ * useStore — 域拆分 (单 listener set → 4 域)
  *
- * R10.5.54 单一 store 取代 3 Context + 13 useState. 7 个月后涨到 711 行 + 9 域
- * (View / Theme / Auth / Runtime / Search / Pipeline / Selection / History / UI flag).
+ * R10.5.54 单一 store 取代 3 Context + 13 useState. 后涨到 711 行 + 9 域.
  * `useSyncExternalStore` 共享一个 listener set, 任何字段变更都触发全部
  * component re-render, 性能曲线变陡.
  *
- * R10.5.95 拆分策略:
+ * 拆分策略:
  *  - 内部 state 保持 unified (单 state object, 让 actions / SSE 引擎逻辑零改)
  *  - listener set 拆 4: uiListeners / authListeners / searchListeners / historyListeners
  *  - 4 个域 hook: useUIStore / useAuthStore / useSearchStore / useHistoryStore
@@ -273,9 +272,15 @@ function notify(patch: Partial<State>): void {
     else if (SEARCH_KEYS.has(k as keyof SearchDomain)) searchDirty = true;
     else if (HISTORY_KEYS.has(k as keyof HistoryDomain)) historyDirty = true;
   }
-  // 兜底: patch 不在 4 域里 (例如 setState({}) 空调用) 默认通知 search
-  // (历史最大域, 防止漏 notify). 实测 patch 始终带 1+ 字段, 走分支即可.
-  if (!uiDirty && !authDirty && !searchDirty && !historyDirty) return;
+  // 兜底: patch 不在 4 域里 (空 patch 或新增字段未分类) 时广播全部 listener,
+  // 保证 setState({}) 不会让 UI 冻结, 也对未来新增字段零摩擦.
+  if (!uiDirty && !authDirty && !searchDirty && !historyDirty) {
+    notifyDomain(uiListeners);
+    notifyDomain(authListeners);
+    notifyDomain(searchListeners);
+    notifyDomain(historyListeners);
+    return;
+  }
   if (uiDirty) notifyDomain(uiListeners);
   if (authDirty) notifyDomain(authListeners);
   if (searchDirty) notifyDomain(searchListeners);

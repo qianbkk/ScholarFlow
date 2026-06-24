@@ -11,7 +11,7 @@ R10.5.43: Runtime mode 共享化 (P0 multi-worker drift 修复).
   → 跨 worker 一致, 切换后 ≤1s 全员生效
   → DB I/O 几乎不增加 (每 worker 每秒最多 1 次 read).
 - R10.5.51 cleanup: 删 _RuntimeModeProxy dict-subclass 后向兼容 shim (76 行),
-  所有调用点迁到显式 set_runtime_mode() / get_runtime_mode() (见 BACKLOG.md D-007).
+  所有调用点迁到显式 set_runtime_mode() / get_runtime_mode().
 
 API:
 - GET /api/v1/admin/runtime-mode → {mode: 'mock'|'real', source: 'env'|'runtime'}
