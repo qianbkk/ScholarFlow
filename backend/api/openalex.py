@@ -37,25 +37,28 @@ _temporary_clients: set[httpx.AsyncClient] = set()
 async def _get_client() -> httpx.AsyncClient:
     """async 版 (R10.5.96 F-010): proxy 探测 await aget_proxy, 不阻塞事件循环.
 
-    lifespan 启动期已 run_in_executor 预热, 命中 lru_cache 时 aget_proxy 几乎瞬返.
+    缓存 client 复用时零开销: 先检查 _client.is_closed, 没关就直接返回;
+    真要新建时才 await aget_proxy. lifespan 已预热, warm path 几乎瞬返.
     """
     global _client
+    # 缓存命中: 跳过 proxy 探测, 直接返回. 稳态 99% 走这里, 节省 await + CacheInfo alloc.
+    if not _DISABLE_POOL and _client is not None and not _client.is_closed:
+        return _client
     proxy = await aget_proxy()
     if _DISABLE_POOL:
         # 回滚模式：每次新建 client（无连接池），记录以便 close 时释放
         c = httpx.AsyncClient(timeout=TIMEOUT, proxy=proxy)
         _temporary_clients.add(c)
         return c
-    if _client is None or _client.is_closed:
-        _client = httpx.AsyncClient(
-            timeout=TIMEOUT,
-            proxy=proxy,
-            limits=httpx.Limits(
-                max_connections=20,
-                max_keepalive_connections=10,
-                keepalive_expiry=30,
-            ),
-        )
+    _client = httpx.AsyncClient(
+        timeout=TIMEOUT,
+        proxy=proxy,
+        limits=httpx.Limits(
+            max_connections=20,
+            max_keepalive_connections=10,
+            keepalive_expiry=30,
+        ),
+    )
     return _client
 
 

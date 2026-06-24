@@ -166,12 +166,11 @@ async def _write_search_caches(
 
 # Round 6 M2: in-flight search task table — 让 /search/cancel 真能停 in-flight pipeline
 # key: request_id (string, FastAPI middleware 注入), value: asyncio.Task wrapping search_graph.ainvoke
-# R10.5.95 (审计 P2-1): 注释 "asyncio.Event | asyncio.Task" 误, 实际只存 Task.
-# Event 是早期设计备选, 落地后没用到. 修注释避免误导后续维护者.
-_in_flight_searches: dict[str, "asyncio.Task"] = {}
-# R10.5.19 (Q.txt #3): GC 字典, 记录每个 in_flight 注册时间, 让 _periodic_in_flight_gc
-# 删超期 entry (异常路径跳过 finally 时的兜底).
-_in_flight_searches_age: dict[str, float] = {}
+# R10.5.98 (simplify 审计): 抽到 backend.api._in_flight 共享模块, main.py + search.py
+# 之前各写本地 dict, lifespan shutdown drain + 5min GC 都看不到 search.py 注册的 task
+# (只有 /search/cancel 真工作 — 它直接操作 search.py 的本地 dict).
+# 现在统一引用 _in_flight 模块 API (register/unregister/cancel/snapshot/gc_stale).
+from backend.api import _in_flight as _in_flight_searches
 
 
 @asynccontextmanager
@@ -286,16 +285,9 @@ async def lifespan(app: FastAPI):
         while True:
             try:
                 await asyncio.sleep(GC_INTERVAL_SEC)
-                now = _time.time()
-                stale = [
-                    rid for rid in _in_flight_searches
-                    if _in_flight_searches_age.get(rid, now) < now - ENTRY_TTL_SEC
-                ]
-                for rid in stale:
-                    _in_flight_searches.pop(rid, None)
-                    _in_flight_searches_age.pop(rid, None)
-                if stale:
-                    logger.info(f"[lifespan] in_flight_gc: removed {len(stale)} stale entries")
+                removed = _in_flight_searches.gc_stale(ttl_sec=ENTRY_TTL_SEC)
+                if removed:
+                    logger.info(f"[lifespan] in_flight_gc: removed {removed} stale entries")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -331,20 +323,28 @@ async def lifespan(app: FastAPI):
     # client 会让 in-flight 流报 "client disconnected" → 用户看到 1000s
     # loading. 正确做法: 等 in-flight 流 (最多 30s) 自然完成, 然后关
     # client + 跑 cache GC.
-    inflight = list(_in_flight_searches.items())
+    inflight = _in_flight_searches.snapshot()
     if inflight:
         logger.info(
             f"[lifespan] shutdown: waiting for {len(inflight)} in-flight search(es) "
             "(max 30s)..."
         )
         deadline = asyncio.get_event_loop().time() + 30.0
-        while _in_flight_searches and asyncio.get_event_loop().time() < deadline:
-            await asyncio.sleep(0.5)
-        if _in_flight_searches:
+        # 真正的 in-flight 表是 _in_flight 模块, 这里 while 直接迭代它的快照.
+        # 等价于旧 while _in_flight_searches: 但旧实现写的是 main.py 本地 dict,
+        # 永远空, 等待是空的. 改 snapshot() 才是真等待.
+        import asyncio as _aio
+        remaining = inflight
+        while remaining and _aio.get_event_loop().time() < deadline:
+            await _aio.sleep(0.5)
+            remaining = [(r, t) for r, t in remaining if not t.done()]
+        if remaining:
             logger.warning(
-                f"[lifespan] shutdown timeout: {_in_flight_searches} still in-flight, "
+                f"[lifespan] shutdown timeout: {len(remaining)} in-flight still running, "
                 "force-cancelling"
             )
+            for _, t in remaining:
+                t.cancel()
     # 跑 cache GC 一次 (lifespan 退出前清旧条目, 跟磁盘做"出关检查")
     try:
         from backend.utils.cache import gc_cache

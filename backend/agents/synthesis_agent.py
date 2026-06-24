@@ -45,12 +45,7 @@ def _fallback_report(query: str, ranked: list[dict]) -> str:
 
 
 async def synthesize_node(state: SearchState) -> SearchState:
-    """生成结构化 Markdown 综述报告.
-
-    P1-1 渐进式 DI 的 `services` 参数已移除: 7/8 agent 仍直接 import `call_llm`,
-    单 1 个 agent 接 services 形单影只 (测试用 patch 不走 services).
-    真 DI 等 R13 Multi-Agent Runtime 一起做.
-    """
+    """生成结构化 Markdown 综述报告."""
     # M-A 修复 (P0-2 PER_ITER 语义): 入口透传 prev_iter_cost_usd。
     # synthesize 是 router 决定"不再 refine"后的终态节点, 此时 prev_iter_cost_usd
     # 不再被 router 读, 但保留入口透传以保证 state 字段一致性, 方便 cost_tracker

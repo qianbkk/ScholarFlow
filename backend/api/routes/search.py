@@ -101,11 +101,10 @@ router.on_shutdown = []  # type: ignore[attr-defined]
 limiter = Limiter(key_func=get_real_ip)
 
 
-# ===== in-flight task table (Round 6 M2) =====
-# key: request_id (string, FastAPI middleware 注入), value: asyncio.Task
-# wrapping search_graph.ainvoke. main.py owns the canonical table; the
-# router exposes helpers for testing/migration purposes.
-_in_flight_searches: dict[str, asyncio.Task] = {}
+# R10.5.98: 进程内 in-flight 任务登记表抽到 backend.api._in_flight,
+# main.py + search.py 共享同一份, 避免之前各写本地 dict 的"分裂"bug
+# (lifespan shutdown drain + 5min GC 都看不到 search.py 注册的 task).
+from backend.api import _in_flight as _in_flight_searches
 
 
 NODE_NAME_TO_STEP = {
@@ -243,7 +242,7 @@ async def search(
         # 已转成 SSE budget_exceeded event, 这里只处理真异常).
         req_id = get_request_id() or f"gen-{uuid.uuid4().hex[:8]}"
         asyncio_task = asyncio.create_task(search_graph.ainvoke(initial))
-        _in_flight_searches[req_id] = asyncio_task
+        _in_flight_searches.register(req_id, asyncio_task)
         try:
             # R10.5.1 V3-fix (HH.txt §1): 同步 /search 超时 480s → 60s.
             # 跟 main.py 同步. 长查询走 /search/stream (SSE).
@@ -254,7 +253,7 @@ async def search(
                 detail="Sync search timeout. Use /api/v1/search/stream (SSE) for long queries.",
             )
         finally:
-            _in_flight_searches.pop(req_id, None)
+            _in_flight_searches.unregister(req_id)
         elapsed = time.time() - t0
         actual_cost = float(final.get("total_cost_usd", 0.0))
         budget_limit_state = float(final.get("budget_limit_usd", req.budget))
@@ -340,8 +339,7 @@ async def cancel_search(
         f"[/search/cancel] request_id={req.request_id} received "
         f"(length={len(req.request_id) if req.request_id else 0})"
     )
-    if req.request_id and req.request_id in _in_flight_searches:
-        _in_flight_searches[req.request_id].cancel()
+    if req.request_id and _in_flight_searches.cancel(req.request_id):
         logger.info(
             f"[/search/cancel] task cancelled for request_id={req.request_id}"
         )
